@@ -1,0 +1,25 @@
+name: calendar
+version: "1.0.0"
+description: "Calendar and scheduling"
+capabilities:
+  - calendar.read
+  - calendar.write
+tools:
+  - name: get_events
+    description: "Get calendar events for a date"
+    parameters:
+      date: { type: string, description: "Date in YYYY-MM-DD or 'today'" }
+  - name: create_event
+    description: "Create a new calendar event"
+    parameters:
+      title: { type: string, description: "Event title" }
+      start: { type: string, description: "Start time ISO format" }
+      end: { type: string, description: "End time ISO format" }
+  - name: delete_event
+    description: "Delete a calendar event"
+    parameters:
+      event_id: { type: string, description: "Event ID" }
+scheduled_events:
+  - "schedule.morning"
+protocol: native
+permissions: []
