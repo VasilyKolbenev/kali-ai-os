@@ -347,9 +347,23 @@ jarvis/
 | Tier | Price | What's Included |
 |------|-------|-----------------|
 | **Jarvis Device** | **$149** | Hardware + Jarvis AI OS + 9 built-in agents + Agent Marketplace |
-| **Jarvis Cloud** | **$9/month** | Managed Claude/GPT-4o AI, no API keys needed, voice processing, OTA updates |
-| **Jarvis Free** | **$0** | Desktop-only version, bring your own API key, self-hosted |
+| **Jarvis Basic** | **$9/month** | Local AI (on-device Llama) + 500 cloud AI requests/mo + OTA updates |
+| **Jarvis Pro** | **$19/month** | Unlimited cloud AI (Claude/GPT-4o) + priority voice + advanced agents |
+| **Jarvis Ultra** | **$29/month** | Everything in Pro + Agent Builder with cloud AI + priority support |
 | **Marketplace** | **Free** | Create, share, install community agents |
+
+### How AI Costs Are Controlled
+
+Most requests use **local LLM (Ollama/Llama)** running on user's PC or our edge servers — cost: **$0**. Cloud AI (Claude/GPT-4o) is only used for complex tasks that require tool calling or deep reasoning. This hybrid approach keeps 70-80% of requests free.
+
+| Request Type | Model Used | Our Cost |
+|---|---|---|
+| "What time is it?" | Local Llama | $0 |
+| "Set timer 25 min" | Local Llama | $0 |
+| "What's the weather?" | Local Llama + API | $0 |
+| "Schedule meeting tomorrow" | Cloud (tool calling) | ~$0.01 |
+| "Create an agent that tracks BTC" | Cloud (code gen) | ~$0.05 |
+| "Review my weekly spending" | Cloud (analysis) | ~$0.02 |
 
 ### Unit Economics
 
@@ -358,15 +372,17 @@ jarvis/
 | Device BOM cost | ~$20 |
 | Retail price | $149 |
 | Hardware margin | ~87% |
-| Cloud subscription | $9/mo (AI API cost ~$2/mo per user) |
-| LTV (12 months) | $149 + $108 = **$257/user** |
+| Avg subscription | ~$15/mo (blend of Basic/Pro/Ultra) |
+| AI cost per user | ~$3/mo (70-80% local, 20-30% cloud) |
+| Subscription margin | ~80% |
+| LTV (12 months) | $149 + $180 = **$329/user** |
 
 ### Revenue Streams
 
-1. **Hardware sales** — $149 per device, 84% margin
-2. **Cloud subscription** — $9/mo recurring, 78% margin
+1. **Hardware sales** — $149 per device, 87% margin
+2. **Cloud subscription** — $9-29/mo recurring, ~80% margin
 3. **Marketplace fees** — 15% commission on premium agents (v2)
-4. **Enterprise tier** — custom agents + support (v3)
+4. **Enterprise tier** — custom agents, fleet management, support (v3)
 
 ### Why Open Marketplace?
 
