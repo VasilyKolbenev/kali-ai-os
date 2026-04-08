@@ -1,0 +1,20 @@
+name: system
+version: "1.0.0"
+description: "System commands — time, timers, system info"
+capabilities:
+  - system.info
+  - system.timer
+tools:
+  - name: get_time
+    description: "Get current date and time"
+    parameters: {}
+  - name: get_system_info
+    description: "Get system information (OS, CPU, memory)"
+    parameters: {}
+  - name: set_timer
+    description: "Set a countdown timer"
+    parameters:
+      seconds: { type: integer, description: "Timer duration in seconds" }
+      label: { type: string, description: "Timer label" }
+protocol: native
+permissions: []
