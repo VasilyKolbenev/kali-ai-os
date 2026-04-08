@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useVoiceStore } from "../stores/voiceStore";
 import { useAgentStore } from "../stores/agentStore";
 import { useDashboardStore } from "../stores/dashboardStore";
+import { useAppStore } from "../stores/appStore";
 import type { WSMessage } from "./types";
 
 const WS_URL = "ws://localhost:8000/ws";
@@ -17,6 +18,10 @@ export function useWebSocket() {
     const connect = () => {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+
+      ws.onopen = () => {
+        useAppStore.getState().setKernelConnected(true);
+      };
 
       ws.onmessage = (event) => {
         try {
@@ -41,6 +46,7 @@ export function useWebSocket() {
       };
 
       ws.onclose = () => {
+        useAppStore.getState().setKernelConnected(false);
         setTimeout(connect, 3000);
       };
     };
