@@ -8,6 +8,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from kernel import __version__
 from kernel.agent_runtime.dispatcher import ToolDispatcher
@@ -126,6 +127,13 @@ def create_app(
         logger.info("Jarvis kernel stopped")
 
     app = FastAPI(title="Jarvis Kernel", version=__version__, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:1420", "http://localhost:1421", "tauri://localhost"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # --- Routes ---
 
