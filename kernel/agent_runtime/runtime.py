@@ -1,0 +1,120 @@
+"""Agent runtime — manages agent lifecycle, loading, dispatching."""
+
+import logging
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from kernel.agent_runtime.protocols.base import AgentProtocol
+from kernel.agent_runtime.protocols.http_client import HttpProtocol
+from kernel.agent_runtime.protocols.native import NativeProtocol
+from kernel.event_bus import EventBus
+from kernel.models import AgentManifest, Event
+from kernel.plugin_registry import PluginRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class AgentStatus(Enum):
+    STOPPED = "stopped"
+    RUNNING = "running"
+    ERROR = "error"
+
+
+class AgentRuntime:
+    """Manages agent lifecycle — load, dispatch, health check, unload."""
+
+    def __init__(
+        self, registry: PluginRegistry, agents_dir: Path, event_bus: EventBus,
+    ) -> None:
+        self._registry = registry
+        self._agents_dir = agents_dir
+        self._bus = event_bus
+        self._agents: dict[str, AgentProtocol] = {}
+        self._statuses: dict[str, AgentStatus] = {}
+
+    def _create_protocol(self, manifest: AgentManifest) -> AgentProtocol:
+        if manifest.protocol == "native":
+            script = self._agents_dir / manifest.name / "agent.py"
+            return NativeProtocol(agent_name=manifest.name, script_path=script)
+        elif manifest.protocol == "http":
+            return HttpProtocol(agent_name=manifest.name, base_url="http://localhost:8080")
+        else:
+            raise ValueError(f"Unsupported protocol: {manifest.protocol}")
+
+    async def load_agent(self, name: str) -> None:
+        manifest = self._registry.get(name)
+        if manifest is None:
+            raise ValueError(f"Agent '{name}' not found in registry")
+
+        if name in self._agents:
+            logger.warning("Agent '%s' already loaded", name)
+            return
+
+        protocol = self._create_protocol(manifest)
+        await protocol.start()
+
+        try:
+            await protocol.initialize({})
+        except Exception:
+            logger.warning("Agent '%s' initialize failed (non-fatal)", name)
+
+        self._agents[name] = protocol
+        self._statuses[name] = AgentStatus.RUNNING
+
+        await self._bus.publish(
+            Event(topic="agent.status.update", source="agent-runtime",
+                  payload={"agent": name, "status": "running"})
+        )
+        logger.info("Agent '%s' loaded and running", name)
+
+    async def unload_agent(self, name: str) -> None:
+        protocol = self._agents.pop(name, None)
+        if protocol:
+            await protocol.stop()
+        self._statuses.pop(name, None)
+
+        await self._bus.publish(
+            Event(topic="agent.status.update", source="agent-runtime",
+                  payload={"agent": name, "status": "stopped"})
+        )
+
+    async def dispatch(self, agent_name: str, action: str, args: dict[str, Any]) -> dict[str, Any]:
+        protocol = self._agents.get(agent_name)
+        if protocol is None:
+            raise ValueError(f"Agent '{agent_name}' is not loaded")
+
+        try:
+            return await protocol.execute(action, args)
+        except Exception:
+            self._statuses[agent_name] = AgentStatus.ERROR
+            logger.exception("Agent '%s' dispatch failed", agent_name)
+            raise
+
+    async def get_status(self, name: str) -> dict[str, Any]:
+        protocol = self._agents.get(name)
+        if protocol is None:
+            return {"name": name, "status": "not_loaded"}
+
+        status = self._statuses.get(name, AgentStatus.STOPPED)
+        result: dict[str, Any] = {"name": name, "status": status.value}
+
+        if protocol.is_running:
+            try:
+                health = await protocol.health()
+                result["health"] = health
+            except Exception:
+                result["health"] = {"status": "unreachable"}
+
+        return result
+
+    def list_agents(self) -> list[dict[str, Any]]:
+        return [
+            {"name": name, "status": self._statuses[name].value}
+            for name in self._agents
+        ]
+
+    async def shutdown_all(self) -> None:
+        for name in list(self._agents.keys()):
+            await self.unload_agent(name)
+        logger.info("All agents shut down")
