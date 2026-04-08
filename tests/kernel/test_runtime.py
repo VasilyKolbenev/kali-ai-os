@@ -14,14 +14,18 @@ from kernel.plugin_registry import PluginRegistry
 def agents_dir(tmp_path: Path) -> Path:
     agent_dir = tmp_path / "test-agent"
     agent_dir.mkdir()
-    (agent_dir / "manifest.yaml").write_text(yaml.dump({
-        "name": "test-agent",
-        "version": "1.0.0",
-        "description": "Test agent",
-        "capabilities": ["test.hello"],
-        "tools": [{"name": "greet", "description": "Greet", "parameters": {}}],
-        "protocol": "native",
-    }))
+    (agent_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "test-agent",
+                "version": "1.0.0",
+                "description": "Test agent",
+                "capabilities": ["test.hello"],
+                "tools": [{"name": "greet", "description": "Greet", "parameters": {}}],
+                "protocol": "native",
+            }
+        )
+    )
     src = Path("agents/_example/agent.py")
     if src.exists():
         (agent_dir / "agent.py").write_text(src.read_text())

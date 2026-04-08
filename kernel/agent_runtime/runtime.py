@@ -25,7 +25,10 @@ class AgentRuntime:
     """Manages agent lifecycle — load, dispatch, health check, unload."""
 
     def __init__(
-        self, registry: PluginRegistry, agents_dir: Path, event_bus: EventBus,
+        self,
+        registry: PluginRegistry,
+        agents_dir: Path,
+        event_bus: EventBus,
     ) -> None:
         self._registry = registry
         self._agents_dir = agents_dir
@@ -63,8 +66,11 @@ class AgentRuntime:
         self._statuses[name] = AgentStatus.RUNNING
 
         await self._bus.publish(
-            Event(topic="agent.status.update", source="agent-runtime",
-                  payload={"agent": name, "status": "running"})
+            Event(
+                topic="agent.status.update",
+                source="agent-runtime",
+                payload={"agent": name, "status": "running"},
+            )
         )
         logger.info("Agent '%s' loaded and running", name)
 
@@ -75,8 +81,11 @@ class AgentRuntime:
         self._statuses.pop(name, None)
 
         await self._bus.publish(
-            Event(topic="agent.status.update", source="agent-runtime",
-                  payload={"agent": name, "status": "stopped"})
+            Event(
+                topic="agent.status.update",
+                source="agent-runtime",
+                payload={"agent": name, "status": "stopped"},
+            )
         )
 
     async def dispatch(self, agent_name: str, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -109,10 +118,7 @@ class AgentRuntime:
         return result
 
     def list_agents(self) -> list[dict[str, Any]]:
-        return [
-            {"name": name, "status": self._statuses[name].value}
-            for name in self._agents
-        ]
+        return [{"name": name, "status": self._statuses[name].value} for name in self._agents]
 
     async def shutdown_all(self) -> None:
         for name in list(self._agents.keys()):

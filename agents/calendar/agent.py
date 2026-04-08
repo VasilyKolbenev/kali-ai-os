@@ -145,9 +145,7 @@ class CalendarAgent(BaseAgent):
                     "end": {"dateTime": end, "timeZone": "UTC"},
                 }
                 created = (
-                    self._google_service.events()
-                    .insert(calendarId="primary", body=event)
-                    .execute()
+                    self._google_service.events().insert(calendarId="primary", body=event).execute()
                 )
                 return {
                     "status": "created",

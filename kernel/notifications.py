@@ -1,9 +1,8 @@
 """Cross-platform notification system."""
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from kernel.event_bus import EventBus
 from kernel.models import Event
@@ -36,16 +35,18 @@ class NotificationManager:
     async def send(self, notification: Notification) -> None:
         """Send a notification through all available channels."""
         self._queue.append(notification)
-        await self._bus.publish(Event(
-            topic="notification.new",
-            source=notification.source,
-            payload={
-                "title": notification.title,
-                "message": notification.message,
-                "priority": notification.priority,
-                "timestamp": notification.timestamp,
-            },
-        ))
+        await self._bus.publish(
+            Event(
+                topic="notification.new",
+                source=notification.source,
+                payload={
+                    "title": notification.title,
+                    "message": notification.message,
+                    "priority": notification.priority,
+                    "timestamp": notification.timestamp,
+                },
+            )
+        )
         self._try_desktop(notification)
         logger.info("Notification: [%s] %s", notification.title, notification.message)
 

@@ -1,7 +1,6 @@
 """Tests for Google OAuth helper."""
 
-import pytest
-from kernel.integrations.google_auth import GoogleAuth, CREDENTIALS_FILE
+from kernel.integrations.google_auth import CREDENTIALS_FILE, GoogleAuth
 
 
 class TestGoogleAuth:

@@ -1,7 +1,6 @@
 """Conversation memory — persistent context across sessions."""
 
 import logging
-from typing import Any
 
 from kernel.database import Database
 
@@ -21,11 +20,11 @@ class ConversationMemory:
         """Add a conversation turn to memory."""
         self._session_context.append({"role": role, "content": content})
         if len(self._session_context) > MAX_CONTEXT_TURNS * 2:
-            self._session_context = self._session_context[-MAX_CONTEXT_TURNS * 2:]
+            self._session_context = self._session_context[-MAX_CONTEXT_TURNS * 2 :]
 
     def get_context(self, max_turns: int = MAX_CONTEXT_TURNS) -> list[dict[str, str]]:
         """Get recent conversation context for LLM."""
-        return self._session_context[-max_turns * 2:]
+        return self._session_context[-max_turns * 2 :]
 
     def clear(self) -> None:
         """Clear session context."""

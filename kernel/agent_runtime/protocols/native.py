@@ -30,7 +30,8 @@ class NativeProtocol(AgentProtocol):
         if self.is_running:
             return
         self._process = await asyncio.create_subprocess_exec(
-            sys.executable, str(self._script_path),
+            sys.executable,
+            str(self._script_path),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -88,9 +89,7 @@ class NativeProtocol(AgentProtocol):
             self._process.stdin.write(line.encode())
             await self._process.stdin.drain()
 
-            response_line = await asyncio.wait_for(
-                self._process.stdout.readline(), timeout=10.0
-            )
+            response_line = await asyncio.wait_for(self._process.stdout.readline(), timeout=10.0)
 
             if not response_line:
                 raise RuntimeError(f"Agent '{self.agent_name}' closed stdout")
@@ -98,8 +97,6 @@ class NativeProtocol(AgentProtocol):
             response = json.loads(response_line.decode().strip())
 
             if "error" in response:
-                raise RuntimeError(
-                    f"Agent error: {response['error'].get('message', 'unknown')}"
-                )
+                raise RuntimeError(f"Agent error: {response['error'].get('message', 'unknown')}")
 
             return response.get("result", {})

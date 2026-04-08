@@ -1,7 +1,7 @@
 """Tests for Telegram bot agent."""
 
-import sys
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,9 +26,7 @@ class TestTelegramAgent:
         assert result["chat_id_set"] is False
 
     def test_get_status_configured(self) -> None:
-        with patch.dict(
-            os.environ, {"TELEGRAM_BOT_TOKEN": "abc", "TELEGRAM_CHAT_ID": "123"}
-        ):
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "abc", "TELEGRAM_CHAT_ID": "123"}):
             agent = TelegramAgent()
         result = agent.handle_action("get_status", {})
         assert result["configured"] is True
@@ -58,9 +56,7 @@ class TestTelegramAgent:
             agent.handle_action("nonexistent", {})
 
     def test_send_message_configured_success(self) -> None:
-        with patch.dict(
-            os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}
-        ):
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}):
             agent = TelegramAgent()
 
         mock_response = MagicMock()
@@ -75,9 +71,7 @@ class TestTelegramAgent:
         assert result["message_id"] == 42
 
     def test_send_message_api_error(self) -> None:
-        with patch.dict(
-            os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}
-        ):
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}):
             agent = TelegramAgent()
 
         mock_response = MagicMock()
@@ -92,9 +86,7 @@ class TestTelegramAgent:
         assert result["message"] == "Bad Token"
 
     def test_send_notification_formats_markdown(self) -> None:
-        with patch.dict(
-            os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}
-        ):
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token123", "TELEGRAM_CHAT_ID": "456"}):
             agent = TelegramAgent()
 
         captured: list[str] = []

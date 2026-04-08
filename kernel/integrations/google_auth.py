@@ -56,7 +56,8 @@ class GoogleAuth:
                 if not CREDENTIALS_FILE.exists():
                     raise FileNotFoundError(
                         "Google credentials not found. "
-                        "Download from console.cloud.google.com and save to data/google_credentials.json"
+                        "Download from console.cloud.google.com "
+                        "and save to data/google_credentials.json"
                     )
                 flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
                 creds = flow.run_local_server(port=0)

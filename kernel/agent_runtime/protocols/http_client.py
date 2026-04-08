@@ -33,7 +33,9 @@ class HttpProtocol(AgentProtocol):
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(
-            base_url=self.base_url, timeout=self.timeout, headers=self._headers,
+            base_url=self.base_url,
+            timeout=self.timeout,
+            headers=self._headers,
         )
         self._running = True
         logger.info("HTTP agent '%s' connected at %s", self.agent_name, self.base_url)

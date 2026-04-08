@@ -1,6 +1,5 @@
 """Tests for HTTP protocol client."""
 
-
 from kernel.agent_runtime.protocols.http_client import HttpProtocol
 
 

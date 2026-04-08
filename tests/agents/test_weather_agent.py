@@ -1,15 +1,14 @@
 """Tests for Weather agent."""
 
 import json
-import sys
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from agents.weather.agent import WeatherAgent
-
 
 GEOCODING_RESPONSE = json.dumps(
     {

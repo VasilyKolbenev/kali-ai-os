@@ -97,10 +97,7 @@ class EmailAgent(BaseAgent):
                     )
                     .execute()
                 )
-                headers = {
-                    h["name"]: h["value"]
-                    for h in msg.get("payload", {}).get("headers", [])
-                }
+                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
                 emails.append(
                     {
                         "id": msg_ref["id"],
@@ -138,9 +135,7 @@ class EmailAgent(BaseAgent):
             message["to"] = to
             message["subject"] = subject
             raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-            self._service.users().messages().send(
-                userId="me", body={"raw": raw}
-            ).execute()
+            self._service.users().messages().send(userId="me", body={"raw": raw}).execute()
             return {"status": "sent", "to": to, "subject": subject}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -182,10 +177,7 @@ class EmailAgent(BaseAgent):
                     )
                     .execute()
                 )
-                headers = {
-                    h["name"]: h["value"]
-                    for h in msg.get("payload", {}).get("headers", [])
-                }
+                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
                 emails.append(
                     {
                         "id": msg_ref["id"],
