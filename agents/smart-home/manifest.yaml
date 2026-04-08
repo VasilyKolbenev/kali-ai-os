@@ -1,0 +1,23 @@
+name: smart-home
+version: "1.0.0"
+description: "Home automation via Home Assistant"
+capabilities:
+  - smarthome.lights
+  - smarthome.climate
+  - smarthome.devices
+tools:
+  - name: get_devices
+    description: "List smart home devices"
+    parameters: {}
+  - name: control_device
+    description: "Control a smart home device"
+    parameters:
+      device_id: { type: string, description: "Device ID" }
+      action: { type: string, description: "on, off, toggle, set" }
+      value: { type: string, description: "Value for set action" }
+  - name: get_status
+    description: "Get status of all devices"
+    parameters: {}
+protocol: native
+permissions:
+  - network

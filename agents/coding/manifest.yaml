@@ -1,0 +1,23 @@
+name: coding
+version: "1.0.0"
+description: "Coding assistant — code review, generation, explanation"
+capabilities:
+  - coding.review
+  - coding.generate
+  - coding.explain
+tools:
+  - name: explain_code
+    description: "Explain what a piece of code does"
+    parameters:
+      code: { type: string, description: "Code to explain" }
+      language: { type: string, description: "Programming language" }
+  - name: review_code
+    description: "Review code for issues"
+    parameters:
+      code: { type: string, description: "Code to review" }
+  - name: suggest_improvement
+    description: "Suggest improvements for code"
+    parameters:
+      code: { type: string, description: "Code to improve" }
+protocol: native
+permissions: []
