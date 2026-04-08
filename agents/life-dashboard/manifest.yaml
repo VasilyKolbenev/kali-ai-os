@@ -1,0 +1,29 @@
+name: life-dashboard
+version: "1.0.0"
+description: "Life tracking — sleep, spending, energy, habits"
+capabilities:
+  - dashboard.read
+  - dashboard.write
+tools:
+  - name: log_sleep
+    description: "Log sleep data"
+    parameters:
+      hours: { type: number, description: "Hours slept" }
+      hrv: { type: number, description: "HRV score" }
+  - name: log_spending
+    description: "Log a spending entry"
+    parameters:
+      amount: { type: number, description: "Amount spent" }
+      category: { type: string, description: "Spending category" }
+  - name: log_energy
+    description: "Log calorie intake"
+    parameters:
+      calories: { type: number, description: "Calories consumed" }
+  - name: get_daily_summary
+    description: "Get today's life dashboard summary"
+    parameters: {}
+scheduled_events:
+  - "schedule.morning"
+  - "schedule.evening"
+protocol: native
+permissions: []
