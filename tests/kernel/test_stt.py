@@ -1,7 +1,6 @@
 """Tests for Speech-to-Text."""
 
 import numpy as np
-import pytest
 
 from kernel.voice.stt import SpeechToText, STTResult
 

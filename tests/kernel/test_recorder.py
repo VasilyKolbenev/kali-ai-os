@@ -1,9 +1,8 @@
 """Tests for audio recorder."""
 
 import numpy as np
-import pytest
 
-from kernel.voice.recorder import AudioRecorder, AudioChunk
+from kernel.voice.recorder import AudioChunk, AudioRecorder
 
 
 class TestAudioChunk:

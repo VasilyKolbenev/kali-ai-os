@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from kernel.llm_router import LLMRouter, LLMRequest, LLMResponse
+from kernel.llm_router import LLMRequest, LLMResponse, LLMRouter
 from kernel.models import LLMConfig
 
 

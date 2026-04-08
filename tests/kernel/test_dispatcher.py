@@ -61,5 +61,5 @@ class TestToolDispatcher:
         dispatcher._runtime.load_agent = AsyncMock()
         dispatcher._runtime._agents = {}
 
-        result = await dispatcher.dispatch("calendar__get_events", {"date": "today"})
+        await dispatcher.dispatch("calendar__get_events", {"date": "today"})
         dispatcher._runtime.load_agent.assert_called_once_with("calendar")

@@ -1,9 +1,8 @@
 """Tests for Voice Activity Detection."""
 
 import numpy as np
-import pytest
 
-from kernel.voice.vad import VoiceActivityDetector, VADResult
+from kernel.voice.vad import VADResult, VoiceActivityDetector
 
 
 class TestVADResult:

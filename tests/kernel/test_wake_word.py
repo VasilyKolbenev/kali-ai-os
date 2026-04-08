@@ -1,7 +1,6 @@
 """Tests for wake word detection."""
 
 import numpy as np
-import pytest
 
 from kernel.voice.wake_word import WakeWordDetector, WakeWordResult
 

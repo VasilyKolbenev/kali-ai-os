@@ -1,7 +1,6 @@
 """Tests for Text-to-Speech."""
 
 import numpy as np
-import pytest
 
 from kernel.voice.tts import TextToSpeech, TTSResult
 

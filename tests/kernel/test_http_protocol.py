@@ -1,6 +1,5 @@
 """Tests for HTTP protocol client."""
 
-import pytest
 
 from kernel.agent_runtime.protocols.http_client import HttpProtocol
 
