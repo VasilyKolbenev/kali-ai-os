@@ -1,0 +1,22 @@
+name: telegram
+version: "1.0.0"
+description: "Telegram bot — remote control and notifications"
+capabilities:
+  - telegram.send
+  - telegram.notify
+tools:
+  - name: send_message
+    description: "Send a message via Telegram"
+    parameters:
+      text: { type: string, description: "Message text to send" }
+  - name: send_notification
+    description: "Send a formatted notification via Telegram"
+    parameters:
+      title: { type: string, description: "Notification title" }
+      message: { type: string, description: "Notification body" }
+  - name: get_status
+    description: "Get Telegram bot connection status"
+    parameters: {}
+protocol: native
+permissions:
+  - network
