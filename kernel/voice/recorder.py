@@ -74,7 +74,9 @@ class AudioRecorder:
         )
         self._stream.start()
         self._recording = True
-        logger.info("Audio recording started (rate=%d, chunk=%d)", self.sample_rate, self.chunk_size)
+        logger.info(
+            "Audio recording started (rate=%d, chunk=%d)", self.sample_rate, self.chunk_size
+        )
 
     async def stop(self) -> None:
         self._recording = False
