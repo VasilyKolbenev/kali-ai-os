@@ -1,0 +1,12 @@
+name: example
+version: "0.1.0"
+description: "Example agent for reference"
+capabilities:
+  - example.hello
+tools:
+  - name: say_hello
+    description: "Say hello to someone"
+    parameters:
+      name: { type: string, description: "Person's name" }
+protocol: native
+permissions: []
