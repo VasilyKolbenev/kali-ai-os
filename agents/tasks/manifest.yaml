@@ -1,0 +1,28 @@
+name: tasks
+version: "1.0.0"
+description: "Task and todo management"
+capabilities:
+  - tasks.read
+  - tasks.write
+tools:
+  - name: add_task
+    description: "Add a new task"
+    parameters:
+      title: { type: string, description: "Task title" }
+      priority: { type: string, description: "Priority: low, medium, high" }
+  - name: list_tasks
+    description: "List all tasks"
+    parameters: {}
+  - name: complete_task
+    description: "Mark a task as complete"
+    parameters:
+      task_id: { type: string, description: "Task ID to complete" }
+  - name: delete_task
+    description: "Delete a task"
+    parameters:
+      task_id: { type: string, description: "Task ID to delete" }
+  - name: get_summary
+    description: "Get task summary (total, done, pending)"
+    parameters: {}
+protocol: native
+permissions: []
