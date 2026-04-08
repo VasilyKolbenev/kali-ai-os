@@ -12,6 +12,9 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "watchfiles>=1.0.0",
     "python-dotenv>=1.0.1",
+    "sounddevice>=0.5.1",
+    "numpy>=2.0.0",
+    "onnxruntime>=1.19.0",
 ]
 
 [project.optional-dependencies]
