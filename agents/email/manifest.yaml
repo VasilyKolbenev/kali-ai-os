@@ -1,0 +1,26 @@
+name: email
+version: "1.0.0"
+description: "Email management via Gmail API"
+capabilities:
+  - email.read
+  - email.send
+  - email.search
+tools:
+  - name: check_inbox
+    description: "Check recent emails"
+    parameters:
+      count: { type: integer, description: "Number of emails to fetch (default 5)" }
+  - name: send_email
+    description: "Send an email"
+    parameters:
+      to: { type: string, description: "Recipient email address" }
+      subject: { type: string, description: "Email subject" }
+      body: { type: string, description: "Email body text" }
+  - name: search_emails
+    description: "Search emails by query"
+    parameters:
+      query: { type: string, description: "Gmail search query (e.g. 'from:john subject:meeting')" }
+      count: { type: integer, description: "Max results (default 5)" }
+protocol: native
+permissions:
+  - network
