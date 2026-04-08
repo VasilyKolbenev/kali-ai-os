@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from kernel import __version__
+from kernel.agent_builder import AgentBuilder
 from kernel.agent_runtime.dispatcher import ToolDispatcher
 from kernel.agent_runtime.runtime import AgentRuntime
 from kernel.briefing import BriefingService
@@ -83,10 +84,12 @@ def create_app(
         budget_mgr = BudgetManager(event_bus)
         focus_timer = FocusTimer(event_bus)
         routine_mgr = RoutineManager(event_bus)
+        agent_builder = AgentBuilder(event_bus)
         app.state.briefing = briefing
         app.state.budget = budget_mgr
         app.state.focus = focus_timer
         app.state.routines = routine_mgr
+        app.state.agent_builder = agent_builder
         scheduler = Scheduler(event_bus, config_manager.config.schedule)
         scheduler.start()
 
@@ -328,5 +331,29 @@ def create_app(
     @app.post("/routines/{name}/execute")
     async def execute_routine(name: str, request: Request) -> dict[str, Any]:
         return await request.app.state.routines.execute(name)
+
+    @app.post("/agents/create")
+    async def create_custom_agent(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        template = body.get("template")
+        if template:
+            return request.app.state.agent_builder.create_from_template(
+                body["name"], body.get("description", ""), template
+            )
+        return request.app.state.agent_builder.create_agent(
+            name=body["name"],
+            description=body.get("description", ""),
+            tools=body.get("tools", []),
+            action_code=body.get("code", ""),
+            permissions=body.get("permissions"),
+        )
+
+    @app.get("/agents/custom")
+    async def list_custom_agents(request: Request) -> list[dict[str, Any]]:
+        return request.app.state.agent_builder.list_custom_agents()
+
+    @app.delete("/agents/custom/{name}")
+    async def delete_custom_agent(name: str, request: Request) -> dict[str, Any]:
+        return request.app.state.agent_builder.delete_agent(name)
 
     return app
