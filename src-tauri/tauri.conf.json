@@ -1,0 +1,22 @@
+{
+  "productName": "Jarvis",
+  "version": "0.1.0",
+  "identifier": "com.jarvis.desktop",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "cd ui && pnpm dev",
+    "beforeBuildCommand": "cd ui && pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Jarvis",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 400,
+        "minHeight": 600
+      }
+    ]
+  }
+}
