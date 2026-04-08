@@ -13,13 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from kernel import __version__
 from kernel.agent_runtime.dispatcher import ToolDispatcher
 from kernel.agent_runtime.runtime import AgentRuntime
+from kernel.briefing import BriefingService
+from kernel.budget import BudgetManager
 from kernel.config_manager import ConfigManager
 from kernel.database import Database
 from kernel.event_bus import EventBus
+from kernel.focus import FocusTimer
 from kernel.memory import ConversationMemory
 from kernel.models import Event, WSMessage
 from kernel.notifications import NotificationManager
 from kernel.plugin_registry import PluginRegistry
+from kernel.routines import RoutineManager
 from kernel.scheduler import Scheduler
 from kernel.voice.pipeline import VoicePipeline
 
@@ -75,6 +79,14 @@ def create_app(
         notifications = NotificationManager(event_bus)
         app.state.memory = memory
         app.state.notifications = notifications
+        briefing = BriefingService(event_bus)
+        budget_mgr = BudgetManager(event_bus)
+        focus_timer = FocusTimer(event_bus)
+        routine_mgr = RoutineManager(event_bus)
+        app.state.briefing = briefing
+        app.state.budget = budget_mgr
+        app.state.focus = focus_timer
+        app.state.routines = routine_mgr
         scheduler = Scheduler(event_bus, config_manager.config.schedule)
         scheduler.start()
 
@@ -273,5 +285,48 @@ def create_app(
             }
             for n in request.app.state.notifications.get_pending()
         ]
+
+    @app.get("/briefing/morning")
+    async def morning_briefing(request: Request) -> dict[str, Any]:
+        data: dict[str, Any] = {}  # TODO(#42): collect from agents when running
+        text = await request.app.state.briefing.generate_morning_briefing(data)
+        return {"text": text}
+
+    @app.post("/budget/goal")
+    async def set_budget_goal(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        return request.app.state.budget.set_goal(body["category"], body["limit"])
+
+    @app.get("/budget/goals")
+    async def get_budget_goals(request: Request) -> dict[str, Any]:
+        return request.app.state.budget.get_goals()
+
+    @app.post("/budget/expense")
+    async def log_budget_expense(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        return await request.app.state.budget.log_expense(body["amount"], body["category"])
+
+    @app.post("/focus/start")
+    async def start_focus(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        return await request.app.state.focus.start(
+            body.get("duration_minutes", 25), body.get("label", "")
+        )
+
+    @app.post("/focus/stop")
+    async def stop_focus(request: Request) -> dict[str, Any]:
+        return await request.app.state.focus.stop()
+
+    @app.get("/focus/status")
+    async def focus_status(request: Request) -> dict[str, Any]:
+        return request.app.state.focus.get_status()
+
+    @app.get("/routines")
+    async def list_routines(request: Request) -> dict[str, Any]:
+        return request.app.state.routines.list_routines()
+
+    @app.post("/routines/{name}/execute")
+    async def execute_routine(name: str, request: Request) -> dict[str, Any]:
+        return await request.app.state.routines.execute(name)
 
     return app
