@@ -1,13 +1,22 @@
 # Jarvis 2026 — Setup & Testing Guide
 
-## Step 0: Prerequisites
+## QUICK START (Windows)
 
-Needs to be installed on your laptop:
+**Double-click `start.bat`** — it does everything automatically:
+installs deps, starts kernel, starts UI, opens in browser.
+
+---
+
+## Manual Setup (if start.bat doesn't work)
+
+### Step 0: Prerequisites
+
+Install on your laptop:
 - **Python 3.12+** — https://python.org/downloads
 - **Node.js 20+** — https://nodejs.org
 - **Git** — https://git-scm.com
 
-Check in terminal:
+Check in terminal (PowerShell or CMD):
 ```bash
 python --version   # 3.12+
 node --version     # 20+
@@ -16,7 +25,7 @@ git --version
 
 ---
 
-## Step 1: Install Dependencies
+### Step 1: Install Dependencies
 
 Open terminal in the Jarvis folder:
 
