@@ -68,3 +68,22 @@ class TestLLMRouter:
             resp = await router.route(req)
             assert resp.text == "Hi!"
             assert resp.provider_used == "local"
+
+    def test_openai_provider_config(self) -> None:
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o")
+        router = LLMRouter(config)
+        assert router.config.cloud_provider == "openai"
+        assert router.config.cloud_model == "gpt-4o"
+
+    async def test_route_with_openai_mock(self) -> None:
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o")
+        router = LLMRouter(config)
+        req = LLMRequest(text="hello", context=[], available_tools=[{"type": "function", "function": {"name": "test", "description": "test"}}])
+        with patch.object(router, "_call_openai", new_callable=AsyncMock) as mock:
+            mock.return_value = LLMResponse(
+                text="Hello from GPT!", tool_calls=None, provider_used="openai", latency_ms=100
+            )
+            resp = await router.route(req)
+            assert resp.text == "Hello from GPT!"
+            assert resp.provider_used == "openai"
+            mock.assert_called_once()

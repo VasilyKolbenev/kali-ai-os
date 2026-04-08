@@ -91,6 +91,12 @@ class LLMRouter:
         return response
 
     async def _call_cloud(self, request: LLMRequest) -> LLMResponse:
+        if self.config.cloud_provider == "openai":
+            return await self._call_openai(request)
+        return await self._call_anthropic(request)
+
+    async def _call_anthropic(self, request: LLMRequest) -> LLMResponse:
+        """Call Claude API via anthropic SDK."""
         import anthropic
 
         client = anthropic.AsyncAnthropic()
@@ -121,7 +127,61 @@ class LLMRouter:
         return LLMResponse(
             text=text,
             tool_calls=tool_calls if tool_calls else None,
-            provider_used="cloud",
+            provider_used="anthropic",
+            latency_ms=0,
+        )
+
+    async def _call_openai(self, request: LLMRequest) -> LLMResponse:
+        """Call OpenAI API via openai SDK."""
+        import openai
+
+        client = openai.AsyncOpenAI()
+        messages: list[dict[str, Any]] = []
+
+        for ctx in request.context:
+            messages.append(ctx)
+        messages.append({"role": "user", "content": request.text})
+
+        kwargs: dict[str, Any] = {
+            "model": self.config.cloud_model,
+            "messages": messages,
+        }
+
+        if request.available_tools:
+            # Convert Anthropic tool format to OpenAI format
+            openai_tools = []
+            for tool in request.available_tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["function"]["name"],
+                        "description": tool["function"].get("description", ""),
+                        "parameters": tool["function"].get("parameters", {}),
+                    },
+                })
+            kwargs["tools"] = openai_tools
+
+        response = await client.chat.completions.create(**kwargs)
+
+        choice = response.choices[0]
+        text = choice.message.content or ""
+        tool_calls: list[ToolCall] = []
+
+        if choice.message.tool_calls:
+            import json
+
+            for tc in choice.message.tool_calls:
+                tool_calls.append(
+                    ToolCall(
+                        name=tc.function.name,
+                        arguments=json.loads(tc.function.arguments),
+                    )
+                )
+
+        return LLMResponse(
+            text=text,
+            tool_calls=tool_calls if tool_calls else None,
+            provider_used="openai",
             latency_ms=0,
         )
 

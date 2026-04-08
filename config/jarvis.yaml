@@ -11,8 +11,8 @@ voice:
   vad_threshold: 0.5
 
 llm:
-  cloud_provider: "anthropic"
-  cloud_model: "claude-sonnet-4-20250514"
+  cloud_provider: "anthropic"        # "anthropic" or "openai"
+  cloud_model: "claude-sonnet-4-20250514"  # or "gpt-4o", "gpt-4o-mini"
   local_provider: "ollama"
   local_model: "llama3"
   auto_route: true
