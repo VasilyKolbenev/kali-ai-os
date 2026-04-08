@@ -19,15 +19,16 @@ An AI OS for a dedicated hardware device and desktop. Unlike Rabbit R1, Jarvis a
 
 ### Rabbit R1 vs Jarvis 2026
 
-| | Rabbit R1 ($199) | Jarvis 2026 (Free) |
-|---|---|---|
-| Apps | 4 (broken) | 9 agents + unlimited custom |
-| AI | Fake "LAM" (ChatGPT wrapper) | Real Claude/GPT-4o + local Ollama |
-| Battery | ~1 hour | Desktop / always-on server |
-| Memory | None | Conversation history across sessions |
-| Ecosystem | Closed, dead | Open Agent Marketplace, community-driven |
-| Updates | Hardware can't be fixed | Software updates instantly |
-| Source | Proprietary | Proprietary OS + Open Agent Marketplace |
+| | Rabbit R1 ($199) | Humane AI Pin ($699+$24/mo) | **Jarvis ($129+$9/mo)** |
+|---|---|---|---|
+| Apps | 4 (broken) | 0 (dead) | **9 agents + unlimited custom** |
+| AI | Fake "LAM" | Basic LLM | **Claude/GPT-4o + local Ollama** |
+| Battery | ~1 hour | ~2 hours | **Always-on (server-powered)** |
+| Memory | None | None | **Conversation history** |
+| Ecosystem | Closed, dead | Dead | **Open Agent Marketplace** |
+| Updates | Can't fix HW | Bricked 2025 | **OTA software updates** |
+| Display | 2.88" square | Projector | **1.85" round touch IPS** |
+| Price | $199 one-time | $699 + $24/mo | **$129 + $9/mo cloud AI** |
 
 ---
 
@@ -341,16 +342,35 @@ jarvis/
 
 ## Business Model
 
-| Component | Model |
-|-----------|-------|
-| **Jarvis AI OS** | Proprietary — ships with device, available for desktop |
-| **Jarvis Device** | Hardware product (ESP32-S3 + round display + case) |
-| **Agent Marketplace** | Open community — anyone can create, share, and install agents |
-| **Cloud AI** | BYO key (user's own Anthropic/OpenAI) or bundled subscription (v2) |
+### Pricing
+
+| Tier | Price | What's Included |
+|------|-------|-----------------|
+| **Jarvis Device** | **$129** | Hardware + Jarvis AI OS + 9 built-in agents + Agent Marketplace |
+| **Jarvis Cloud** | **$9/month** | Managed Claude/GPT-4o AI, no API keys needed, voice processing, OTA updates |
+| **Jarvis Free** | **$0** | Desktop-only version, bring your own API key, self-hosted |
+| **Marketplace** | **Free** | Create, share, install community agents |
+
+### Unit Economics
+
+| Metric | Value |
+|--------|-------|
+| Device BOM cost | ~$20 |
+| Retail price | $129 |
+| Hardware margin | ~84% |
+| Cloud subscription | $9/mo (AI API cost ~$2/mo per user) |
+| LTV (12 months) | $129 + $108 = **$237/user** |
+
+### Revenue Streams
+
+1. **Hardware sales** — $129 per device, 84% margin
+2. **Cloud subscription** — $9/mo recurring, 78% margin
+3. **Marketplace fees** — 15% commission on premium agents (v2)
+4. **Enterprise tier** — custom agents + support (v3)
 
 ### Why Open Marketplace?
 
-Rabbit R1 died because 4 locked integrations weren't enough. Our marketplace lets the **community** build agents for every use case — finance, fitness, smart home, productivity, crypto, gaming. More agents = more value = more device sales.
+Rabbit R1 died because 4 locked integrations weren't enough. Our marketplace lets the **community** build agents for every use case — finance, fitness, smart home, productivity, crypto, gaming. More agents = more value = more device sales. The App Store model: we build the platform, community builds the apps.
 
 ## License
 
