@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+:root {
+  --jarvis-blue: #4fc3f7;
+  --jarvis-orange: #ff9800;
+  --jarvis-green: #66bb6a;
+  --jarvis-red: #ef5350;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
