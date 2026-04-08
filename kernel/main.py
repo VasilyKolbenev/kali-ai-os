@@ -16,7 +16,9 @@ from kernel.agent_runtime.runtime import AgentRuntime
 from kernel.config_manager import ConfigManager
 from kernel.database import Database
 from kernel.event_bus import EventBus
+from kernel.memory import ConversationMemory
 from kernel.models import Event, WSMessage
+from kernel.notifications import NotificationManager
 from kernel.plugin_registry import PluginRegistry
 from kernel.scheduler import Scheduler
 from kernel.voice.pipeline import VoicePipeline
@@ -69,6 +71,10 @@ def create_app(
         database = Database(resolved_db_path)
         await database.initialize()
         await database.prune_old_conversations()
+        memory = ConversationMemory(database)
+        notifications = NotificationManager(event_bus)
+        app.state.memory = memory
+        app.state.notifications = notifications
         scheduler = Scheduler(event_bus, config_manager.config.schedule)
         scheduler.start()
 
@@ -242,5 +248,30 @@ def create_app(
     @app.get("/agents/{name}/status")
     async def agent_status(name: str, request: Request) -> dict[str, Any]:
         return await request.app.state.agent_runtime.get_status(name)
+
+    @app.post("/notifications/send")
+    async def send_notification(request: Request) -> dict[str, str]:
+        from kernel.notifications import Notification
+
+        body = await request.json()
+        notif = Notification(
+            title=body.get("title", "Jarvis"),
+            message=body.get("message", ""),
+            priority=body.get("priority", "normal"),
+        )
+        await request.app.state.notifications.send(notif)
+        return {"status": "sent"}
+
+    @app.get("/notifications/pending")
+    async def pending_notifications(request: Request) -> list[dict]:  # type: ignore[type-arg]
+        return [
+            {
+                "title": n.title,
+                "message": n.message,
+                "priority": n.priority,
+                "timestamp": n.timestamp,
+            }
+            for n in request.app.state.notifications.get_pending()
+        ]
 
     return app

@@ -93,6 +93,33 @@ class TestConfigEndpoint:
         assert data["server"]["port"] == 8000
 
 
+class TestNotificationsEndpoint:
+    async def test_send_notification(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/notifications/send",
+            json={"title": "Test", "message": "Hello", "priority": "high"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "sent"
+
+    async def test_pending_notifications(self, client: AsyncClient) -> None:
+        await client.post(
+            "/notifications/send",
+            json={"title": "A", "message": "B"},
+        )
+        resp = await client.get("/notifications/pending")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        assert data[-1]["title"] == "A"
+        assert data[-1]["message"] == "B"
+
+    async def test_send_uses_defaults(self, client: AsyncClient) -> None:
+        resp = await client.post("/notifications/send", json={})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "sent"
+
+
 class TestWebSocket:
     async def test_websocket_connect_and_receive(self, app) -> None:
         from starlette.testclient import TestClient
