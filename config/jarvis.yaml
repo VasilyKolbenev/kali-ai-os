@@ -1,0 +1,22 @@
+# Jarvis 2026 Configuration
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+voice:
+  wake_word: "jarvis"
+  mode: "wake_word"
+  stt_model: "base"
+  tts_voice: "default"
+  vad_threshold: 0.5
+
+llm:
+  cloud_provider: "anthropic"
+  cloud_model: "claude-sonnet-4-20250514"
+  local_provider: "ollama"
+  local_model: "llama3"
+  auto_route: true
+
+schedule:
+  morning_hour: 8
+  evening_hour: 22
