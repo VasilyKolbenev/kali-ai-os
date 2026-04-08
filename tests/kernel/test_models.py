@@ -1,7 +1,7 @@
 """Tests for kernel Pydantic models."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kernel.models import (
     AgentManifest,
@@ -22,7 +22,7 @@ class TestEvent:
         assert isinstance(uuid.UUID(event.correlation_id), uuid.UUID)
 
     def test_create_event_with_explicit_fields(self) -> None:
-        ts = datetime(2026, 4, 8, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 8, tzinfo=UTC)
         event = Event(
             topic="agent.response",
             source="calendar",
@@ -35,11 +35,13 @@ class TestEvent:
 
     def test_event_topic_must_contain_dot(self) -> None:
         import pytest
+
         with pytest.raises(ValueError):
             Event(topic="invalid", source="test", payload={})
 
     def test_event_wildcard_topic_rejected(self) -> None:
         import pytest
+
         with pytest.raises(ValueError):
             Event(topic="agent.*", source="test", payload={})
 
@@ -92,6 +94,7 @@ class TestAgentManifest:
 
     def test_manifest_invalid_protocol(self) -> None:
         import pytest
+
         with pytest.raises(ValueError):
             AgentManifest(
                 name="test",

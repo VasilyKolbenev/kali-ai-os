@@ -1,7 +1,6 @@
 """Integration tests for FastAPI server and WebSocket."""
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -43,7 +42,7 @@ async def app(tmp_path: Path, sample_agents_dir: Path, sample_config_path: Path)
     shutdown_event.set()
     try:
         await asyncio.wait_for(task, timeout=5.0)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
+    except (TimeoutError, asyncio.CancelledError):
         pass
 
 

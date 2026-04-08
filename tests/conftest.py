@@ -11,14 +11,18 @@ def sample_agents_dir(tmp_path: Path) -> Path:
     """Create a temp agents directory with a test agent."""
     agent_dir = tmp_path / "agents" / "test-agent"
     agent_dir.mkdir(parents=True)
-    (agent_dir / "manifest.yaml").write_text(yaml.dump({
-        "name": "test-agent",
-        "version": "1.0.0",
-        "description": "Test agent",
-        "capabilities": ["test.hello"],
-        "tools": [{"name": "greet", "description": "Say hi", "parameters": {}}],
-        "protocol": "native",
-    }))
+    (agent_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "test-agent",
+                "version": "1.0.0",
+                "description": "Test agent",
+                "capabilities": ["test.hello"],
+                "tools": [{"name": "greet", "description": "Say hi", "parameters": {}}],
+                "protocol": "native",
+            }
+        )
+    )
     return tmp_path / "agents"
 
 

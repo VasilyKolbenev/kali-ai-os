@@ -1,7 +1,7 @@
 """Pydantic models for Jarvis kernel — events, config, manifests, WebSocket messages."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -13,7 +13,7 @@ class Event(BaseModel):
     topic: str
     source: str
     payload: dict[str, Any]
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
 
     @field_validator("topic")

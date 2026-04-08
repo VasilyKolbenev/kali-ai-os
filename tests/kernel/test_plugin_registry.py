@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from kernel.models import AgentManifest
 from kernel.plugin_registry import PluginRegistry
 
 
@@ -13,25 +12,33 @@ from kernel.plugin_registry import PluginRegistry
 def agents_dir(tmp_path: Path) -> Path:
     cal_dir = tmp_path / "calendar"
     cal_dir.mkdir()
-    (cal_dir / "manifest.yaml").write_text(yaml.dump({
-        "name": "calendar",
-        "version": "1.0.0",
-        "description": "Calendar agent",
-        "capabilities": ["calendar.read", "calendar.write"],
-        "tools": [{"name": "get_events", "description": "Get events", "parameters": {}}],
-        "protocol": "native",
-        "permissions": ["network"],
-    }))
+    (cal_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "calendar",
+                "version": "1.0.0",
+                "description": "Calendar agent",
+                "capabilities": ["calendar.read", "calendar.write"],
+                "tools": [{"name": "get_events", "description": "Get events", "parameters": {}}],
+                "protocol": "native",
+                "permissions": ["network"],
+            }
+        )
+    )
 
     tasks_dir = tmp_path / "tasks"
     tasks_dir.mkdir()
-    (tasks_dir / "manifest.yaml").write_text(yaml.dump({
-        "name": "tasks",
-        "version": "1.0.0",
-        "description": "Tasks agent",
-        "capabilities": ["tasks.read", "tasks.write"],
-        "protocol": "native",
-    }))
+    (tasks_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "tasks",
+                "version": "1.0.0",
+                "description": "Tasks agent",
+                "capabilities": ["tasks.read", "tasks.write"],
+                "protocol": "native",
+            }
+        )
+    )
 
     return tmp_path
 

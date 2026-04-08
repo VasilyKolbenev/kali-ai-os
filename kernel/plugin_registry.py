@@ -60,17 +60,19 @@ class PluginRegistry:
         tools: list[dict[str, Any]] = []
         for agent in self._agents.values():
             for tool in agent.tools:
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": f"{agent.name}__{tool.name}",
-                        "description": tool.description,
-                        "parameters": {
-                            "type": "object",
-                            "properties": tool.parameters,
+                tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": f"{agent.name}__{tool.name}",
+                            "description": tool.description,
+                            "parameters": {
+                                "type": "object",
+                                "properties": tool.parameters,
+                            },
                         },
-                    },
-                })
+                    }
+                )
         return tools
 
     def find_agent_for_tool(self, tool_name: str) -> AgentManifest | None:

@@ -1,7 +1,5 @@
 """Tests for the async pub/sub Event Bus."""
 
-import asyncio
-
 import pytest
 
 from kernel.event_bus import EventBus

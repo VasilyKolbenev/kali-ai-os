@@ -91,9 +91,7 @@ def create_app(
         yield
 
         # Graceful shutdown
-        await event_bus.publish(
-            Event(topic="system.shutdown", source="kernel", payload={})
-        )
+        await event_bus.publish(Event(topic="system.shutdown", source="kernel", payload={}))
         await scheduler.stop()
         await database.close()
         logger.info("Jarvis kernel stopped")
@@ -157,8 +155,6 @@ def create_app(
                     await ws.send_json({"type": "error", "data": {"message": str(e)}})
         except WebSocketDisconnect:
             s.ws_connections.remove(ws)
-            logger.info(
-                "WebSocket client disconnected (%d remaining)", len(s.ws_connections)
-            )
+            logger.info("WebSocket client disconnected (%d remaining)", len(s.ws_connections))
 
     return app

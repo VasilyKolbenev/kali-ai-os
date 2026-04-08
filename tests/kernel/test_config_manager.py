@@ -1,6 +1,5 @@
 """Tests for YAML config manager with hot-reload."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,10 +12,14 @@ from kernel.models import ConfigSchema
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
     config_file = tmp_path / "jarvis.yaml"
-    config_file.write_text(yaml.dump({
-        "server": {"host": "127.0.0.1", "port": 8000},
-        "voice": {"wake_word": "jarvis"},
-    }))
+    config_file.write_text(
+        yaml.dump(
+            {
+                "server": {"host": "127.0.0.1", "port": 8000},
+                "voice": {"wake_word": "jarvis"},
+            }
+        )
+    )
     return tmp_path
 
 
