@@ -19,7 +19,7 @@ An AI OS for a dedicated hardware device and desktop. Unlike Rabbit R1, Jarvis a
 
 ### Rabbit R1 vs Jarvis 2026
 
-| | Rabbit R1 ($199) | Humane AI Pin ($699+$24/mo) | **Jarvis ($129+$9/mo)** |
+| | Rabbit R1 ($199) | Humane AI Pin ($699+$24/mo) | **Jarvis ($149+$9/mo)** |
 |---|---|---|---|
 | Apps | 4 (broken) | 0 (dead) | **9 agents + unlimited custom** |
 | AI | Fake "LAM" | Basic LLM | **Claude/GPT-4o + local Ollama** |
@@ -28,7 +28,7 @@ An AI OS for a dedicated hardware device and desktop. Unlike Rabbit R1, Jarvis a
 | Ecosystem | Closed, dead | Dead | **Open Agent Marketplace** |
 | Updates | Can't fix HW | Bricked 2025 | **OTA software updates** |
 | Display | 2.88" square | Projector | **1.85" round touch IPS** |
-| Price | $199 one-time | $699 + $24/mo | **$129 + $9/mo cloud AI** |
+| Price | $199 one-time | $699 + $24/mo | **$149 + $9/mo cloud AI** |
 
 ---
 
@@ -346,7 +346,7 @@ jarvis/
 
 | Tier | Price | What's Included |
 |------|-------|-----------------|
-| **Jarvis Device** | **$129** | Hardware + Jarvis AI OS + 9 built-in agents + Agent Marketplace |
+| **Jarvis Device** | **$149** | Hardware + Jarvis AI OS + 9 built-in agents + Agent Marketplace |
 | **Jarvis Cloud** | **$9/month** | Managed Claude/GPT-4o AI, no API keys needed, voice processing, OTA updates |
 | **Jarvis Free** | **$0** | Desktop-only version, bring your own API key, self-hosted |
 | **Marketplace** | **Free** | Create, share, install community agents |
@@ -356,14 +356,14 @@ jarvis/
 | Metric | Value |
 |--------|-------|
 | Device BOM cost | ~$20 |
-| Retail price | $129 |
-| Hardware margin | ~84% |
+| Retail price | $149 |
+| Hardware margin | ~87% |
 | Cloud subscription | $9/mo (AI API cost ~$2/mo per user) |
-| LTV (12 months) | $129 + $108 = **$237/user** |
+| LTV (12 months) | $149 + $108 = **$257/user** |
 
 ### Revenue Streams
 
-1. **Hardware sales** — $129 per device, 84% margin
+1. **Hardware sales** — $149 per device, 84% margin
 2. **Cloud subscription** — $9/mo recurring, 78% margin
 3. **Marketplace fees** — 15% commission on premium agents (v2)
 4. **Enterprise tier** — custom agents + support (v3)
