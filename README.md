@@ -2,7 +2,7 @@
 
 **Personal AI Command Center** — voice-controlled agent orchestrator that saves you time and money.
 
-A desktop AI assistant inspired by the CLIK device concept. Unlike failed hardware like Rabbit R1, Jarvis 2026 is open-source, runs on your PC, and actually works.
+An AI OS for a dedicated hardware device and desktop. Unlike Rabbit R1, Jarvis actually works — real AI, real integrations, real value. The device ships with Jarvis AI OS pre-installed. The **Agent Marketplace** is open for community — everything else is proprietary.
 
 ---
 
@@ -25,9 +25,9 @@ A desktop AI assistant inspired by the CLIK device concept. Unlike failed hardwa
 | AI | Fake "LAM" (ChatGPT wrapper) | Real Claude/GPT-4o + local Ollama |
 | Battery | ~1 hour | Desktop / always-on server |
 | Memory | None | Conversation history across sessions |
-| Ecosystem | Closed, dead | Open plugin system, community agents |
+| Ecosystem | Closed, dead | Open Agent Marketplace, community-driven |
 | Updates | Hardware can't be fixed | Software updates instantly |
-| Source | Proprietary | Open source |
+| Source | Proprietary | Proprietary OS + Open Agent Marketplace |
 
 ---
 
@@ -59,10 +59,12 @@ A desktop AI assistant inspired by the CLIK device concept. Unlike failed hardwa
 - **Weather** — Open-Meteo (free, no API key)
 - **Home Assistant** — smart home control (v2)
 
-### Hardware-Ready
-- Architecture designed for future embedded device (Raspberry Pi / ESP32-S3)
-- Kernel separated from UI — runs headless on any server
-- ESP32-S3 with round 1.28" touchscreen as thin WiFi client
+### Hardware Device
+- **Jarvis Device** — dedicated AI command center with round touchscreen
+- Compact form factor, 3D-printed case, ESP32-S3 with 1.28" round IPS display
+- Ships with Jarvis AI OS pre-installed — plug in, connect WiFi, start using
+- Kernel runs on home server (PC / Raspberry Pi), device is a wireless thin client
+- Always-on bedside / desk companion (nightstand mode, voice activation)
 
 ---
 
@@ -327,14 +329,30 @@ jarvis/
 - [x] OpenAI / Anthropic dual support
 - [ ] UI Polish (CLIK-level design, animations)
 - [ ] Tauri production build (.exe installer)
-- [ ] ESP32-S3 firmware (thin client)
-- [ ] 3D printed hardware case
-- [ ] Agent marketplace (community sharing)
+- [ ] ESP32-S3 firmware (thin client for device)
+- [ ] 3D printed hardware case (production mold v2)
+- [ ] Agent Marketplace (community sharing platform)
 - [ ] Multi-language (Russian, Ukrainian, English)
 - [ ] Mobile companion app
+- [ ] Device manufacturing + sales launch
+- [ ] Cloud subscription tier (managed AI, no API keys needed)
 
 ---
 
+## Business Model
+
+| Component | Model |
+|-----------|-------|
+| **Jarvis AI OS** | Proprietary — ships with device, available for desktop |
+| **Jarvis Device** | Hardware product (ESP32-S3 + round display + case) |
+| **Agent Marketplace** | Open community — anyone can create, share, and install agents |
+| **Cloud AI** | BYO key (user's own Anthropic/OpenAI) or bundled subscription (v2) |
+
+### Why Open Marketplace?
+
+Rabbit R1 died because 4 locked integrations weren't enough. Our marketplace lets the **community** build agents for every use case — finance, fitness, smart home, productivity, crypto, gaming. More agents = more value = more device sales.
+
 ## License
 
-Private repository. All rights reserved.
+Proprietary software. All rights reserved.
+Agent Marketplace SDK and agent template format are open for community development.
