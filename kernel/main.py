@@ -16,6 +16,7 @@ from kernel.event_bus import EventBus
 from kernel.models import Event, WSMessage
 from kernel.plugin_registry import PluginRegistry
 from kernel.scheduler import Scheduler
+from kernel.voice.pipeline import VoicePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,20 @@ def create_app(
         await database.prune_old_conversations()
         scheduler = Scheduler(event_bus, config_manager.config.schedule)
         scheduler.start()
+
+        # Voice pipeline (optional — only if dependencies available)
+        try:
+            voice_pipeline = VoicePipeline(
+                event_bus=event_bus,
+                voice_config=config_manager.config.voice,
+                llm_config=config_manager.config.llm,
+                tools=plugin_registry.get_all_tools(),
+            )
+            app.state.voice_pipeline = voice_pipeline
+            logger.info("Voice pipeline initialized")
+        except Exception:
+            logger.warning("Voice pipeline not available")
+            app.state.voice_pipeline = None
 
         # Store on app.state for route access
         app.state.event_bus = event_bus
@@ -124,6 +139,34 @@ def create_app(
     @app.get("/config")
     async def get_config(request: Request) -> dict[str, Any]:
         return request.app.state.config_manager.config.model_dump()
+
+    @app.get("/voice/status")
+    async def voice_status(request: Request) -> dict[str, Any]:
+        vp = request.app.state.voice_pipeline
+        if vp is None:
+            return {"available": False}
+        return {
+            "available": True,
+            "state": vp.state.value,
+            "mode": vp.mode,
+        }
+
+    @app.post("/voice/start")
+    async def voice_start(request: Request) -> dict[str, str]:
+        vp = request.app.state.voice_pipeline
+        if vp is None:
+            return {"status": "error", "message": "Voice pipeline not available"}
+        vp.load_models()
+        await vp.start()
+        return {"status": "started"}
+
+    @app.post("/voice/stop")
+    async def voice_stop(request: Request) -> dict[str, str]:
+        vp = request.app.state.voice_pipeline
+        if vp is None:
+            return {"status": "error", "message": "Voice pipeline not available"}
+        await vp.stop()
+        return {"status": "stopped"}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:

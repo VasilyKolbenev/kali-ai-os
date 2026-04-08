@@ -1,19 +1,16 @@
 """Tests for voice pipeline orchestrator."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
 
 from kernel.event_bus import EventBus
-from kernel.llm_router import LLMRequest, LLMResponse, LLMRouter
-from kernel.models import ConfigSchema, LLMConfig, VoiceConfig
+from kernel.llm_router import LLMResponse
+from kernel.models import LLMConfig, VoiceConfig
 from kernel.voice.pipeline import PipelineState, VoicePipeline
 from kernel.voice.recorder import AudioChunk
 from kernel.voice.stt import STTResult
-from kernel.voice.tts import TTSResult
-from kernel.voice.vad import VADResult
-from kernel.voice.wake_word import WakeWordResult
 
 
 @pytest.fixture

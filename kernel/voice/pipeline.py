@@ -117,7 +117,7 @@ class VoicePipeline:
             try:
                 chunk = await asyncio.wait_for(self._recorder.read_chunk(), timeout=1.0)
                 await self.process_chunk(chunk)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except Exception:
                 logger.exception("Pipeline loop error")
