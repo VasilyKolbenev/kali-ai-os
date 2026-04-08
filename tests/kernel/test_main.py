@@ -1,0 +1,115 @@
+"""Integration tests for FastAPI server and WebSocket."""
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from kernel.main import create_app
+
+
+async def _start_lifespan(app) -> tuple[asyncio.Task, asyncio.Event]:  # type: ignore[type-arg]
+    """Trigger ASGI lifespan startup; return (task, shutdown_event)."""
+    started: asyncio.Event = asyncio.Event()
+    shutdown_event: asyncio.Event = asyncio.Event()
+
+    async def receive() -> dict:  # type: ignore[type-arg]
+        if not started.is_set():
+            return {"type": "lifespan.startup"}
+        await shutdown_event.wait()
+        return {"type": "lifespan.shutdown"}
+
+    async def send(message: dict) -> None:  # type: ignore[type-arg]
+        if message["type"] == "lifespan.startup.complete":
+            started.set()
+
+    scope = {"type": "lifespan", "asgi": {"version": "3.0"}}
+    task: asyncio.Task = asyncio.create_task(app(scope, receive, send))
+    await started.wait()
+    return task, shutdown_event
+
+
+@pytest.fixture
+async def app(tmp_path: Path, sample_agents_dir: Path, sample_config_path: Path):
+    application = create_app(
+        config_path=sample_config_path,
+        agents_dir=sample_agents_dir,
+        db_path=tmp_path / "test.db",
+    )
+    task, shutdown_event = await _start_lifespan(application)
+    yield application
+    shutdown_event.set()
+    try:
+        await asyncio.wait_for(task, timeout=5.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+
+
+@pytest.fixture
+async def client(app):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+class TestHealthEndpoint:
+    async def test_health_returns_ok(self, client: AsyncClient) -> None:
+        resp = await client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "version" in data
+
+    async def test_health_includes_components(self, client: AsyncClient) -> None:
+        resp = await client.get("/health")
+        data = resp.json()
+        assert "components" in data
+        assert "event_bus" in data["components"]
+        assert "database" in data["components"]
+
+
+class TestAgentsEndpoint:
+    async def test_list_agents(self, client: AsyncClient) -> None:
+        resp = await client.get("/agents")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "test-agent"
+
+    async def test_get_agent_tools(self, client: AsyncClient) -> None:
+        resp = await client.get("/agents/tools")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert "test-agent__greet" in data[0]["function"]["name"]
+
+
+class TestConfigEndpoint:
+    async def test_get_config(self, client: AsyncClient) -> None:
+        resp = await client.get("/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["server"]["port"] == 8000
+
+
+class TestWebSocket:
+    async def test_websocket_connect_and_receive(self, app) -> None:
+        from starlette.testclient import TestClient
+
+        with TestClient(app) as test_client:
+            with test_client.websocket_connect("/ws") as ws:
+                ws.send_json({"type": "ui.command", "data": {"command": "ping"}})
+                response = ws.receive_json()
+                assert response["type"] == "ui.command"
+                assert response["data"]["status"] == "received"
+
+    async def test_websocket_unknown_type_returns_error(self, app) -> None:
+        from starlette.testclient import TestClient
+
+        with TestClient(app) as test_client:
+            with test_client.websocket_connect("/ws") as ws:
+                ws.send_json({"type": "unknown.type", "data": {}})
+                response = ws.receive_json()
+                assert response["type"] == "error"
