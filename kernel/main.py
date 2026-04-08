@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 
 from kernel import __version__
+from kernel.agent_runtime.dispatcher import ToolDispatcher
+from kernel.agent_runtime.runtime import AgentRuntime
 from kernel.config_manager import ConfigManager
 from kernel.database import Database
 from kernel.event_bus import EventBus
@@ -52,6 +54,17 @@ def create_app(
         config_manager.load()
         plugin_registry = PluginRegistry(resolved_agents_dir)
         plugin_registry.discover()
+        agent_runtime = AgentRuntime(
+            registry=plugin_registry,
+            agents_dir=resolved_agents_dir,
+            event_bus=event_bus,
+        )
+        tool_dispatcher = ToolDispatcher(
+            runtime=agent_runtime,
+            registry=plugin_registry,
+        )
+        app.state.agent_runtime = agent_runtime
+        app.state.tool_dispatcher = tool_dispatcher
         database = Database(resolved_db_path)
         await database.initialize()
         await database.prune_old_conversations()
@@ -107,6 +120,7 @@ def create_app(
 
         # Graceful shutdown
         await event_bus.publish(Event(topic="system.shutdown", source="kernel", payload={}))
+        await agent_runtime.shutdown_all()
         await scheduler.stop()
         await database.close()
         logger.info("Jarvis kernel stopped")
@@ -199,5 +213,26 @@ def create_app(
         except WebSocketDisconnect:
             s.ws_connections.remove(ws)
             logger.info("WebSocket client disconnected (%d remaining)", len(s.ws_connections))
+
+    @app.get("/agents/running")
+    async def running_agents(request: Request) -> list[dict[str, Any]]:
+        return request.app.state.agent_runtime.list_agents()
+
+    @app.post("/agents/{name}/load")
+    async def load_agent(name: str, request: Request) -> dict[str, str]:
+        try:
+            await request.app.state.agent_runtime.load_agent(name)
+            return {"status": "loaded", "agent": name}
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/agents/{name}/unload")
+    async def unload_agent(name: str, request: Request) -> dict[str, str]:
+        await request.app.state.agent_runtime.unload_agent(name)
+        return {"status": "unloaded", "agent": name}
+
+    @app.get("/agents/{name}/status")
+    async def agent_status(name: str, request: Request) -> dict[str, Any]:
+        return await request.app.state.agent_runtime.get_status(name)
 
     return app
