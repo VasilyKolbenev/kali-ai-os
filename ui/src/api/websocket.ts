@@ -1,0 +1,51 @@
+import { useEffect, useRef } from "react";
+import { useVoiceStore } from "../stores/voiceStore";
+import { useAgentStore } from "../stores/agentStore";
+import { useDashboardStore } from "../stores/dashboardStore";
+import type { WSMessage } from "./types";
+
+const WS_URL = "ws://localhost:8000/ws";
+
+export function useWebSocket() {
+  const wsRef = useRef<WebSocket | null>(null);
+  const setVoiceState = useVoiceStore((s) => s.setState);
+  const setTranscript = useVoiceStore((s) => s.setTranscript);
+  const updateAgent = useAgentStore((s) => s.updateAgent);
+  const updateWidget = useDashboardStore((s) => s.updateWidget);
+
+  useEffect(() => {
+    const connect = () => {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const msg: WSMessage = JSON.parse(event.data);
+          switch (msg.type) {
+            case "voice.state":
+              setVoiceState(msg.data.state);
+              break;
+            case "voice.transcript":
+              setTranscript(msg.data.text);
+              break;
+            case "agent.status.update":
+              updateAgent(msg.data.agent, msg.data.status);
+              break;
+            case "dashboard.update":
+              updateWidget(msg.data.widget, msg.data.data);
+              break;
+          }
+        } catch (e) {
+          console.error("WS parse error:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
+    return () => wsRef.current?.close();
+  }, [setVoiceState, setTranscript, updateAgent, updateWidget]);
+}

@@ -1,0 +1,24 @@
+const BASE_URL = "http://localhost:8000";
+
+async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...options?.headers },
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export const api = {
+  health: () => fetchJSON<import("./types").HealthResponse>("/health"),
+  agents: () => fetchJSON<import("./types").AgentManifest[]>("/agents"),
+  agentTools: () => fetchJSON<unknown[]>("/agents/tools"),
+  runningAgents: () => fetchJSON<import("./types").AgentStatus[]>("/agents/running"),
+  loadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/load`, { method: "POST" }),
+  unloadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/unload`, { method: "POST" }),
+  agentStatus: (name: string) => fetchJSON<import("./types").AgentStatus>(`/agents/${name}/status`),
+  config: () => fetchJSON<Record<string, unknown>>("/config"),
+  voiceStatus: () => fetchJSON<import("./types").VoiceStatus>("/voice/status"),
+  voiceStart: () => fetchJSON<{ status: string }>("/voice/start", { method: "POST" }),
+  voiceStop: () => fetchJSON<{ status: string }>("/voice/stop", { method: "POST" }),
+};
