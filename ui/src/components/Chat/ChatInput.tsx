@@ -36,7 +36,29 @@ export function ChatInput() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // No system TTS — only JARVIS voice sounds
+  // Speak response with JARVIS voice via OpenAI TTS (onyx voice)
+  const speakJarvis = async (text: string) => {
+    if (!text || text.length < 5) return; // Skip very short responses
+    try {
+      setVoiceState("speaking");
+      const res = await fetch("http://localhost:3000/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => {
+        setVoiceState("idle");
+        URL.revokeObjectURL(url);
+      };
+      audio.play();
+    } catch {
+      setVoiceState("idle");
+    }
+  };
 
   // Global hotkey: hold Space = push-to-talk (when input not focused)
   useEffect(() => {
@@ -63,7 +85,13 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
-      playSound("ok"); // JARVIS "done" sound — no extra words
+      if (res.source?.startsWith("llm-")) {
+        // LLM response — speak with JARVIS voice
+        speakJarvis(res.response);
+      } else {
+        // Agent command — just confirmation sound, no extra words
+        playSound("ok");
+      }
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
     } finally {

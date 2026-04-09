@@ -491,4 +491,36 @@ def create_app(
                 "source": "system",
             }
 
+    @app.post("/tts")
+    async def text_to_speech(request: Request) -> Any:
+        """Convert text to speech using OpenAI TTS with JARVIS-like voice."""
+        from fastapi.responses import StreamingResponse
+        import io
+
+        body = await request.json()
+        text = body.get("text", "")
+        if not text:
+            return {"error": "No text provided"}
+
+        try:
+            import openai
+
+            client = openai.OpenAI()
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice="onyx",  # Deep male voice, closest to JARVIS
+                input=text,
+                response_format="mp3",
+                speed=1.05,
+            )
+            audio_bytes = response.content
+            return StreamingResponse(
+                io.BytesIO(audio_bytes),
+                media_type="audio/mpeg",
+                headers={"Content-Disposition": "inline"},
+            )
+        except Exception as e:
+            logger.warning("TTS failed: %s", e)
+            return {"error": str(e)}
+
     return app
