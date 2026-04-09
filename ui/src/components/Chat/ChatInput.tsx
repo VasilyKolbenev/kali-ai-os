@@ -38,6 +38,21 @@ export function ChatInput() {
 
   // No system TTS — only JARVIS voice sounds
 
+  // Global hotkey: hold Space = push-to-talk (when input not focused)
+  useEffect(() => {
+    const inputFocused = () => document.activeElement?.tagName === "INPUT";
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !inputFocused() && !listening && !isLoading) {
+        e.preventDefault();
+        toggleMic();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [listening, isLoading]);
+
   const send = async (msg: string) => {
     if (!msg.trim() || isLoading) return;
     addMessage("user", msg.trim());
