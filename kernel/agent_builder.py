@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_AGENTS_DIR = Path("agents/custom")
 
-AGENT_TEMPLATE = '''"""Auto-generated Jarvis agent: {name}."""
+AGENT_TEMPLATE = '''"""Auto-generated KALI agent: {name}."""
 
 import json
 import os

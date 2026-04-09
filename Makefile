@@ -11,7 +11,7 @@ ui-dev:
 	cd ui && pnpm dev
 
 dev:
-	@echo "Starting Jarvis (kernel + UI)..."
+	@echo "Starting KALI (kernel + UI)..."
 	@make kernel-dev &
 	@sleep 2
 	@make ui-dev

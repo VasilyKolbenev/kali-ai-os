@@ -1,4 +1,4 @@
-"""SQLite database layer for Jarvis kernel."""
+"""SQLite database layer for KALI kernel."""
 
 import json
 import logging

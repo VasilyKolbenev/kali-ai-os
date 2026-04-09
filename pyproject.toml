@@ -1,7 +1,7 @@
 [project]
-name = "jarvis"
+name = "kali"
 version = "0.1.0"
-description = "Personal AI Command Center"
+description = "KALI — Kernel Agent Lifecycle Intelligence"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

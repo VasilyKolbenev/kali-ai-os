@@ -1,4 +1,4 @@
-"""Time-based event scheduler for the Jarvis kernel."""
+"""Time-based event scheduler for the KALI kernel."""
 
 import asyncio
 import logging

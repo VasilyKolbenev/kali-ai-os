@@ -1,4 +1,4 @@
-# Jarvis — Pitch
+# KALI — Pitch
 
 ## One-liner
 
@@ -10,7 +10,7 @@ People use 10+ apps daily — calendar, tasks, email, budget, notes, smart home.
 
 ## Solution
 
-Jarvis is a voice-first AI OS where everything runs through **agents** — modular, composable, extensible units of automation. Instead of opening apps, you speak naturally and the system executes.
+KALI is a voice-first AI OS where everything runs through **agents** — modular, composable, extensible units of automation. Instead of opening apps, you speak naturally and the system executes.
 
 The key insight: **apps are the wrong abstraction for AI**. Agents are the right one.
 
@@ -46,7 +46,7 @@ Competitors route everything through cloud APIs. We route 70-80% locally → dra
 
 ## Market
 
-Jarvis sits at the intersection of three markets:
+KALI sits at the intersection of three markets:
 
 | Market | Size |
 |--------|------|
@@ -58,7 +58,7 @@ We're creating a new category: **AI execution layer** — the operating system b
 
 ## Competitive Landscape
 
-| | Siri / Alexa | ChatGPT / Claude | Zapier | Rabbit R1 | **Jarvis** |
+| | Siri / Alexa | ChatGPT / Claude | Zapier | Rabbit R1 | **KALI** |
 |---|---|---|---|---|---|
 | Takes action | Limited | No | Yes | Barely | **Yes** |
 | Voice-first | Yes | No | No | Yes | **Yes** |
@@ -158,4 +158,4 @@ Phones had iOS.
 
 AI needs an operating system too.
 
-Jarvis is that system.
+KALI is that system.

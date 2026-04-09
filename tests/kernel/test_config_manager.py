@@ -11,7 +11,7 @@ from kernel.models import ConfigSchema
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    config_file = tmp_path / "jarvis.yaml"
+    config_file = tmp_path / "kali.yaml"
     config_file.write_text(
         yaml.dump(
             {
@@ -25,7 +25,7 @@ def config_dir(tmp_path: Path) -> Path:
 
 class TestConfigManager:
     def test_load_config(self, config_dir: Path) -> None:
-        manager = ConfigManager(config_dir / "jarvis.yaml")
+        manager = ConfigManager(config_dir / "kali.yaml")
         config = manager.load()
         assert isinstance(config, ConfigSchema)
         assert config.server.port == 8000
@@ -53,7 +53,7 @@ class TestConfigManager:
         assert config.voice.wake_word == "jarvis"
 
     def test_reload_picks_up_changes(self, config_dir: Path) -> None:
-        path = config_dir / "jarvis.yaml"
+        path = config_dir / "kali.yaml"
         manager = ConfigManager(path)
         config = manager.load()
         assert config.server.port == 8000
@@ -63,7 +63,7 @@ class TestConfigManager:
         assert config.server.port == 3000
 
     def test_config_property_returns_cached(self, config_dir: Path) -> None:
-        manager = ConfigManager(config_dir / "jarvis.yaml")
+        manager = ConfigManager(config_dir / "kali.yaml")
         c1 = manager.config
         c2 = manager.config
         assert c1 is c2

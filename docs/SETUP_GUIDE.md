@@ -1,4 +1,4 @@
-# Jarvis 2026 — Setup & Testing Guide
+# KALI — Setup & Testing Guide
 
 ## QUICK START (Windows)
 
@@ -27,7 +27,7 @@ git --version
 
 ### Step 1: Install Dependencies
 
-Open terminal in the Jarvis folder:
+Open terminal in the KALI folder:
 
 ```bash
 cd Desktop/Jarvis
@@ -213,7 +213,7 @@ curl -X DELETE http://localhost:8000/agents/custom/my-monitor
 # Send a notification
 curl -X POST http://localhost:8000/notifications/send \
   -H "Content-Type: application/json" \
-  -d '{"title": "Test", "message": "Hello from Jarvis!"}'
+  -d '{"title": "Test", "message": "Hello from KALI!"}'
 
 # Check pending
 curl http://localhost:8000/notifications/pending

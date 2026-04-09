@@ -1,4 +1,4 @@
-# Jarvis 2026 Configuration
+# KALI Configuration
 server:
   host: "127.0.0.1"
   port: 8000

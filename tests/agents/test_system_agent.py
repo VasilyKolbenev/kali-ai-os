@@ -27,7 +27,7 @@ def agent_proc(tmp_path):
         stderr=subprocess.PIPE,
         text=True,
         cwd=str(Path.cwd()),
-        env={**os.environ, "JARVIS_DATA_DIR": str(tmp_path)},
+        env={**os.environ, "KALI_DATA_DIR": str(tmp_path)},
     )
     yield proc
     proc.terminate()

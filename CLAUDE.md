@@ -1,4 +1,4 @@
-# Jarvis 2026
+# KALI
 
 Personal AI Command Center — voice-controlled agent orchestrator.
 
@@ -17,7 +17,7 @@ Personal AI Command Center — voice-controlled agent orchestrator.
 ## Architecture
 - `kernel/` — core Python backend (event bus, config, plugin registry, DB)
 - `agents/` — agent implementations with manifest.yaml files
-- `config/jarvis.yaml` — main configuration
+- `config/kali.yaml` — main configuration
 - See `docs/superpowers/specs/2026-04-08-jarvis-2026-design.md` for full spec
 
 ## Conventions

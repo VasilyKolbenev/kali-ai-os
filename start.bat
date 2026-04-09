@@ -1,7 +1,7 @@
 @echo off
-title Jarvis 2026
+title KALI
 echo ========================================
-echo   JARVIS 2026 - Personal AI Command Center
+echo   KALI - Kernel Agent Lifecycle Intelligence
 echo ========================================
 echo.
 
@@ -31,7 +31,7 @@ if not exist ".env" (
 )
 
 :: Start kernel in background
-echo [START] Starting Jarvis kernel on port 8000...
+echo [START] Starting KALI kernel on port 8000...
 start /b "" uv run uvicorn kernel.main:create_app --factory --port 8000
 
 :: Wait for kernel to start
@@ -47,7 +47,7 @@ if not exist "ui\node_modules" (
 echo [START] Starting UI on port 1420...
 echo.
 echo ========================================
-echo   Jarvis is running!
+echo   KALI is running!
 echo   Open: http://localhost:1420
 echo   API:  http://localhost:8000/health
 echo   Press Ctrl+C to stop

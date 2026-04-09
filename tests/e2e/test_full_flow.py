@@ -33,7 +33,7 @@ async def _start_lifespan(app) -> tuple[asyncio.Task, asyncio.Event]:  # type: i
 @pytest.fixture
 async def app(tmp_path: Path):
     agents_dir = Path("agents")
-    config_path = Path("config/jarvis.yaml")
+    config_path = Path("config/kali.yaml")
     application = create_app(
         config_path=config_path,
         agents_dir=agents_dir,

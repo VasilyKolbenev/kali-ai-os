@@ -1,4 +1,4 @@
-"""Pydantic models for Jarvis kernel — events, config, manifests, WebSocket messages."""
+"""Pydantic models for KALI kernel — events, config, manifests, WebSocket messages."""
 
 import uuid
 from datetime import UTC, datetime
@@ -99,7 +99,7 @@ class ScheduleConfig(BaseModel):
 
 
 class ConfigSchema(BaseModel):
-    """Top-level Jarvis configuration schema."""
+    """Top-level KALI configuration schema."""
 
     server: ServerConfig = Field(default_factory=ServerConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)

@@ -9,7 +9,7 @@ from typing import Any
 
 
 class BaseAgent(ABC):
-    """Base class for all native Jarvis agents.
+    """Base class for all native KALI agents.
 
     Subclasses implement get_name() and handle_action().
     The base handles JSON-RPC protocol, health, init, shutdown.

@@ -24,10 +24,10 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Jarvis wordmark */}
+      {/* KALI wordmark */}
       <div className="mt-2 mono text-[8px] tracking-[3px] uppercase"
         style={{ color: "var(--j-text-muted)", writingMode: "vertical-rl", letterSpacing: "4px" }}>
-        JARVIS
+        KALI
       </div>
 
       <div className="flex-1" />

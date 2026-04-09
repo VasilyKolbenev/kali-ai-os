@@ -15,7 +15,7 @@ class LifeDashboardAgent(BaseAgent):
 
     def __init__(self) -> None:
         super().__init__()
-        data_dir = os.environ.get("JARVIS_DATA_DIR")
+        data_dir = os.environ.get("KALI_DATA_DIR")
         if data_dir:
             self._data_dir = pathlib.Path(data_dir) / "agents" / "life-dashboard"
             self._data_dir.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 {
-  "productName": "Jarvis",
+  "productName": "KALI",
   "version": "0.1.0",
-  "identifier": "com.jarvis.desktop",
+  "identifier": "com.kali.desktop",
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Jarvis",
+        "title": "KALI",
         "width": 1200,
         "height": 800,
         "minWidth": 400,

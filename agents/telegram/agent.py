@@ -37,7 +37,7 @@ class TelegramAgent(BaseAgent):
         if action == "send_message":
             return self._send_message(args.get("text", ""))
         elif action == "send_notification":
-            title = args.get("title", "Jarvis")
+            title = args.get("title", "KALI")
             message = args.get("message", "")
             text = f"*{title}*\n{message}"
             return self._send_message(text, parse_mode="Markdown")

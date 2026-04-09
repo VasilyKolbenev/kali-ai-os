@@ -1,4 +1,4 @@
-"""FastAPI application — entry point for the Jarvis kernel."""
+"""FastAPI application — entry point for the KALI kernel."""
 
 import json
 import logging
@@ -41,18 +41,18 @@ def create_app(
     All state is stored on app.state — no module-level globals.
 
     Args:
-        config_path: Path to jarvis.yaml config file. Defaults to config/jarvis.yaml.
+        config_path: Path to kali.yaml config file. Defaults to config/kali.yaml.
         agents_dir: Path to agents directory. Defaults to agents/.
-        db_path: Path to SQLite database file. Defaults to data/jarvis.db.
+        db_path: Path to SQLite database file. Defaults to data/kali.db.
 
     Returns:
         Configured FastAPI application instance.
     """
     load_dotenv()
 
-    resolved_config_path = config_path or Path("config/jarvis.yaml")
+    resolved_config_path = config_path or Path("config/kali.yaml")
     resolved_agents_dir = agents_dir or Path("agents")
-    resolved_db_path = db_path or Path("data/jarvis.db")
+    resolved_db_path = db_path or Path("data/kali.db")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[misc]
@@ -137,7 +137,7 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
-        logger.info("Jarvis kernel started (v%s)", __version__)
+        logger.info("KALI kernel started (v%s)", __version__)
         yield
 
         # Graceful shutdown
@@ -145,9 +145,9 @@ def create_app(
         await agent_runtime.shutdown_all()
         await scheduler.stop()
         await database.close()
-        logger.info("Jarvis kernel stopped")
+        logger.info("KALI kernel stopped")
 
-    app = FastAPI(title="Jarvis Kernel", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="KALI Kernel", version=__version__, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:1420", "http://localhost:1421", "tauri://localhost"],
@@ -270,7 +270,7 @@ def create_app(
 
         body = await request.json()
         notif = Notification(
-            title=body.get("title", "Jarvis"),
+            title=body.get("title", "KALI"),
             message=body.get("message", ""),
             priority=body.get("priority", "normal"),
         )

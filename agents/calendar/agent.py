@@ -15,7 +15,7 @@ class CalendarAgent(BaseAgent):
 
     def __init__(self) -> None:
         super().__init__()
-        data_dir = os.environ.get("JARVIS_DATA_DIR")
+        data_dir = os.environ.get("KALI_DATA_DIR")
         if data_dir:
             import pathlib
 

@@ -1,1 +1,1 @@
-"""Voice pipeline components for Jarvis kernel."""
+"""Voice pipeline components for KALI kernel."""

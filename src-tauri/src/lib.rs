@@ -1,6 +1,6 @@
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Hello, {}! Welcome to Jarvis.", name)
+    format!("Hello, {}! Welcome to KALI.", name)
 }
 
 pub fn run() {
@@ -8,5 +8,5 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![greet])
         .run(tauri::generate_context!())
-        .expect("error while running Jarvis");
+        .expect("error while running KALI");
 }

@@ -1,11 +1,11 @@
-# Jarvis
+# KALI
 
 **AI operating system that replaces apps with agents.**
 
 One voice command. Calendar, tasks, email, budget, smart home — handled.
 
 ```
-"Jarvis, start my day"
+"KALI, start my day"
 
 → 3 meetings today. First: Team call at 10am.
 → 5 tasks pending, 2 high priority.
@@ -15,9 +15,9 @@ One voice command. Calendar, tasks, email, budget, smart home — handled.
 
 ---
 
-## What Jarvis Does
+## What KALI Does
 
-Instead of opening apps, you give commands. Jarvis routes them to the right **agent** and executes.
+Instead of opening apps, you give commands. KALI routes them to the right **agent** and executes.
 
 | You say | What happens |
 |---------|-------------|
@@ -35,7 +35,7 @@ Instead of opening apps, you give commands. Jarvis routes them to the right **ag
 
 **Agent architecture** — every capability is a modular agent. Install new ones, create your own, or share with the community through the Agent Marketplace.
 
-**Voice-first** — wake word "Jarvis", natural speech, real-time response. Full pipeline: mic → VAD → wake word → STT → LLM → agent → TTS → speaker.
+**Voice-first** — wake word "jarvis", natural speech, real-time response. Full pipeline: mic → VAD → wake word → STT → LLM → agent → TTS → speaker.
 
 ---
 
@@ -59,7 +59,7 @@ Plus: **Morning Briefing**, **Weekly Review**, **Routines** (automated action ch
 
 ## Create Your Own Agents
 
-Describe what you need — Jarvis builds it:
+Describe what you need — KALI builds it:
 
 ```
 "Create an agent that checks USD/RUB exchange rate every morning
@@ -96,7 +96,7 @@ cd ui && pnpm dev
 # Open http://localhost:1420
 ```
 
-Supports **OpenAI** or **Anthropic** — set your preferred provider in `config/jarvis.yaml`.
+Supports **OpenAI** or **Anthropic** — set your preferred provider in `config/kali.yaml`.
 
 ---
 

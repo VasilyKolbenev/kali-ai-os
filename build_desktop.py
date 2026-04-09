@@ -1,4 +1,4 @@
-"""Build script — packages Jarvis into a standalone desktop application.
+"""Build script — packages KALI into a standalone desktop application.
 
 Steps:
 1. Build UI (Vite production bundle)
@@ -41,7 +41,7 @@ def build_kernel() -> bool:
 
     # Create PyInstaller spec
     spec = """
-# Jarvis Kernel PyInstaller spec
+# KALI Kernel PyInstaller spec
 import sys
 sys.path.insert(0, '.')
 
@@ -49,7 +49,7 @@ a = Analysis(
     ['kernel/__main__.py'],
     pathex=['.'],
     datas=[
-        ('config/jarvis.yaml', 'config'),
+        ('config/kali.yaml', 'config'),
         ('agents', 'agents'),
     ],
     hiddenimports=[
@@ -93,15 +93,15 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas,
-    name='jarvis-kernel',
+    name='kali-kernel',
     console=True,
     icon=None,
 )
 """
-    spec_path = ROOT / "jarvis-kernel.spec"
+    spec_path = ROOT / "kali-kernel.spec"
     spec_path.write_text(spec)
 
-    return run("uv run pyinstaller jarvis-kernel.spec --clean --noconfirm")
+    return run("uv run pyinstaller kali-kernel.spec --clean --noconfirm")
 
 
 def build_tauri() -> bool:
@@ -135,9 +135,9 @@ def main() -> None:
         build_tauri()  # Optional, doesn't fail the build
 
     print("\n=== Build Complete ===")
-    print("Kernel: dist/jarvis-kernel.exe (if built)")
+    print("Kernel: dist/kali-kernel.exe (if built)")
     print("UI:     ui/dist/ (static files)")
-    print("\nTo run: start.bat or jarvis-kernel.exe + serve ui/dist/")
+    print("\nTo run: start.bat or kali-kernel.exe + serve ui/dist/")
 
 
 if __name__ == "__main__":
