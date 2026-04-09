@@ -493,22 +493,48 @@ def create_app(
 
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech using OpenAI TTS with JARVIS-like voice."""
+        """Convert text to speech — ElevenLabs (cloned JARVIS) or OpenAI fallback."""
         from fastapi.responses import StreamingResponse
         import io
+        import os
 
         body = await request.json()
         text = body.get("text", "")
         if not text:
             return {"error": "No text provided"}
 
+        # Try ElevenLabs first (cloned JARVIS voice)
+        el_key = os.environ.get("ELEVENLABS_API_KEY")
+        el_voice = os.environ.get("ELEVENLABS_VOICE_ID")
+
+        if el_key and el_voice:
+            try:
+                from elevenlabs.client import ElevenLabs
+
+                client = ElevenLabs(api_key=el_key)
+                audio_generator = client.text_to_speech.convert(
+                    voice_id=el_voice,
+                    text=text,
+                    model_id="eleven_multilingual_v2",
+                    output_format="mp3_44100_128",
+                )
+                audio_bytes = b"".join(audio_generator)
+                return StreamingResponse(
+                    io.BytesIO(audio_bytes),
+                    media_type="audio/mpeg",
+                    headers={"Content-Disposition": "inline"},
+                )
+            except Exception as e:
+                logger.warning("ElevenLabs TTS failed, falling back to OpenAI: %s", e)
+
+        # Fallback: OpenAI TTS (onyx voice)
         try:
             import openai
 
             client = openai.OpenAI()
             response = client.audio.speech.create(
                 model="tts-1",
-                voice="onyx",  # Deep male voice, closest to JARVIS
+                voice="onyx",
                 input=text,
                 response_format="mp3",
                 speed=1.05,

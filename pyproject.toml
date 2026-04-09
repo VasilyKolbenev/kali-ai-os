@@ -24,6 +24,7 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "google-api-python-client>=2.150.0",
     "python-telegram-bot>=21.0",
+    "elevenlabs>=2.42.0",
 ]
 
 [project.optional-dependencies]
