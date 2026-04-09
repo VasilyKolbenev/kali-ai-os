@@ -8,9 +8,25 @@ export function AgentPanel() {
   const setAgents = useAgentStore((s) => s.setAgents);
 
   useEffect(() => {
-    api.agents().then((manifests) => {
-      setAgents(manifests.map((m) => ({ name: m.name, status: "stopped", description: m.description })));
-    }).catch(console.error);
+    async function loadAgents() {
+      try {
+        const [manifests, running] = await Promise.all([
+          api.agents(),
+          api.runningAgents(),
+        ]);
+        const runningNames = new Set(running.map((r: any) => r.name));
+        setAgents(
+          manifests.map((m) => ({
+            name: m.name,
+            status: runningNames.has(m.name) ? "running" : "stopped",
+            description: m.description,
+          }))
+        );
+      } catch (e) {
+        console.error("Failed to load agents:", e);
+      }
+    }
+    loadAgents();
   }, [setAgents]);
 
   return (

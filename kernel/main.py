@@ -150,7 +150,7 @@ def create_app(
     app = FastAPI(title="KALI Kernel", version=__version__, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:1420", "http://localhost:1421", "tauri://localhost"],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

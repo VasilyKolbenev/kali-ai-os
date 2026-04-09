@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "ui-dev",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--dir", "ui", "dev"],
-      "port": 1420
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "vite", "--port", "1421"],
+      "port": 1421,
+      "cwd": "ui"
     }
   ]
 }
