@@ -84,7 +84,7 @@ class LLMConfig(BaseModel):
     """LLM routing configuration."""
 
     cloud_provider: str = "anthropic"  # "anthropic" or "openai"
-    cloud_model: str = "claude-sonnet-4-20250514"  # or "gpt-4o", "gpt-4o-mini"
+    cloud_model: str = "claude-sonnet-4-20250514"  # or "gpt-5.4", "gpt-5.4-mini"
     local_provider: str = "ollama"
     local_model: str = "llama3"
     auto_route: bool = True

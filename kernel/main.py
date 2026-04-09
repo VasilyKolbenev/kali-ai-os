@@ -465,13 +465,30 @@ def create_app(
             except Exception:
                 pass
 
-        # Default: echo back with helpful message
-        return {
-            "response": (
-                f"I heard: \"{text}\". To use AI responses, "
-                "set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env file."
-            ),
-            "source": "system",
-        }
+        # Default: route through LLM
+        try:
+            from kernel.llm_router import LLMRequest
+
+            llm_request = LLMRequest(
+                text=text,
+                context=s.memory.get_context(),
+                available_tools=s.plugin_registry.get_all_tools(),
+            )
+            llm_response = await s.voice_pipeline._llm.route(llm_request)
+            s.memory.add_turn("user", text)
+            s.memory.add_turn("assistant", llm_response.text)
+            return {
+                "response": llm_response.text,
+                "source": f"llm-{llm_response.provider_used}",
+            }
+        except Exception as e:
+            logger.warning("LLM call failed: %s", e)
+            return {
+                "response": (
+                    f"I heard: \"{text}\". LLM error: {e}. "
+                    "Check your API key in .env file."
+                ),
+                "source": "system",
+            }
 
     return app

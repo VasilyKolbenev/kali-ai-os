@@ -21,6 +21,23 @@ export function ChatInput() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const speak = (text: string) => {
+    if (!text || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 0.9;
+    utterance.volume = 1.0;
+    // Pick a male English voice (closest to JARVIS)
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(
+      (v) => v.name.includes("David") || v.name.includes("Daniel") || v.name.includes("Google UK English Male")
+    );
+    if (preferred) utterance.voice = preferred;
+    utterance.onend = () => setVoiceState("idle");
+    window.speechSynthesis.speak(utterance);
+  };
+
   const send = async (msg: string) => {
     if (!msg.trim() || isLoading) return;
     addMessage("user", msg.trim());
@@ -31,11 +48,13 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
+      speak(res.response);
+      setVoiceState("speaking");
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
     } finally {
       setLoading(false);
-      setVoiceState("idle");
+      setTimeout(() => setVoiceState("idle"), 500);
     }
   };
 
@@ -85,6 +104,9 @@ export function ChatInput() {
       setListening(false);
       setVoiceState("idle");
     };
+
+    // Load voices (needed for Chrome)
+    window.speechSynthesis?.getVoices();
 
     recognition.start();
   };
