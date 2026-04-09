@@ -3,10 +3,10 @@ import { useDashboardStore } from "../../../stores/dashboardStore";
 export function CalendarWidget() {
   const data = useDashboardStore((s) => s.widgets.calendar) as { next: string; time: string } | undefined;
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
-      <div className="text-sm text-gray-400 mb-1">Next</div>
-      <div className="text-lg font-semibold text-white">{data?.next ?? "No events"}</div>
-      <div className="text-xs text-gray-500 mt-1">{data?.time ?? ""}</div>
+    <div className="glass p-5">
+      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>Next Event</div>
+      <div className="text-base font-medium" style={{ color: "var(--j-text)" }}>{data?.next ?? "No events"}</div>
+      <div className="mono text-xs mt-1" style={{ color: "var(--j-cyan-dim)" }}>{data?.time ?? ""}</div>
     </div>
   );
 }

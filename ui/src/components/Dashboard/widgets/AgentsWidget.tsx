@@ -4,10 +4,13 @@ export function AgentsWidget() {
   const agents = useAgentStore((s) => s.agents);
   const running = agents.filter((a) => a.status === "running").length;
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
-      <div className="text-sm text-gray-400 mb-1">Agents</div>
-      <div className="text-3xl font-bold text-sky-400">{running}</div>
-      <div className="text-xs text-gray-500 mt-1">{agents.length} registered</div>
+    <div className="glass p-5">
+      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>Agents</div>
+      <div className="flex items-baseline gap-1">
+        <span className="mono text-3xl font-light glow-text" style={{ color: "var(--j-cyan)" }}>{running}</span>
+        <span className="mono text-[10px]" style={{ color: "var(--j-text-muted)" }}>online</span>
+      </div>
+      <div className="mono text-[10px] mt-2" style={{ color: "var(--j-text-muted)" }}>{agents.length} registered</div>
     </div>
   );
 }

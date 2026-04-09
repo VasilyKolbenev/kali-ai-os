@@ -14,11 +14,20 @@ export function AgentPanel() {
   }, [setAgents]);
 
   return (
-    <div className="w-full h-full p-6 overflow-auto">
-      <h2 className="text-2xl font-bold mb-6 text-gray-100">Agents</h2>
-      <div className="grid gap-3 max-w-2xl mx-auto">
-        {agents.length === 0 && <p className="text-gray-500 text-center">No agents registered</p>}
-        {agents.map((agent) => <AgentCard key={agent.name} agent={agent} />)}
+    <div className="w-full h-full p-8 overflow-auto">
+      <div className="max-w-2xl mx-auto">
+        <div className="flex items-baseline gap-3 mb-8">
+          <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>Agents</h2>
+          <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>{agents.length} total</span>
+        </div>
+        <div className="grid gap-2 stagger">
+          {agents.length === 0 && (
+            <p className="text-center py-12" style={{ color: "var(--j-text-muted)" }}>No agents registered</p>
+          )}
+          {agents.map((agent) => (
+            <AgentCard key={agent.name} agent={agent} />
+          ))}
+        </div>
       </div>
     </div>
   );

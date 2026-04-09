@@ -1,10 +1,10 @@
 import { useAppStore, type AppMode } from "../../stores/appStore";
 
-const modes: { id: AppMode; icon: string; label: string }[] = [
-  { id: "focus", icon: "◉", label: "Focus" },
-  { id: "dashboard", icon: "▦", label: "Dashboard" },
-  { id: "agents", icon: "⚙", label: "Agents" },
-  { id: "nightstand", icon: "☽", label: "Night" },
+const modes: { id: AppMode; label: string; icon: string }[] = [
+  { id: "focus", label: "Focus", icon: "\u29BF" },
+  { id: "dashboard", label: "Dash", icon: "\u25EB" },
+  { id: "agents", label: "Agents", icon: "\u2B21" },
+  { id: "nightstand", label: "Night", icon: "\u263E" },
 ];
 
 export function ModeSelector() {
@@ -12,21 +12,26 @@ export function ModeSelector() {
   const setMode = useAppStore((s) => s.setMode);
 
   return (
-    <div className="flex flex-col gap-2">
-      {modes.map((m) => (
-        <button
-          key={m.id}
-          onClick={() => setMode(m.id)}
-          className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-all
-            ${current === m.id
-              ? "bg-sky-400/20 text-sky-400"
-              : "text-gray-500 hover:text-gray-300 hover:bg-gray-800"
-            }`}
-          title={m.label}
-        >
-          {m.icon}
-        </button>
-      ))}
+    <div className="flex flex-col gap-1.5">
+      {modes.map((m) => {
+        const active = current === m.id;
+        return (
+          <button
+            key={m.id}
+            onClick={() => setMode(m.id)}
+            title={m.label}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-sm transition-all duration-300 relative"
+            style={{
+              background: active ? "rgba(0, 212, 255, 0.1)" : "transparent",
+              color: active ? "var(--j-cyan)" : "rgba(255,255,255,0.2)",
+              boxShadow: active ? "0 0 12px rgba(0, 212, 255, 0.1), inset 0 0 12px rgba(0, 212, 255, 0.05)" : "none",
+              border: active ? "1px solid rgba(0, 212, 255, 0.2)" : "1px solid transparent",
+            }}
+          >
+            {m.icon}
+          </button>
+        );
+      })}
     </div>
   );
 }

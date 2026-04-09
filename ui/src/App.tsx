@@ -12,18 +12,37 @@ export default function App() {
   useWebSocket();
 
   return (
-    <div className="flex h-screen w-screen bg-gray-950">
+    <div className="flex h-screen w-screen" style={{ background: "var(--j-bg)" }}>
+      {/* Ambient background glow */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          background: mode === "nightstand"
+            ? "radial-gradient(ellipse 60% 40% at 50% 50%, rgba(0, 212, 255, 0.03) 0%, transparent 70%)"
+            : "radial-gradient(ellipse 50% 50% at 50% 40%, rgba(0, 212, 255, 0.04) 0%, transparent 60%)",
+        }}
+      />
+
       <Sidebar />
+
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
-        {mode === "focus" && (
-          <div className="flex flex-col items-center gap-8">
-            <Avatar />
-            <VoiceVisualizer />
-          </div>
-        )}
-        {mode === "dashboard" && <Dashboard />}
-        {mode === "agents" && <AgentPanel />}
-        {mode === "nightstand" && <Nightstand />}
+        <div className="w-full h-full flex flex-col items-center justify-center fade-in-up" key={mode}>
+          {mode === "focus" && (
+            <div className="flex flex-col items-center gap-6">
+              {/* Glow ring behind avatar */}
+              <div className="relative">
+                <div className="absolute inset-0 -m-8 rounded-full pulse-ring" style={{
+                  background: "radial-gradient(circle, rgba(0, 212, 255, 0.08) 0%, transparent 70%)",
+                }} />
+                <Avatar />
+              </div>
+              <VoiceVisualizer />
+            </div>
+          )}
+          {mode === "dashboard" && <Dashboard />}
+          {mode === "agents" && <AgentPanel />}
+          {mode === "nightstand" && <Nightstand />}
+        </div>
       </main>
     </div>
   );

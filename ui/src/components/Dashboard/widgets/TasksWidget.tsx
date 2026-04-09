@@ -4,11 +4,14 @@ export function TasksWidget() {
   const data = useDashboardStore((s) => s.widgets.tasks) as { done: number; total: number } | undefined;
   const pct = data ? Math.round((data.done / data.total) * 100) : 0;
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
-      <div className="text-sm text-gray-400 mb-1">Tasks</div>
-      <div className="text-3xl font-bold text-green-400">{data?.done ?? 0}/{data?.total ?? 0}</div>
-      <div className="w-full bg-gray-800 rounded-full h-1.5 mt-2">
-        <div className="bg-green-400 rounded-full h-1.5 transition-all" style={{ width: `${pct}%` }} />
+    <div className="glass p-5">
+      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>Tasks</div>
+      <div className="flex items-baseline gap-1">
+        <span className="mono text-3xl font-light" style={{ color: "var(--j-green)" }}>{data?.done ?? 0}</span>
+        <span className="mono text-sm" style={{ color: "var(--j-text-muted)" }}>/{data?.total ?? 0}</span>
+      </div>
+      <div className="mt-3 h-[2px] rounded-full overflow-hidden" style={{ background: "var(--j-border)" }}>
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "var(--j-green)", boxShadow: "0 0 8px rgba(0,230,118,0.3)" }} />
       </div>
     </div>
   );

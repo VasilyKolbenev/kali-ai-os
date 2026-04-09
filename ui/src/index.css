@@ -1,19 +1,115 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 :root {
-  --jarvis-blue: #4fc3f7;
-  --jarvis-orange: #ff9800;
-  --jarvis-green: #66bb6a;
-  --jarvis-red: #ef5350;
+  --j-bg: #050508;
+  --j-surface: rgba(255, 255, 255, 0.03);
+  --j-surface-hover: rgba(255, 255, 255, 0.06);
+  --j-border: rgba(255, 255, 255, 0.06);
+  --j-border-glow: rgba(0, 212, 255, 0.15);
+  --j-cyan: #00d4ff;
+  --j-cyan-dim: rgba(0, 212, 255, 0.6);
+  --j-cyan-glow: rgba(0, 212, 255, 0.12);
+  --j-amber: #ffb800;
+  --j-green: #00e676;
+  --j-red: #ff3d57;
+  --j-text: #e8eaed;
+  --j-text-dim: rgba(255, 255, 255, 0.4);
+  --j-text-muted: rgba(255, 255, 255, 0.2);
+  --j-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --j-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background: var(--j-bg);
+  color: var(--j-text);
+  font-family: var(--j-font-sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   user-select: none;
+  overflow: hidden;
 }
 
-::-webkit-scrollbar { width: 6px; }
+/* Glass card */
+.glass {
+  background: var(--j-surface);
+  border: 1px solid var(--j-border);
+  border-radius: 16px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.glass:hover {
+  background: var(--j-surface-hover);
+  border-color: var(--j-border-glow);
+  box-shadow: 0 0 20px var(--j-cyan-glow), inset 0 0 20px rgba(0, 212, 255, 0.03);
+}
+
+/* Glow text */
+.glow-text {
+  text-shadow: 0 0 10px var(--j-cyan-glow), 0 0 40px rgba(0, 212, 255, 0.05);
+}
+
+/* Mono numbers */
+.mono {
+  font-family: var(--j-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pulse ring animation */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.15); opacity: 0.1; }
+  100% { transform: scale(1); opacity: 0.4; }
+}
+.pulse-ring {
+  animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Breathing glow */
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+.breathe {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+/* Fade in up */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up {
+  animation: fadeInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Stagger children */
+.stagger > * {
+  opacity: 0;
+  animation: fadeInUp 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger > *:nth-child(4) { animation-delay: 0.2s; }
+.stagger > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger > *:nth-child(6) { animation-delay: 0.3s; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+/* Status dot animation */
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(0, 230, 118, 0); }
+}
+.status-online {
+  animation: status-pulse 2s ease-in-out infinite;
+}

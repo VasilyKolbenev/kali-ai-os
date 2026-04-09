@@ -22,15 +22,27 @@ export function AgentCard({ agent }: Props) {
   };
 
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-xl p-4 flex items-center gap-4">
-      <div className={`w-3 h-3 rounded-full ${isRunning ? "bg-green-400" : "bg-gray-600"}`} />
-      <div className="flex-1">
-        <div className="font-medium text-white">{agent.name}</div>
-        {agent.description && <div className="text-xs text-gray-500">{agent.description}</div>}
+    <div className="glass p-4 flex items-center gap-4">
+      <div className="w-2 h-2 rounded-full flex-shrink-0"
+        style={{
+          background: isRunning ? "var(--j-green)" : "rgba(255,255,255,0.1)",
+          boxShadow: isRunning ? "0 0 8px rgba(0,230,118,0.3)" : "none",
+        }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="mono text-sm font-medium" style={{ color: "var(--j-text)" }}>{agent.name}</div>
+        {agent.description && (
+          <div className="text-xs truncate mt-0.5" style={{ color: "var(--j-text-muted)" }}>{agent.description}</div>
+        )}
       </div>
       <button
         onClick={toggle}
-        className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${isRunning ? "bg-red-400/20 text-red-400 hover:bg-red-400/30" : "bg-green-400/20 text-green-400 hover:bg-green-400/30"}`}
+        className="mono text-[10px] tracking-wider uppercase px-3 py-1.5 rounded-lg transition-all duration-300"
+        style={{
+          background: isRunning ? "rgba(255, 61, 87, 0.08)" : "rgba(0, 230, 118, 0.08)",
+          color: isRunning ? "var(--j-red)" : "var(--j-green)",
+          border: `1px solid ${isRunning ? "rgba(255, 61, 87, 0.15)" : "rgba(0, 230, 118, 0.15)"}`,
+        }}
       >
         {isRunning ? "Stop" : "Start"}
       </button>
