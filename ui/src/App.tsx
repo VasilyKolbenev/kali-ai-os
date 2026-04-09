@@ -6,6 +6,7 @@ import { AgentPanel } from "./components/AgentPanel/AgentPanel";
 import { Nightstand } from "./components/Nightstand/Nightstand";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
+import { ChatInput } from "./components/Chat/ChatInput";
 
 export default function App() {
   const mode = useAppStore((s) => s.mode);
@@ -28,15 +29,17 @@ export default function App() {
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         <div className="w-full h-full flex flex-col items-center justify-center fade-in-up" key={mode}>
           {mode === "focus" && (
-            <div className="flex flex-col items-center gap-6">
-              {/* Glow ring behind avatar */}
-              <div className="relative">
-                <div className="absolute inset-0 -m-8 rounded-full pulse-ring" style={{
-                  background: "radial-gradient(circle, rgba(0, 212, 255, 0.08) 0%, transparent 70%)",
-                }} />
-                <Avatar />
+            <div className="flex flex-col items-center w-full h-full justify-between py-8">
+              <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                <div className="relative">
+                  <div className="absolute inset-0 -m-8 rounded-full pulse-ring" style={{
+                    background: "radial-gradient(circle, rgba(0, 212, 255, 0.08) 0%, transparent 70%)",
+                  }} />
+                  <Avatar />
+                </div>
+                <VoiceVisualizer />
               </div>
-              <VoiceVisualizer />
+              <ChatInput />
             </div>
           )}
           {mode === "dashboard" && <Dashboard />}

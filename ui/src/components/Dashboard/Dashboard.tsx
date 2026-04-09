@@ -1,3 +1,6 @@
+import { useEffect } from "react";
+import { useDashboardStore } from "../../stores/dashboardStore";
+import { api } from "../../api/client";
 import { SleepWidget } from "./widgets/SleepWidget";
 import { TasksWidget } from "./widgets/TasksWidget";
 import { CalendarWidget } from "./widgets/CalendarWidget";
@@ -6,6 +9,26 @@ import { EnergyWidget } from "./widgets/EnergyWidget";
 import { AgentsWidget } from "./widgets/AgentsWidget";
 
 export function Dashboard() {
+  const updateWidget = useDashboardStore((s) => s.updateWidget);
+
+  useEffect(() => {
+    async function fetchLiveData() {
+      try {
+        const [running, _health] = await Promise.all([
+          api.runningAgents(),
+          api.health(),
+        ]);
+        updateWidget("agents", { running: running.length });
+        // _health available for future widget updates
+      } catch (e) {
+        // Kernel may not be running — keep mock data
+      }
+    }
+    fetchLiveData();
+    const interval = setInterval(fetchLiveData, 10000);
+    return () => clearInterval(interval);
+  }, [updateWidget]);
+
   return (
     <div className="w-full h-full p-8 overflow-auto">
       <div className="max-w-4xl mx-auto">

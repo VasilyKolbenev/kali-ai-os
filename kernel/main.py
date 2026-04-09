@@ -137,6 +137,14 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
+        # Auto-load essential agents
+        for agent_name in ["system", "weather", "tasks"]:
+            try:
+                await agent_runtime.load_agent(agent_name)
+                logger.info("Auto-loaded agent: %s", agent_name)
+            except Exception:
+                logger.warning("Failed to auto-load agent: %s", agent_name)
+
         logger.info("KALI kernel started (v%s)", __version__)
         yield
 
@@ -355,5 +363,115 @@ def create_app(
     @app.delete("/agents/custom/{name}")
     async def delete_custom_agent(name: str, request: Request) -> dict[str, Any]:
         return request.app.state.agent_builder.delete_agent(name)
+
+    @app.post("/chat")
+    async def chat(request: Request) -> dict[str, Any]:
+        """Process a chat message through LLM or agents."""
+        body = await request.json()
+        text = body.get("text", "")
+        if not text:
+            return {"response": "Empty message", "source": "system"}
+
+        s = request.app.state
+        text_lower = text.lower()
+
+        # Direct agent commands (simple keyword matching for v1)
+        if any(w in text_lower for w in ["weather", "погода", "температура"]):
+            try:
+                result = await s.agent_runtime.dispatch(
+                    "weather", "get_weather", {"city": "Moscow"},
+                )
+                return {
+                    "response": (
+                        f"Weather in {result.get('city', 'Moscow')}: "
+                        f"{result.get('temperature_c')}°C, "
+                        f"{result.get('condition', '')}"
+                    ),
+                    "source": "weather-agent",
+                    "data": result,
+                }
+            except Exception:
+                pass
+
+        if any(w in text_lower for w in ["time", "время", "час"]):
+            try:
+                result = await s.agent_runtime.dispatch("system", "get_time", {})
+                return {
+                    "response": (
+                        f"Current time: {result.get('time', '')} "
+                        f"({result.get('weekday', '')})"
+                    ),
+                    "source": "system-agent",
+                    "data": result,
+                }
+            except Exception:
+                pass
+
+        if any(w in text_lower for w in ["task", "задач", "todo"]):
+            try:
+                result = await s.agent_runtime.dispatch(
+                    "tasks", "get_summary", {},
+                )
+                return {
+                    "response": (
+                        f"Tasks: {result.get('done', 0)}/{result.get('total', 0)} "
+                        f"done, {result.get('pending', 0)} pending"
+                    ),
+                    "source": "tasks-agent",
+                    "data": result,
+                }
+            except Exception:
+                pass
+
+        if any(w in text_lower for w in ["brief", "утро", "morning", "день"]):
+            try:
+                briefing_text = await s.briefing.generate_morning_briefing({})
+                return {"response": briefing_text, "source": "briefing"}
+            except Exception:
+                pass
+
+        if any(
+            w in text_lower
+            for w in ["focus", "фокус", "pomodoro", "помодоро", "таймер"]
+        ):
+            try:
+                await s.focus.start(25, "work")
+                return {
+                    "response": "Focus timer started: 25 minutes. Stay focused!",
+                    "source": "focus-timer",
+                }
+            except Exception:
+                pass
+
+        if any(
+            w in text_lower
+            for w in ["budget", "бюджет", "расход", "потратил"]
+        ):
+            try:
+                goals = s.budget.get_goals()
+                if goals:
+                    parts = [
+                        f"{cat}: ${info['spent']}/{info['limit']}"
+                        for cat, info in goals.items()
+                    ]
+                    return {
+                        "response": f"Budget: {', '.join(parts)}",
+                        "source": "budget",
+                    }
+                return {
+                    "response": "No budget goals set. Use /budget/goal to set one.",
+                    "source": "budget",
+                }
+            except Exception:
+                pass
+
+        # Default: echo back with helpful message
+        return {
+            "response": (
+                f"I heard: \"{text}\". To use AI responses, "
+                "set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env file."
+            ),
+            "source": "system",
+        }
 
     return app

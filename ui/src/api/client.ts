@@ -17,6 +17,10 @@ export const api = {
   loadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/load`, { method: "POST" }),
   unloadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/unload`, { method: "POST" }),
   agentStatus: (name: string) => fetchJSON<import("./types").AgentStatus>(`/agents/${name}/status`),
+  chat: (text: string) => fetchJSON<{ response: string; source: string; data?: unknown }>("/chat", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  }),
   config: () => fetchJSON<Record<string, unknown>>("/config"),
   voiceStatus: () => fetchJSON<import("./types").VoiceStatus>("/voice/status"),
   voiceStart: () => fetchJSON<{ status: string }>("/voice/start", { method: "POST" }),
