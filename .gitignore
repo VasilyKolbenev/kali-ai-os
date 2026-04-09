@@ -10,3 +10,4 @@ target/
 .pytest_cache/
 .ruff_cache/
 data/
+services/tts/.venv/

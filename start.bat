@@ -30,9 +30,16 @@ if not exist ".env" (
     echo.
 )
 
-:: Start kernel in background
-echo [START] Starting KALI kernel on port 8000...
-start /b "" uv run uvicorn kernel.main:create_app --factory --port 8000
+:: Start TTS service (local JARVIS voice)
+if exist "services\tts\.venv\Scripts\python.exe" (
+    echo [START] Starting local TTS service (NeuTTS Air) on port 3001...
+    start /b "" services\tts\.venv\Scripts\python.exe services\tts\server.py
+    timeout /t 2 /nobreak >nul
+)
+
+:: Start kernel
+echo [START] Starting KALI kernel on port 3000...
+start /b "" uv run uvicorn kernel.main:create_app --factory --port 3000
 
 :: Wait for kernel to start
 timeout /t 3 /nobreak >nul
@@ -48,8 +55,9 @@ echo [START] Starting UI on port 1420...
 echo.
 echo ========================================
 echo   KALI is running!
-echo   Open: http://localhost:1420
-echo   API:  http://localhost:8000/health
+echo   UI:    http://localhost:1420
+echo   API:   http://localhost:3000/health
+echo   TTS:   http://localhost:3001/health
 echo   Press Ctrl+C to stop
 echo ========================================
 echo.

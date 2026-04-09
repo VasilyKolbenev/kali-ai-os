@@ -503,7 +503,26 @@ def create_app(
         if not text:
             return {"error": "No text provided"}
 
-        # Try ElevenLabs first (cloned JARVIS voice)
+        # Priority 1: Local NeuTTS Air (cloned JARVIS voice, no cloud dependency)
+        try:
+            import httpx
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "http://127.0.0.1:3001/synthesize",
+                    json={"text": text},
+                    timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    return StreamingResponse(
+                        io.BytesIO(resp.content),
+                        media_type="audio/wav",
+                        headers={"Content-Disposition": "inline"},
+                    )
+        except Exception as e:
+            logger.debug("Local TTS not available: %s", e)
+
+        # Priority 2: ElevenLabs (cloned voice, cloud)
         el_key = os.environ.get("ELEVENLABS_API_KEY")
         el_voice = os.environ.get("ELEVENLABS_VOICE_ID")
 
@@ -525,9 +544,9 @@ def create_app(
                     headers={"Content-Disposition": "inline"},
                 )
             except Exception as e:
-                logger.warning("ElevenLabs TTS failed, falling back to OpenAI: %s", e)
+                logger.warning("ElevenLabs TTS failed: %s", e)
 
-        # Fallback: OpenAI TTS (onyx voice)
+        # Priority 3: OpenAI TTS (onyx voice, cloud fallback)
         try:
             import openai
 
