@@ -46,7 +46,9 @@
       "Bash(xargs grep:*)",
       "Bash(git mv:*)",
       "Bash(curl -s http://localhost:3000/health)",
-      "Bash(pkill -f \"uvicorn kernel\")"
+      "Bash(pkill -f \"uvicorn kernel\")",
+      "Bash(cp -r /c/Users/User/Desktop/jarvis-original/resources/sound/voices/jarvis-remaster/ru/*.mp3 /c/Users/User/Desktop/Jarvis/ui/public/sounds/)",
+      "Bash(cp -r /c/Users/User/Desktop/jarvis-original/resources/sound/voices/jarvis-remaster/en/*.mp3 /c/Users/User/Desktop/Jarvis/ui/public/sounds/)"
     ]
   }
 }

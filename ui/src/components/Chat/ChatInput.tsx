@@ -6,6 +6,21 @@ import { api } from "../../api/client";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type SpeechRecognitionInstance = any;
 
+// JARVIS-style sound effects from original repo
+const SOUNDS = {
+  reply: ["/sounds/reply1.mp3", "/sounds/reply2.mp3", "/sounds/reply3.mp3", "/sounds/reply4.mp3", "/sounds/reply5.mp3", "/sounds/reply6.mp3"],
+  ok: ["/sounds/ok1.mp3", "/sounds/ok2.mp3", "/sounds/ok3.mp3", "/sounds/ok4.mp3"],
+  greet: ["/sounds/greet1.mp3", "/sounds/greet_morning.mp3"],
+};
+
+function playSound(category: keyof typeof SOUNDS) {
+  const files = SOUNDS[category];
+  const file = files[Math.floor(Math.random() * files.length)];
+  const audio = new Audio(file);
+  audio.volume = 0.7;
+  audio.play().catch(() => {});
+}
+
 export function ChatInput() {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
@@ -48,7 +63,8 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
-      speak(res.response);
+      playSound("ok"); // JARVIS confirmation sound before speaking
+      setTimeout(() => speak(res.response), 800); // Speak after sound effect
       setVoiceState("speaking");
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
@@ -86,6 +102,7 @@ export function ChatInput() {
     recognition.onstart = () => {
       setListening(true);
       setVoiceState("listening");
+      playSound("reply"); // JARVIS "I'm listening" sound
     };
 
     recognition.onresult = (event: any) => {
