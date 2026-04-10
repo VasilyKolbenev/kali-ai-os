@@ -383,7 +383,7 @@ def create_app(
                 )
                 return {
                     "response": (
-                        f"Weather in {result.get('city', 'Moscow')}: "
+                        f"Погода в {result.get('city', 'Москве')}: "
                         f"{result.get('temperature_c')}°C, "
                         f"{result.get('condition', '')}"
                     ),
@@ -398,8 +398,8 @@ def create_app(
                 result = await s.agent_runtime.dispatch("system", "get_time", {})
                 return {
                     "response": (
-                        f"Current time: {result.get('time', '')} "
-                        f"({result.get('weekday', '')})"
+                        f"Сейчас {result.get('time', '')}, "
+                        f"{result.get('weekday', '')}"
                     ),
                     "source": "system-agent",
                     "data": result,
@@ -414,8 +414,8 @@ def create_app(
                 )
                 return {
                     "response": (
-                        f"Tasks: {result.get('done', 0)}/{result.get('total', 0)} "
-                        f"done, {result.get('pending', 0)} pending"
+                        f"Задачи: {result.get('done', 0)} из {result.get('total', 0)} выполнено, "
+                        f"{result.get('pending', 0)} в ожидании"
                     ),
                     "source": "tasks-agent",
                     "data": result,
@@ -437,7 +437,7 @@ def create_app(
             try:
                 await s.focus.start(25, "work")
                 return {
-                    "response": "Focus timer started: 25 minutes. Stay focused!",
+                    "response": "Таймер фокусировки запущен. 25 минут. Удачной работы, сэр.",
                     "source": "focus-timer",
                 }
             except Exception:

@@ -30,12 +30,10 @@ if not exist ".env" (
     echo.
 )
 
-:: Start TTS service (Qwen3-TTS JARVIS voice)
-if exist "services\qwen-tts\.venv\Scripts\python.exe" (
-    echo [START] Starting JARVIS voice TTS on port 3001...
-    start /b "" services\qwen-tts\.venv\Scripts\python.exe services\tts\server.py
-    timeout /t 5 /nobreak >nul
-)
+:: Start TTS service (Qwen3-TTS JARVIS voice on GPU)
+echo [START] Starting JARVIS voice TTS on GPU (port 3001)...
+start /b "" C:\Users\User\miniforge3\condabin\conda.bat run -n kali-tts --no-banner python services\tts\server.py
+timeout /t 10 /nobreak >nul
 
 :: Start kernel
 echo [START] Starting KALI kernel on port 3000...

@@ -14,6 +14,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Enable CORS for browser access
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    return response
+
 # Global state
 tts_model = None
 voice_prompt = None
@@ -31,7 +39,10 @@ def get_model():
         from qwen_tts import Qwen3TTSModel
 
         logger.info("Loading Qwen3-TTS Base model...")
-        tts_model = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info("Using device: %s", device)
+        tts_model = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base", device=device)
         logger.info("Model loaded!")
 
         # Pre-encode JARVIS voice
@@ -75,15 +86,25 @@ def synthesize():
 
         logger.info("Synthesizing [%s]: '%s'", language, text[:80])
 
-        audio_list, sr = model.generate_voice_clone(
-            text=text,
-            language=language,
-            ref_audio=str(REMASTER_DIR / BEST_REF),
-            ref_text="Анекдот",
-            x_vector_only_mode=True,
-            voice_clone_prompt=voice_prompt,
-            non_streaming_mode=True,
-        )
+        if voice_prompt:
+            # Use pre-encoded JARVIS voice
+            audio_list, sr = model.generate_voice_clone(
+                text=text,
+                language=language,
+                x_vector_only_mode=True,
+                voice_clone_prompt=voice_prompt,
+                non_streaming_mode=True,
+            )
+        else:
+            # Fallback: encode on the fly
+            audio_list, sr = model.generate_voice_clone(
+                text=text,
+                language=language,
+                ref_audio=str(REMASTER_DIR / BEST_REF),
+                ref_text="Анекдот",
+                x_vector_only_mode=True,
+                non_streaming_mode=True,
+            )
 
         buffer = io.BytesIO()
         sf.write(buffer, audio_list[0], sr, format="WAV")

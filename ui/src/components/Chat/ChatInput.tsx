@@ -36,17 +36,35 @@ export function ChatInput() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Speak response with JARVIS voice via OpenAI TTS (onyx voice)
+  // Speak response with JARVIS voice — try local Qwen3-TTS first, then kernel /tts
   const speakJarvis = async (text: string) => {
-    if (!text || text.length < 5) return; // Skip very short responses
+    if (!text || text.length < 5) return;
     try {
       setVoiceState("speaking");
-      const res = await fetch("http://localhost:3000/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) return;
+
+      // Try local TTS service directly (port 3001)
+      let res: Response | null = null;
+      try {
+        res = await fetch("http://localhost:3001/synthesize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, language: "russian" }),
+        });
+      } catch {
+        // Local TTS not running, try kernel proxy
+        res = await fetch("http://localhost:3000/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+      }
+
+      if (!res || !res.ok) {
+        console.warn("TTS failed:", res?.status);
+        setVoiceState("idle");
+        return;
+      }
+
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -55,7 +73,8 @@ export function ChatInput() {
         URL.revokeObjectURL(url);
       };
       audio.play();
-    } catch {
+    } catch (e) {
+      console.error("TTS error:", e);
       setVoiceState("idle");
     }
   };
