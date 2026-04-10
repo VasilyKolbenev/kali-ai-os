@@ -1,4 +1,4 @@
-"""Local TTS microservice using NeuTTS Air with cloned JARVIS voice."""
+"""Local TTS microservice — Qwen3-TTS with cloned JARVIS voice from remaster samples."""
 
 import io
 import logging
@@ -15,99 +15,102 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Global state
-tts_engine = None
-ref_codes = None
-ref_text = "Слушаю вас"
-REFERENCE_DIR = Path(__file__).parent.parent.parent / "ui" / "public" / "sounds"
+tts_model = None
+voice_prompt = None
+
+REMASTER_DIR = Path(r"C:\Users\User\Desktop\jarvis-original\resources\sound\voices\jarvis-remaster\ru")
+BEST_REF = "joke2.mp3"
 
 
-def get_engine():
-    """Lazy-load NeuTTS engine and encode JARVIS voice reference."""
-    global tts_engine, ref_codes
+def get_model():
+    """Lazy-load Qwen3-TTS and encode JARVIS voice."""
+    global tts_model, voice_prompt
 
-    if tts_engine is None:
-        from neutts import NeuTTS
+    if tts_model is None:
+        os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+        from qwen_tts import Qwen3TTSModel
 
-        logger.info("Loading NeuTTS Air model...")
-        tts_engine = NeuTTS()
-        logger.info("NeuTTS Air loaded")
+        logger.info("Loading Qwen3-TTS Base model...")
+        tts_model = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+        logger.info("Model loaded!")
 
-        # Encode JARVIS voice reference once
-        ref_files = ["reply1.mp3", "greet1.mp3", "ok1.mp3"]
-        for ref_name in ref_files:
-            ref_path = REFERENCE_DIR / ref_name
-            if ref_path.exists():
-                logger.info("Encoding JARVIS voice from: %s", ref_path)
-                ref_codes = tts_engine.encode_reference(str(ref_path))
-                logger.info("Voice encoded: shape=%s", ref_codes.shape)
-                break
+        # Pre-encode JARVIS voice
+        ref_path = str(REMASTER_DIR / BEST_REF)
+        if os.path.exists(ref_path):
+            logger.info("Encoding JARVIS voice from: %s", ref_path)
+            voice_prompt = tts_model.create_voice_clone_prompt(
+                ref_audio=ref_path,
+                ref_text="Анекдот",
+                x_vector_only_mode=True,
+            )
+            logger.info("JARVIS voice encoded!")
+        else:
+            logger.warning("Reference not found: %s", ref_path)
 
-        if ref_codes is None:
-            logger.warning("No voice reference found, TTS will use default voice")
-
-    return tts_engine
+    return tts_model
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
-        "engine": "neutts-air",
-        "model": "neuphonic/neutts-nano",
-        "loaded": tts_engine is not None,
-        "voice_cloned": ref_codes is not None,
+        "engine": "qwen3-tts",
+        "model": "Qwen3-TTS-12Hz-1.7B-Base",
+        "loaded": tts_model is not None,
+        "voice_cloned": voice_prompt is not None,
     })
 
 
 @app.route("/synthesize", methods=["POST"])
 def synthesize():
-    """Synthesize speech from text using cloned JARVIS voice."""
+    """Synthesize speech with cloned JARVIS voice."""
     data = request.json or {}
     text = data.get("text", "")
+    language = data.get("language", "russian")
     if not text:
         return jsonify({"error": "No text provided"}), 400
 
     try:
-        engine = get_engine()
+        model = get_model()
 
-        if ref_codes is None:
-            return jsonify({"error": "No voice reference encoded"}), 500
+        logger.info("Synthesizing [%s]: '%s'", language, text[:80])
 
-        logger.info("Synthesizing: '%s'", text[:80])
-
-        audio = engine.infer(
+        audio_list, sr = model.generate_voice_clone(
             text=text,
-            ref_codes=ref_codes,
-            ref_text=ref_text,
+            language=language,
+            ref_audio=str(REMASTER_DIR / BEST_REF),
+            ref_text="Анекдот",
+            x_vector_only_mode=True,
+            voice_clone_prompt=voice_prompt,
+            non_streaming_mode=True,
         )
 
         buffer = io.BytesIO()
-        sf.write(buffer, audio, 24000, format="WAV")
+        sf.write(buffer, audio_list[0], sr, format="WAV")
         buffer.seek(0)
 
-        logger.info("Generated %.1fs of audio", len(audio) / 24000)
+        logger.info("Generated %.1fs of audio", len(audio_list[0]) / sr)
         return send_file(buffer, mimetype="audio/wav", download_name="speech.wav")
 
     except Exception as e:
-        logger.exception("TTS synthesis failed")
+        logger.exception("TTS failed")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/voices", methods=["GET"])
 def list_voices():
-    """List available voice reference files."""
-    if not REFERENCE_DIR.exists():
-        return jsonify({"voices": [], "dir": str(REFERENCE_DIR)})
-    files = sorted([f.name for f in REFERENCE_DIR.glob("*.mp3")])
-    return jsonify({"voices": files, "count": len(files), "dir": str(REFERENCE_DIR)})
+    """List available voice references."""
+    if not REMASTER_DIR.exists():
+        return jsonify({"voices": [], "dir": str(REMASTER_DIR)})
+    files = sorted([f.name for f in REMASTER_DIR.glob("*.mp3")])
+    return jsonify({"voices": files, "count": len(files), "dir": str(REMASTER_DIR)})
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("TTS_PORT", "3001"))
-    logger.info("Starting NeuTTS Air TTS on port %d", port)
-    logger.info("Voice references dir: %s", REFERENCE_DIR)
+    logger.info("Starting Qwen3-TTS JARVIS voice server on port %d", port)
 
-    # Pre-load model on startup
-    get_engine()
+    # Pre-load on startup
+    get_model()
 
     app.run(host="127.0.0.1", port=port, debug=False)

@@ -30,11 +30,11 @@ if not exist ".env" (
     echo.
 )
 
-:: Start TTS service (local JARVIS voice)
-if exist "services\tts\.venv\Scripts\python.exe" (
-    echo [START] Starting local TTS service (NeuTTS Air) on port 3001...
-    start /b "" services\tts\.venv\Scripts\python.exe services\tts\server.py
-    timeout /t 2 /nobreak >nul
+:: Start TTS service (Qwen3-TTS JARVIS voice)
+if exist "services\qwen-tts\.venv\Scripts\python.exe" (
+    echo [START] Starting JARVIS voice TTS on port 3001...
+    start /b "" services\qwen-tts\.venv\Scripts\python.exe services\tts\server.py
+    timeout /t 5 /nobreak >nul
 )
 
 :: Start kernel

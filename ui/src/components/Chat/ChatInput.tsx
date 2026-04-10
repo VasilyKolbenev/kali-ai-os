@@ -85,13 +85,8 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
-      if (res.source?.startsWith("llm-")) {
-        // LLM response — speak with JARVIS voice
-        speakJarvis(res.response);
-      } else {
-        // Agent command — just confirmation sound, no extra words
-        playSound("ok");
-      }
+      // Speak ALL responses with JARVIS voice
+      speakJarvis(res.response);
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
     } finally {
