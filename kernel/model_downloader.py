@@ -1,0 +1,111 @@
+"""Download ONNX voice models on first run.
+
+Models are stored in the 'models/' directory relative to the executable.
+Downloads from HuggingFace with progress reporting.
+"""
+
+import logging
+import os
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+MODELS_DIR = Path(os.environ.get("KALI_MODELS_DIR", "models"))
+
+REQUIRED_MODELS = {
+    "vec-768-layer-12.onnx": {
+        "url": "https://huggingface.co/MidFord327/Hubert-Base-ONNX/resolve/main/vec-768-layer-12.onnx",
+        "size_mb": 361,
+        "description": "HuBERT feature extractor",
+    },
+    "rmvpe.onnx": {
+        "url": "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.onnx",
+        "size_mb": 345,
+        "description": "RMVPE pitch estimator",
+    },
+}
+
+# These are trained models — shipped with installer, not downloaded
+BUNDLED_MODELS = ["jarvis_v2.onnx", "jarvis_v2.index"]
+
+
+def get_missing_models() -> list[dict[str, Any]]:
+    """Check which models need to be downloaded."""
+    missing = []
+    for name, info in REQUIRED_MODELS.items():
+        path = MODELS_DIR / name
+        if not path.exists():
+            missing.append({"name": name, **info})
+    return missing
+
+
+def download_model(name: str, url: str, callback: Any = None) -> bool:
+    """Download a model file with optional progress callback.
+
+    Args:
+        name: Filename to save as
+        url: Download URL
+        callback: Optional function(downloaded_bytes, total_bytes)
+
+    Returns:
+        True if successful
+    """
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    target = MODELS_DIR / name
+    temp = target.with_suffix(".tmp")
+
+    logger.info("Downloading %s from %s", name, url)
+
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "KALI/0.1.0")
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 1024 * 1024  # 1 MB
+
+            with open(temp, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if callback:
+                        callback(downloaded, total)
+
+        temp.rename(target)
+        logger.info("Downloaded %s (%.1f MB)", name, target.stat().st_size / 1024 / 1024)
+        return True
+
+    except Exception as e:
+        logger.error("Failed to download %s: %s", name, e)
+        if temp.exists():
+            temp.unlink()
+        return False
+
+
+def ensure_models(callback: Any = None) -> bool:
+    """Download all missing models. Returns True if all models are available."""
+    missing = get_missing_models()
+    if not missing:
+        logger.info("All voice models present")
+        return True
+
+    total_mb = sum(m["size_mb"] for m in missing)
+    logger.info("Need to download %d models (%.0f MB)", len(missing), total_mb)
+
+    for model in missing:
+        success = download_model(model["name"], model["url"], callback)
+        if not success:
+            return False
+
+    return True
+
+
+def models_ready() -> bool:
+    """Check if all required models are downloaded."""
+    return len(get_missing_models()) == 0
