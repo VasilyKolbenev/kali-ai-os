@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type AppMode = "focus" | "dashboard" | "agents" | "nightstand";
+export type AppMode = "focus" | "dashboard" | "agents" | "nightstand" | "store";
 
 interface AppState {
   mode: AppMode;

@@ -5,6 +5,7 @@ const modes: { id: AppMode; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dash", icon: "\u25EB" },
   { id: "agents", label: "Agents", icon: "\u2B21" },
   { id: "nightstand", label: "Night", icon: "\u263E" },
+  { id: "store", label: "Store", icon: "\u25A6" },
 ];
 
 export function ModeSelector() {

@@ -4,6 +4,7 @@ import { Avatar } from "./components/Avatar/Avatar";
 import { Dashboard } from "./components/Dashboard/Dashboard";
 import { AgentPanel } from "./components/AgentPanel/AgentPanel";
 import { Nightstand } from "./components/Nightstand/Nightstand";
+import { AgentStore } from "./components/AgentStore/AgentStore";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
@@ -45,6 +46,7 @@ export default function App() {
           {mode === "dashboard" && <Dashboard />}
           {mode === "agents" && <AgentPanel />}
           {mode === "nightstand" && <Nightstand />}
+          {mode === "store" && <AgentStore />}
         </div>
       </main>
     </div>

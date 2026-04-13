@@ -1,4 +1,4 @@
-const BASE_URL = "http://localhost:3000";
+const BASE_URL = "http://localhost:3005";
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -25,4 +25,29 @@ export const api = {
   voiceStatus: () => fetchJSON<import("./types").VoiceStatus>("/voice/status"),
   voiceStart: () => fetchJSON<{ status: string }>("/voice/start", { method: "POST" }),
   voiceStop: () => fetchJSON<{ status: string }>("/voice/stop", { method: "POST" }),
+
+  // Catalog / Store
+  skills: () => fetchJSON<any[]>("/skills"),
+  catalogSearch: (q: string) =>
+    fetchJSON<{ results: any[]; count: number }>(
+      `/catalog/search?q=${encodeURIComponent(q)}`,
+    ),
+  catalogTrending: () => fetchJSON<{ results: any[] }>("/catalog/trending"),
+  catalogPack: (name: string) =>
+    fetchJSON<any>(`/catalog/pack/${name}`, { method: "POST" }),
+  catalogInstall: (path: string) =>
+    fetchJSON<any>("/catalog/install", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  builderClassify: (text: string) =>
+    fetchJSON<any>("/builder/classify", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  builderCreateSkill: (data: any) =>
+    fetchJSON<any>("/builder/create-skill", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
