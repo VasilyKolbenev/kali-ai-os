@@ -206,6 +206,15 @@ def create_app(
         catalog_client = CatalogClient()
         app.state.catalog_client = catalog_client
 
+        # Load TTS models (Silero + RVC ONNX) — in-process, no separate server needed
+        try:
+            import asyncio
+            from kernel.voice.tts_engine import load_models, is_loaded
+            await asyncio.to_thread(load_models)
+            logger.info("TTS engine loaded in-process")
+        except Exception:
+            logger.warning("TTS engine not available (will use cloud fallbacks)")
+
         logger.info("KALI kernel started (v%s)", __version__)
         yield
 
@@ -622,58 +631,27 @@ def create_app(
 
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech — local Silero + RVC ONNX (streaming) with cloud fallbacks."""
-        from fastapi.responses import StreamingResponse
+        """Convert text to speech — in-process Silero + RVC ONNX with cloud fallbacks."""
+        from fastapi.responses import Response, StreamingResponse
+        import asyncio
         import io
         import os
 
         body = await request.json()
         text = body.get("text", "")
+        language = body.get("language")
         if not text:
             return {"error": "No text provided"}
 
-        tts_url = os.environ.get("TTS_URL", "http://127.0.0.1:3002")
-
-        # Priority 1: Local Silero + RVC ONNX streaming (cloned JARVIS voice)
+        # Priority 1: In-process Silero + RVC ONNX (no HTTP round-trip)
         try:
-            import httpx
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{tts_url}/synthesize/stream",
-                    json={"text": text},
-                    timeout=120.0,
-                )
-                if resp.status_code == 200:
-                    return StreamingResponse(
-                        io.BytesIO(resp.content),
-                        media_type="text/event-stream",
-                        headers={
-                            "Cache-Control": "no-cache",
-                            "X-Accel-Buffering": "no",
-                        },
-                    )
+            from kernel.voice.tts_engine import generate_audio, audio_to_wav_bytes, is_loaded
+            if is_loaded():
+                audio, sr = await asyncio.to_thread(generate_audio, text, language)
+                wav_bytes = audio_to_wav_bytes(audio, sr)
+                return Response(content=wav_bytes, media_type="audio/wav")
         except Exception as e:
-            logger.debug("Local TTS streaming not available: %s", e)
-
-        # Priority 1b: Local Silero + RVC ONNX non-streaming fallback
-        try:
-            import httpx
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{tts_url}/synthesize",
-                    json={"text": text},
-                    timeout=120.0,
-                )
-                if resp.status_code == 200:
-                    return StreamingResponse(
-                        io.BytesIO(resp.content),
-                        media_type="audio/wav",
-                        headers={"Content-Disposition": "inline"},
-                    )
-        except Exception as e:
-            logger.debug("Local TTS not available: %s", e)
+            logger.warning("Local TTS failed: %s, trying cloud fallbacks", e)
 
         # Priority 2: ElevenLabs (cloned voice, cloud)
         el_key = os.environ.get("ELEVENLABS_API_KEY")
@@ -720,6 +698,24 @@ def create_app(
         except Exception as e:
             logger.warning("TTS failed: %s", e)
             return {"error": str(e)}
+
+    @app.post("/synthesize")
+    async def synthesize_endpoint(request: Request) -> Any:
+        """Alias for /tts — backward compat with TTS client and frontend."""
+        return await text_to_speech(request)
+
+    @app.get("/health/tts")
+    async def tts_health() -> dict[str, Any]:
+        """TTS engine health check."""
+        try:
+            from kernel.voice.tts_engine import is_loaded
+            loaded = is_loaded()
+        except Exception:
+            loaded = False
+        return {
+            "status": "ok" if loaded else "not loaded",
+            "engine": "silero-v4 + onnx-rvc-v2",
+        }
 
     @app.post("/builder/classify")
     async def builder_classify(request: Request) -> dict[str, Any]:

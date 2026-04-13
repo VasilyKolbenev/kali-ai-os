@@ -38,15 +38,13 @@ export function ChatInput() {
   }, [messages]);
 
   // Speak response with JARVIS voice — full synthesis (best quality)
-  // XTTS v2 + RVC pipeline on port 3002
-  const TTS_URL = "http://localhost:3002";
-
+  // Silero + RVC ONNX pipeline, in-process on port 3005
   const speakJarvis = async (text: string) => {
     if (!text || text.length < 5) return;
     setVoiceState("speaking");
 
     try {
-      const res = await fetch(`${TTS_URL}/synthesize`, {
+      const res = await fetch("http://localhost:3005/synthesize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),

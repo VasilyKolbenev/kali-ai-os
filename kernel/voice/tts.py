@@ -73,11 +73,30 @@ class TextToSpeech:
             self._loaded = False
 
     def synthesize(self, text: str, language: str | None = None) -> TTSResult:
-        """Synthesize speech from text via TTS microservice."""
+        """Synthesize speech — in-process engine first, HTTP fallback second."""
         if not text.strip():
             return TTSResult.empty()
 
         start = time.perf_counter()
+
+        # Try in-process engine first (no HTTP round-trip)
+        try:
+            from kernel.voice.tts_engine import generate_audio as _gen, is_loaded
+            if is_loaded():
+                audio, sr = _gen(text, language)
+                elapsed_ms = int((time.perf_counter() - start) * 1000)
+                duration_ms = int(len(audio) / sr * 1000)
+                logger.info(
+                    "TTS (in-process): %d chars -> %.1fs audio (%dms)",
+                    len(text),
+                    len(audio) / sr,
+                    elapsed_ms,
+                )
+                return TTSResult(audio=audio, sample_rate=sr, duration_ms=duration_ms)
+        except Exception:
+            logger.debug("In-process TTS not available, falling back to HTTP")
+
+        # Fallback: HTTP service (if someone still runs it separately)
         try:
             import requests
             import soundfile as sf
@@ -101,7 +120,7 @@ class TextToSpeech:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
 
             logger.info(
-                "TTS: %d chars -> %.1fs audio (%dms)",
+                "TTS (HTTP): %d chars -> %.1fs audio (%dms)",
                 len(text),
                 len(audio) / sr,
                 elapsed_ms,
