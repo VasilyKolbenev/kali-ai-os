@@ -30,14 +30,19 @@ if not exist ".env" (
     echo.
 )
 
-:: Start TTS service (Qwen3-TTS JARVIS voice on GPU)
-echo [START] Starting JARVIS voice TTS on GPU (port 3001)...
-start /b "" C:\Users\User\miniforge3\condabin\conda.bat run -n kali-tts --no-banner python services\tts\server.py
-timeout /t 10 /nobreak >nul
+:: Start RVC voice conversion (WSL, conda rvc, port 3003)
+echo [START] Starting RVC JARVIS voice conversion (WSL, port 3003)...
+start "" wsl bash -c "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rvc && python /mnt/c/Users/User/Desktop/Jarvis/services/rvc/server.py"
+timeout /t 8 /nobreak >nul
 
-:: Start kernel
-echo [START] Starting KALI kernel on port 3000...
-start /b "" uv run uvicorn kernel.main:create_app --factory --port 3000
+:: Start TTS service (WSL, Silero + RVC, port 3002)
+echo [START] Starting Silero TTS + RVC pipeline (WSL, port 3002)...
+start "" wsl bash -c "cd ~/kali-tts-wsl && source .venv/bin/activate && python /mnt/c/Users/User/Desktop/Jarvis/services/tts/server.py"
+timeout /t 15 /nobreak >nul
+
+:: Start kernel (port 3005)
+echo [START] Starting KALI kernel on port 3005...
+start /b "" uv run uvicorn kernel.main:create_app --factory --host 0.0.0.0 --port 3005
 
 :: Wait for kernel to start
 timeout /t 3 /nobreak >nul
@@ -53,9 +58,10 @@ echo [START] Starting UI on port 1420...
 echo.
 echo ========================================
 echo   KALI is running!
-echo   UI:    http://localhost:1420
-echo   API:   http://localhost:3000/health
-echo   TTS:   http://localhost:3001/health
+echo   UI:      http://localhost:1420
+echo   Kernel:  http://localhost:3005/health
+echo   TTS:     http://localhost:3002/health
+echo   RVC:     http://localhost:3003/health
 echo   Press Ctrl+C to stop
 echo ========================================
 echo.

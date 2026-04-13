@@ -7,6 +7,7 @@ import { CalendarWidget } from "./widgets/CalendarWidget";
 import { SpendingWidget } from "./widgets/SpendingWidget";
 import { EnergyWidget } from "./widgets/EnergyWidget";
 import { AgentsWidget } from "./widgets/AgentsWidget";
+import { WeatherWidget } from "./widgets/WeatherWidget";
 
 export function Dashboard() {
   const updateWidget = useDashboardStore((s) => s.updateWidget);
@@ -45,7 +46,7 @@ export function Dashboard() {
         // agent not running — keep previous data
       }
 
-      // Weather widget (stored in energy slot if no dedicated widget)
+      // Weather widget
       try {
         const wx = await api.executeAgentTool("weather", "get_weather", { city: "Moscow" }) as {
           temperature_c?: number; condition?: string;
@@ -53,6 +54,21 @@ export function Dashboard() {
         updateWidget("weather", { temp_c: wx.temperature_c, condition: wx.condition });
       } catch {
         // agent not running — keep previous data
+      }
+
+      // Life dashboard: sleep, spending, energy
+      try {
+        const lifeData = await api.executeAgentTool("life-dashboard", "get_daily_summary") as {
+          sleep_hours?: number | null;
+          sleep_hrv?: number | null;
+          total_spending?: number;
+          total_calories?: number;
+        };
+        updateWidget("sleep", { hours: lifeData.sleep_hours ?? null, hrv: lifeData.sleep_hrv ?? null });
+        updateWidget("spending", { amount: lifeData.total_spending ?? 0, currency: "₽" });
+        updateWidget("energy", { calories: lifeData.total_calories ?? 0 });
+      } catch {
+        // life-dashboard not running — keep previous data
       }
     }
 
@@ -75,6 +91,7 @@ export function Dashboard() {
           <SpendingWidget />
           <EnergyWidget />
           <AgentsWidget />
+          <WeatherWidget />
         </div>
       </div>
     </div>

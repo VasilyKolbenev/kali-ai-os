@@ -13,6 +13,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     spending: null,
     energy: null,
     agents: null,
+    weather: null,
   },
   updateWidget: (name, data) =>
     set((state) => ({ widgets: { ...state.widgets, [name]: data } })),

@@ -25,6 +25,7 @@ export function AgentStore() {
   const [searchQuery, setSearchQuery] = useState("");
   const [catalogResults, setCatalogResults] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [installMsg, setInstallMsg] = useState<string | null>(null);
 
   useEffect(() => {
     api.skills().then(setSkills).catch(console.error);
@@ -138,11 +139,7 @@ export function AgentStore() {
                     </div>
                   </div>
                   <button
-                    onClick={async () => {
-                      // For cloud packages, would call api.catalogInstall
-                      // For now, show that install from catalog requires Supabase
-                      alert(`Install "${item.name}" — catalog not configured yet`);
-                    }}
+                    onClick={() => setInstallMsg(`Configure Supabase to install "${item.name}" from cloud`)}
                     className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
                       text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
                       transition flex items-center gap-1"
@@ -159,6 +156,13 @@ export function AgentStore() {
         {loading && (
           <div className="text-center text-sm text-white/30 py-8">
             Searching...
+          </div>
+        )}
+
+        {installMsg && (
+          <div className="glass p-3 mt-4 text-xs text-[var(--j-amber)] flex items-center justify-between">
+            <span>{installMsg}</span>
+            <button onClick={() => setInstallMsg(null)} className="text-white/30 hover:text-white/60 ml-4">✕</button>
           </div>
         )}
       </div>
