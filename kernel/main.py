@@ -326,6 +326,33 @@ def create_app(
     async def agent_status(name: str, request: Request) -> dict[str, Any]:
         return await request.app.state.agent_runtime.get_status(name)
 
+    @app.post("/agents/{name}/execute")
+    async def execute_agent_tool(name: str, request: Request) -> dict[str, Any]:
+        """Execute an agent tool/action directly."""
+        body = await request.json()
+        action = body.get("action", "")
+        args = body.get("args", {})
+
+        runtime = request.app.state.agent_runtime
+
+        try:
+            status = await runtime.get_status(name)
+        except Exception:
+            status = None
+
+        if not status or status.get("status") != "running":
+            try:
+                await runtime.load_agent(name)
+            except Exception as e:
+                return {"error": f"Agent '{name}' not available: {e}"}
+
+        try:
+            result = await runtime.dispatch(name, action, args)
+            return result
+        except Exception as e:
+            logger.warning("Agent execute failed: %s/%s: %s", name, action, e)
+            return {"error": str(e)}
+
     @app.post("/notifications/send")
     async def send_notification(request: Request) -> dict[str, str]:
         from kernel.notifications import Notification
