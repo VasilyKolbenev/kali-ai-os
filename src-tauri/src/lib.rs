@@ -2,7 +2,6 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-/// Backend process handle — killed on app exit.
 struct BackendProcess(Mutex<Option<Child>>);
 
 #[tauri::command]
@@ -12,57 +11,42 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn backend_status() -> String {
-    // Quick health check
     match ureq::get("http://localhost:3005/health").call() {
-        Ok(resp) => {
-            if resp.status() == 200 {
-                "running".to_string()
-            } else {
-                "error".to_string()
-            }
-        }
-        Err(_) => "stopped".to_string(),
+        Ok(resp) if resp.status() == 200 => "running".to_string(),
+        _ => "stopped".to_string(),
     }
 }
 
 fn start_backend(app: &AppHandle) {
-    // Look for kali-backend.exe next to the app executable
     let app_dir = app
         .path()
         .resource_dir()
         .unwrap_or_else(|_| std::env::current_exe().unwrap().parent().unwrap().to_path_buf());
 
     let backend_exe = app_dir.join("kali-backend.exe");
-
     if !backend_exe.exists() {
-        // Dev mode: try running via Python directly
-        eprintln!("kali-backend.exe not found at {:?}, skipping auto-start", backend_exe);
-        eprintln!("In dev mode, start the kernel manually: uv run python -m kernel.main");
+        eprintln!("kali-backend.exe not found, start kernel manually: uv run python -m kernel.main");
         return;
     }
 
-    match Command::new(&backend_exe)
-        .current_dir(&app_dir)
-        .spawn()
-    {
+    match Command::new(&backend_exe).current_dir(&app_dir).spawn() {
         Ok(child) => {
             eprintln!("Started kali-backend (PID: {})", child.id());
-            let state = app.state::<BackendProcess>();
-            *state.0.lock().unwrap() = Some(child);
+            *app.state::<BackendProcess>().0.lock().unwrap() = Some(child);
         }
-        Err(e) => {
-            eprintln!("Failed to start kali-backend: {}", e);
-        }
+        Err(e) => eprintln!("Failed to start kali-backend: {}", e),
     }
 }
 
 fn stop_backend(app: &AppHandle) {
     let state = app.state::<BackendProcess>();
-    if let Some(mut child) = state.0.lock().unwrap().take() {
+    let mut guard = state.0.lock().unwrap();
+    if let Some(ref mut child) = *guard {
         eprintln!("Stopping kali-backend (PID: {})", child.id());
         let _ = child.kill();
         let _ = child.wait();
     }
+    *guard = None;
 }
 
 pub fn run() {
@@ -71,35 +55,29 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app| {
-            // Start backend process
             start_backend(app.handle());
 
-            // Register Ctrl+Space global shortcut
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-
             app.global_shortcut().on_shortcut(
                 "CmdOrCtrl+Space",
-                |app_handle: &AppHandle, _shortcut, event| {
+                |handle: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        if let Some(window) = app_handle.get_webview_window("main") {
-                            let visible = window.is_visible().unwrap_or(false);
-                            if visible {
-                                let _ = window.hide();
+                        if let Some(w) = handle.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
                             } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                                let _ = w.show();
+                                let _ = w.set_focus();
                             }
                         }
                     }
                 },
             )?;
-
             Ok(())
         })
-        .on_window_event(|app, event| {
-            // Stop backend when app closes
+        .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                stop_backend(app);
+                stop_backend(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![greet, backend_status])
