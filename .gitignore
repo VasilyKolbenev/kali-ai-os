@@ -11,3 +11,9 @@ target/
 .ruff_cache/
 data/
 services/tts/.venv/
+*.pt
+*.onnx
+models/
+dist/
+build/
+*.wav
