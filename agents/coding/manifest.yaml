@@ -20,4 +20,7 @@ tools:
     parameters:
       code: { type: string, description: "Code to improve" }
 protocol: native
-permissions: []
+permissions:
+  - name: network
+    params:
+      domains: ["api.anthropic.com"]
