@@ -553,7 +553,7 @@ def create_app(
     async def list_skills_route(request: Request) -> list[dict[str, Any]]:
         """List all loaded skills."""
         executor = request.app.state.skill_executor
-        return [executor.get_skill_info(name) for name in executor.list_skills()]
+        return [info for name in executor.list_skills() if (info := executor.get_skill_info(name)) is not None]
 
     @app.post("/skills/{name}/{action}")
     async def execute_skill_route(name: str, action: str, request: Request) -> Any:
@@ -762,8 +762,12 @@ def create_app(
     @app.post("/catalog/install")
     async def catalog_install(request: Request) -> dict[str, Any]:
         """Install from .kali-agent file."""
+        from fastapi.responses import JSONResponse
+
         body = await request.json()
         path = Path(body.get("path", ""))
+        if path.suffix != ".kali-agent":
+            return JSONResponse({"error": "Must be a .kali-agent file"}, status_code=400)
         if not path.exists():
             return {"error": f"File not found: {path}"}
         result = await install_package(

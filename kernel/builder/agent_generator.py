@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from kernel.builder.safety_gate import check_code
+
 logger = logging.getLogger(__name__)
 
 # Import anthropic at module level so tests can patch it cleanly.
@@ -79,6 +81,9 @@ def generate_agent(
         Path to the created agent directory, or None on failure (missing API
         key, network error, or unexpected API response).
     """
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError(f"Invalid agent name: {name}")
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         logger.warning("ANTHROPIC_API_KEY not set — skipping LLM agent generation")
@@ -115,6 +120,12 @@ def generate_agent(
         return None
 
     agent_code = _strip_fences(raw_code)
+
+    # Safety gate: never write code that fails static analysis
+    safety = check_code(agent_code)
+    if not safety.safe:
+        logger.warning("Generated unsafe code for '%s': %s", name, safety.issues)
+        return None
 
     # Write files
     agent_dir = agents_dir / name

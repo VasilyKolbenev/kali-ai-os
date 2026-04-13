@@ -68,6 +68,39 @@ class TestSkillTemplateStorage:
 # TrackerTemplate
 # ---------------------------------------------------------------------------
 
+class TestSkillTemplatePathSecurity:
+    @pytest.fixture
+    def template(self, tmp_path):
+        return FakeTemplate(skill_name="test", data_dir=tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_dotdot_blocked(self, template):
+        with pytest.raises(ValueError, match="path traversal"):
+            await template.save_data("../../etc/passwd", {"x": 1})
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_slash_blocked(self, template):
+        with pytest.raises(ValueError, match="path traversal"):
+            await template.save_data("other/file.json", {"x": 1})
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_backslash_blocked(self, template):
+        with pytest.raises(ValueError, match="path traversal"):
+            await template.save_data("other\\file.json", {"x": 1})
+
+    @pytest.mark.asyncio
+    async def test_load_path_traversal_blocked(self, template):
+        with pytest.raises(ValueError, match="path traversal"):
+            await template.load_data("../../etc/passwd")
+
+    @pytest.mark.asyncio
+    async def test_valid_filename_allowed(self, template):
+        """Plain filename without path components works fine."""
+        await template.save_data("data.json", {"ok": True})
+        result = await template.load_data("data.json")
+        assert result == {"ok": True}
+
+
 class TestTrackerTemplate:
     @pytest.fixture
     def template(self, tmp_path):
@@ -227,6 +260,10 @@ class TestReminderTemplate:
 # ---------------------------------------------------------------------------
 
 class TestMonitorTemplate:
+    @pytest.fixture(autouse=True)
+    def enable_testing_mode(self, monkeypatch):
+        monkeypatch.setenv("KALI_TESTING", "1")
+
     @pytest.fixture
     def template(self, tmp_path):
         return MonitorTemplate(skill_name="api-health", data_dir=tmp_path)

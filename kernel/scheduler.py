@@ -104,6 +104,8 @@ class Scheduler:
         if not croniter.is_valid(cron_expr):
             raise ValueError(f"Invalid cron expression: '{cron_expr}'")
         resolved_topic = topic or f"schedule.cron.{name}"
+        # NOTE: cron jobs use naive local time. If timezone config differs from
+        # system local time, jobs may misfire. TODO(#tz): use timezone-aware datetimes.
         now = datetime.now()
         next_run: datetime = croniter(cron_expr, now).get_next(datetime)
         self._cron_jobs[name] = {

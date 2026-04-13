@@ -71,10 +71,11 @@ class CatalogClient:
             return []
 
         try:
+            escaped = query.replace("%", "\\%").replace("_", "\\_")
             req = (
                 client.table("packages")
                 .select("*")
-                .ilike("name", f"%{query}%")
+                .ilike("name", f"%{escaped}%")
                 .limit(limit)
             )
             if category:

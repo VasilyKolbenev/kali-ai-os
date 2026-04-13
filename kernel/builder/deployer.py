@@ -76,7 +76,11 @@ async def deploy_agent(
             return {"status": "error", "message": f"Manifest not found for '{name}'"}
         await agent_runtime.load_agent(name)
     except Exception as e:
+        import shutil
+
         logger.exception("Failed to deploy agent '%s'", name)
+        if agent_dir.exists():
+            shutil.rmtree(agent_dir)
         return {"status": "error", "message": str(e)}
 
     logger.info("Deployed agent: %s", name)

@@ -1,6 +1,7 @@
 """Monitor skill template — periodic URL/API health checks."""
 
 import logging
+import os
 from datetime import datetime
 from typing import Any
 from urllib import request as urllib_request
@@ -67,7 +68,7 @@ class MonitorTemplate(SkillTemplate):
         expected_status: int = int(config.get("expected_status", 200))
         now_str = datetime.now().isoformat()
 
-        mock_status = args.get("_mock_status")
+        mock_status = args.get("_mock_status") if os.environ.get("KALI_TESTING") else None
         if mock_status is not None:
             status_code = int(mock_status)
             error = None

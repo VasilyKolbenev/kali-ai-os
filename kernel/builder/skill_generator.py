@@ -70,6 +70,9 @@ def generate_skill(
     Raises:
         OSError: If the directory cannot be created or files cannot be written.
     """
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError(f"Invalid agent name: {name}")
+
     skill_dir = agents_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
 

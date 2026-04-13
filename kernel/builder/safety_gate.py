@@ -19,6 +19,12 @@ _BLOCKED_IMPORTS: frozenset[str] = frozenset(
         "signal",
         "socket",
         "threading",
+        "requests",
+        "urllib",
+        "urllib3",
+        "httpx",
+        "aiohttp",
+        "http",
     }
 )
 
@@ -35,6 +41,7 @@ _BLOCKED_BUILTINS: frozenset[str] = frozenset(
         "globals",
         "locals",
         "breakpoint",
+        "open",
     }
 )
 
@@ -149,7 +156,7 @@ class _SafetyVisitor(ast.NodeVisitor):
         if chain in _BLOCKED_ATTR_CHAINS:
             # Only warn if not already caught as a call (parent handles calls)
             # Here we add a warning for bare attribute access (e.g. fn = os.system)
-            if not isinstance(node.ctx, ast.Load):
+            if isinstance(node.ctx, ast.Load):
                 self.warnings.append(
                     f"Suspicious attribute access '{chain}' at line {node.lineno}"
                 )

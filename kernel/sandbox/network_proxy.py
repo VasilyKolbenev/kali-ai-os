@@ -1,5 +1,6 @@
 """Network proxy — handles 'network.request' JSON-RPC from agents."""
 
+import asyncio
 import json as json_mod
 import logging
 import re
@@ -79,16 +80,9 @@ class NetworkProxy:
         timeout = min(int(params.get("timeout", 30)), 30)
 
         try:
-            req = urllib.request.Request(url, method=method)
-            for k, v in headers.items():
-                req.add_header(k, v)
-            data: bytes | None = None
-            if json_body is not None:
-                data = json_mod.dumps(json_body).encode()
-                req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
-                body = resp.read().decode(errors="replace")
-                return {"status": resp.status, "body": body}
+            return await asyncio.to_thread(
+                self._sync_request, url, method, headers, json_body, timeout
+            )
         except Exception as exc:
             logger.error(
                 "NetworkProxy request failed for agent '%s' url='%s': %s",
@@ -97,6 +91,37 @@ class NetworkProxy:
                 exc,
             )
             return {"error": str(exc)}
+
+    def _sync_request(
+        self,
+        url: str,
+        method: str,
+        headers: dict[str, str],
+        json_body: Any,
+        timeout: int,
+    ) -> dict[str, Any]:
+        """Perform the blocking HTTP request synchronously.
+
+        Args:
+            url: Target URL.
+            method: HTTP method (GET, POST, etc.).
+            headers: Request headers dict.
+            json_body: Optional JSON-serialisable body.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Dict with 'status' and 'body', or 'error' on failure.
+        """
+        req = urllib.request.Request(url, method=method)
+        for k, v in headers.items():
+            req.add_header(k, v)
+        data: bytes | None = None
+        if json_body is not None:
+            data = json_mod.dumps(json_body).encode()
+            req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+            body = resp.read().decode(errors="replace")
+            return {"status": resp.status, "body": body}
 
     @staticmethod
     def _extract_domain(url: str) -> str:
