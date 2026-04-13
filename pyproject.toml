@@ -31,6 +31,8 @@ dependencies = [
     "torch>=2.11.0",
     "omegaconf>=2.3.0",
     "croniter>=6.2.2",
+    "pillow>=12.2.0",
+    "openwakeword>=0.4.0",
 ]
 
 [project.optional-dependencies]
