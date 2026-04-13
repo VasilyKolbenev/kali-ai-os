@@ -36,6 +36,9 @@ from kernel.builder.agent_generator import generate_agent
 from kernel.builder.safety_gate import check_code
 from kernel.builder.deployer import deploy_skill, deploy_agent
 from kernel.builder.wizard import create_wizard
+from kernel.catalog.package import pack as pack_agent, get_package_info
+from kernel.catalog.client import CatalogClient
+from kernel.catalog.installer import install_package
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +195,9 @@ def create_app(
                 logger.info("Auto-loaded agent: %s", agent_name)
             except Exception:
                 logger.warning("Failed to auto-load agent: %s", agent_name)
+
+        catalog_client = CatalogClient()
+        app.state.catalog_client = catalog_client
 
         logger.info("KALI kernel started (v%s)", __version__)
         yield
@@ -732,5 +738,58 @@ def create_app(
             request.app.state.plugin_registry,
             request.app.state.agent_runtime,
         )
+
+    @app.get("/catalog/search")
+    async def catalog_search(request: Request, q: str = "", category: str = "") -> dict[str, Any]:
+        """Search cloud catalog."""
+        client = request.app.state.catalog_client
+        results = await client.search(q, category=category or None)
+        return {"results": results, "count": len(results)}
+
+    @app.post("/catalog/pack/{name}")
+    async def catalog_pack(name: str) -> dict[str, Any]:
+        """Pack agent/skill into .kali-agent file."""
+        agent_dir = Path("agents") / name
+        if not agent_dir.exists():
+            return {"error": f"Agent '{name}' not found"}
+        try:
+            Path("exports").mkdir(exist_ok=True)
+            output = pack_agent(agent_dir, Path("exports") / f"{name}.kali-agent")
+            return {"status": "packed", "path": str(output)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/catalog/install")
+    async def catalog_install(request: Request) -> dict[str, Any]:
+        """Install from .kali-agent file."""
+        body = await request.json()
+        path = Path(body.get("path", ""))
+        if not path.exists():
+            return {"error": f"File not found: {path}"}
+        result = await install_package(
+            path,
+            agents_dir=Path("agents"),
+            skill_executor=getattr(request.app.state, "skill_executor", None),
+            plugin_registry=getattr(request.app.state, "plugin_registry", None),
+            agent_runtime=getattr(request.app.state, "agent_runtime", None),
+        )
+        return result
+
+    @app.get("/catalog/info")
+    async def catalog_info(path: str = "") -> dict[str, Any]:
+        """Get package info without installing."""
+        p = Path(path)
+        if not p.exists():
+            return {"error": "File not found"}
+        try:
+            return get_package_info(p)
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/catalog/trending")
+    async def catalog_trending(request: Request) -> dict[str, Any]:
+        """Get trending packages from cloud catalog."""
+        client = request.app.state.catalog_client
+        return {"results": await client.trending()}
 
     return app
