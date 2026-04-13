@@ -27,7 +27,15 @@ from kernel.plugin_registry import PluginRegistry
 from kernel.routines import RoutineManager
 from kernel.scheduler import Scheduler
 from kernel.skill_executor import SkillExecutor
+from kernel.sandbox.network_proxy import NetworkProxy
+from kernel.sandbox.permission_enforcer import PermissionEnforcer
 from kernel.voice.pipeline import VoicePipeline
+from kernel.builder.intent_classifier import classify_intent
+from kernel.builder.skill_generator import generate_skill
+from kernel.builder.agent_generator import generate_agent
+from kernel.builder.safety_gate import check_code
+from kernel.builder.deployer import deploy_skill, deploy_agent
+from kernel.builder.wizard import create_wizard
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +83,18 @@ def create_app(
                 logger.warning("Failed to load skill %s: %s", manifest.name, e)
         app.state.skill_executor = skill_executor
 
+        # Create sandbox components
+        network_proxy = NetworkProxy()
+        permission_enforcer = PermissionEnforcer()
+        app.state.network_proxy = network_proxy
+        app.state.permission_enforcer = permission_enforcer
+
         agent_runtime = AgentRuntime(
             registry=plugin_registry,
             agents_dir=resolved_agents_dir,
             event_bus=event_bus,
+            enforcer=permission_enforcer,
+            network_proxy=network_proxy,
         )
         tool_dispatcher = ToolDispatcher(
             runtime=agent_runtime,
@@ -647,5 +663,74 @@ def create_app(
         except Exception as e:
             logger.warning("TTS failed: %s", e)
             return {"error": str(e)}
+
+    @app.post("/builder/classify")
+    async def builder_classify(request: Request) -> dict[str, Any]:
+        """Classify user request as skill or agent."""
+        body = await request.json()
+        text = body.get("text", "")
+        result = classify_intent(text)
+        return {
+            "type": result.type,
+            "template": result.template,
+            "confidence": result.confidence,
+            "reason": result.reason,
+        }
+
+    @app.post("/builder/create-skill")
+    async def builder_create_skill(request: Request) -> dict[str, Any]:
+        """Generate and deploy a skill."""
+        body = await request.json()
+        name = body["name"]
+        template = body["template"]
+        description = body.get("description", name)
+        config = body.get("config", {})
+
+        skill_dir = generate_skill(
+            name=name,
+            template=template,
+            description=description,
+            config=config,
+            agents_dir=Path("agents"),
+        )
+        return await deploy_skill(
+            skill_dir,
+            request.app.state.skill_executor,
+            getattr(request.app.state, "scheduler", None),
+        )
+
+    @app.post("/builder/create-agent")
+    async def builder_create_agent(request: Request) -> dict[str, Any]:
+        """Generate, validate, and deploy an agent."""
+        import shutil
+
+        body = await request.json()
+        name = body["name"]
+        description = body["description"]
+        tools = body.get("tools", [])
+        apis = body.get("apis", [])
+
+        agent_dir = generate_agent(
+            name=name,
+            description=description,
+            tools=tools,
+            apis=apis,
+            agents_dir=Path("agents"),
+        )
+        if not agent_dir:
+            return {"status": "error", "message": "Agent generation failed"}
+
+        # Safety gate
+        code = (agent_dir / "agent.py").read_text()
+        safety = check_code(code)
+        if not safety.safe:
+            shutil.rmtree(agent_dir)
+            return {"status": "unsafe", "issues": safety.issues}
+
+        return await deploy_agent(
+            agent_dir,
+            request.app.state.plugin_registry,
+            request.app.state.agent_runtime,
+        )
 
     return app
