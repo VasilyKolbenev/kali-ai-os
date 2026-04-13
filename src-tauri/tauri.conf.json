@@ -15,8 +15,25 @@
         "width": 1200,
         "height": 800,
         "minWidth": 400,
-        "minHeight": 600
+        "minHeight": 600,
+        "decorations": true,
+        "transparent": false,
+        "visible": true
       }
-    ]
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "KALI — Personal AI OS"
+    },
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:3002 http://localhost:3005 ws://localhost:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "global-shortcut": {}
   }
 }
