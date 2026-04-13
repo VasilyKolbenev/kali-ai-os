@@ -57,7 +57,7 @@ class AgentManifest(BaseModel):
     @field_validator("protocol")
     @classmethod
     def protocol_must_be_valid(cls, v: str) -> str:
-        valid = {"native", "mcp", "http"}
+        valid = {"native", "mcp", "http", "skill"}
         if v not in valid:
             raise ValueError(f"Protocol must be one of {valid}, got: {v}")
         return v

@@ -42,6 +42,10 @@ class AgentRuntime:
             return NativeProtocol(agent_name=manifest.name, script_path=script)
         elif manifest.protocol == "http":
             return HttpProtocol(agent_name=manifest.name, base_url="http://localhost:8080")
+        elif manifest.protocol == "skill":
+            raise ValueError(
+                f"Skill '{manifest.name}' handled by SkillExecutor, not AgentRuntime"
+            )
         else:
             raise ValueError(f"Unsupported protocol: {manifest.protocol}")
 
