@@ -20,4 +20,7 @@ tools:
     parameters: {}
 protocol: native
 permissions:
-  - network
+  - name: network
+    params:
+      domains: ["*"]  # HA can be on any local IP
+  - name: storage
