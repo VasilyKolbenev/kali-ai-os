@@ -48,9 +48,9 @@ export function Dashboard() {
       // Weather widget (stored in energy slot if no dedicated widget)
       try {
         const wx = await api.executeAgentTool("weather", "get_weather", { city: "Moscow" }) as {
-          temp_c?: number; condition?: string;
+          temperature_c?: number; condition?: string;
         };
-        updateWidget("weather", { temp_c: wx.temp_c, condition: wx.condition });
+        updateWidget("weather", { temp_c: wx.temperature_c, condition: wx.condition });
       } catch {
         // agent not running — keep previous data
       }

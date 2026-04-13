@@ -1,12 +1,19 @@
-"""Text-to-Speech using Piper TTS."""
+"""Text-to-Speech via Silero + RVC ONNX microservice pipeline."""
 
+import io
 import logging
+import os
 import time
 from dataclasses import dataclass
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+TTS_URL = os.environ.get("TTS_URL", "http://localhost:3002")
 
 
 @dataclass
@@ -14,7 +21,7 @@ class TTSResult:
     """Result of text-to-speech synthesis."""
 
     audio: np.ndarray
-    sample_rate: int = 22050
+    sample_rate: int = 24000
     duration_ms: int = 0
 
     @property
@@ -23,64 +30,90 @@ class TTSResult:
 
     @classmethod
     def empty(cls) -> "TTSResult":
-        return cls(audio=np.array([], dtype=np.float32), sample_rate=22050, duration_ms=0)
+        return cls(audio=np.array([], dtype=np.float32), sample_rate=24000, duration_ms=0)
 
 
 class TextToSpeech:
-    """Synthesizes speech from text using Piper TTS.
+    """Synthesizes speech via Silero + RVC ONNX JARVIS voice pipeline.
 
-    Model is lazy-loaded. Returns empty audio when no model is available.
+    Connects to TTS microservice (services/tts/server.py) which handles:
+    - Silero TTS text-to-speech
+    - RVC ONNX voice conversion to JARVIS voice (DirectML GPU)
     """
 
-    def __init__(self, voice: str = "default", speaker_id: int | None = None) -> None:
+    def __init__(self, voice: str = "jarvis", speaker_id: int | None = None) -> None:
         self.voice = voice
         self.speaker_id = speaker_id
-        self._model: object | None = None
         self._loaded = False
+        self._base_url = TTS_URL
 
     @property
     def is_loaded(self) -> bool:
         return self._loaded
 
     def load(self) -> None:
+        """Check if TTS service is available."""
         try:
-            from piper import PiperVoice  # noqa: F401
+            import requests
 
-            logger.info("Attempting to load Piper voice: %s", self.voice)
-            self._loaded = False
-            logger.warning("Piper TTS model not configured, TTS disabled")
-        except ImportError:
-            logger.warning("piper-tts not installed, TTS disabled")
+            r = requests.get(f"{self._base_url}/health", timeout=5)
+            if r.status_code == 200:
+                info = r.json()
+                self._loaded = info.get("loaded", False)
+                logger.info(
+                    "TTS service connected: engine=%s, rvc=%s",
+                    info.get("engine"),
+                    info.get("rvc"),
+                )
+            else:
+                logger.warning("TTS service returned %d", r.status_code)
+                self._loaded = False
+        except Exception:
+            logger.warning("TTS service not available at %s", self._base_url)
             self._loaded = False
 
-    def synthesize(self, text: str) -> TTSResult:
-        if not text.strip() or self._model is None:
+    def synthesize(self, text: str, language: str | None = None) -> TTSResult:
+        """Synthesize speech from text via TTS microservice."""
+        if not text.strip():
             return TTSResult.empty()
 
         start = time.perf_counter()
         try:
-            audio_parts: list[np.ndarray] = []
-            for audio_bytes in self._model.synthesize_stream_raw(text):  # type: ignore[attr-defined]
-                chunk = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32767.0
-                audio_parts.append(chunk)
+            import requests
+            import soundfile as sf
 
-            if not audio_parts:
+            payload: dict = {"text": text}
+            if language:
+                payload["language"] = language
+
+            r = requests.post(
+                f"{self._base_url}/synthesize",
+                json=payload,
+                timeout=30,
+            )
+
+            if r.status_code != 200:
+                logger.error("TTS service error %d: %s", r.status_code, r.text[:100])
                 return TTSResult.empty()
 
-            audio = np.concatenate(audio_parts)
+            buf = io.BytesIO(r.content)
+            audio, sr = sf.read(buf)
             elapsed_ms = int((time.perf_counter() - start) * 1000)
+
             logger.info(
-                "TTS: %d chars -> %.1fs audio (%.0fms)",
+                "TTS: %d chars -> %.1fs audio (%dms)",
                 len(text),
-                len(audio) / 22050,
+                len(audio) / sr,
                 elapsed_ms,
             )
-            return TTSResult(audio=audio, sample_rate=22050, duration_ms=elapsed_ms)
+            return TTSResult(audio=audio, sample_rate=sr, duration_ms=elapsed_ms)
+
         except Exception:
             logger.exception("TTS synthesis failed")
             return TTSResult.empty()
 
     def play(self, result: TTSResult) -> None:
+        """Play audio result through speakers."""
         if result.is_empty:
             return
         try:

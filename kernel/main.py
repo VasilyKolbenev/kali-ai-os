@@ -188,13 +188,20 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
-        # Auto-load essential agents
-        for agent_name in ["system", "weather", "tasks"]:
+        # Auto-load essential agents (built-in = auto-approved)
+        builtin_agents = {"system", "weather", "tasks", "calendar"}
+        for agent_name in builtin_agents:
             try:
                 await agent_runtime.load_agent(agent_name)
+                manifest = plugin_registry.get(agent_name)
+                if manifest and permission_enforcer:
+                    manifest.permissions.user_approved = True
+                    permission_enforcer.register_agent(agent_name, manifest)
                 logger.info("Auto-loaded agent: %s", agent_name)
             except Exception:
                 logger.warning("Failed to auto-load agent: %s", agent_name)
+
+        app.state.builtin_agents = builtin_agents
 
         catalog_client = CatalogClient()
         app.state.catalog_client = catalog_client
@@ -312,7 +319,14 @@ def create_app(
     @app.post("/agents/{name}/load")
     async def load_agent(name: str, request: Request) -> dict[str, str]:
         try:
-            await request.app.state.agent_runtime.load_agent(name)
+            s = request.app.state
+            await s.agent_runtime.load_agent(name)
+            # Auto-approve built-in agents on manual load too
+            if name in s.builtin_agents:
+                manifest = s.plugin_registry.get(name)
+                if manifest and s.permission_enforcer:
+                    manifest.permissions.user_approved = True
+                    s.permission_enforcer.register_agent(name, manifest)
             return {"status": "loaded", "agent": name}
         except ValueError as e:
             return {"status": "error", "message": str(e)}
@@ -343,12 +357,22 @@ def create_app(
         if not status or status.get("status") != "running":
             try:
                 await runtime.load_agent(name)
+                # Auto-approve built-in agents loaded on demand
+                s = request.app.state
+                if name in s.builtin_agents:
+                    manifest = s.plugin_registry.get(name)
+                    if manifest and s.permission_enforcer:
+                        manifest.permissions.user_approved = True
+                        s.permission_enforcer.register_agent(name, manifest)
             except Exception as e:
                 return {"error": f"Agent '{name}' not available: {e}"}
 
         try:
             result = await runtime.dispatch(name, action, args)
             return result
+        except PermissionError as e:
+            logger.warning("Agent permission denied: %s/%s: %s", name, action, e)
+            return {"error": f"Permission denied: {e}"}
         except Exception as e:
             logger.warning("Agent execute failed: %s/%s: %s", name, action, e)
             return {"error": str(e)}
@@ -598,7 +622,7 @@ def create_app(
 
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech — local XTTS v2 + RVC (streaming) with cloud fallbacks."""
+        """Convert text to speech — local Silero + RVC ONNX (streaming) with cloud fallbacks."""
         from fastapi.responses import StreamingResponse
         import io
         import os
@@ -610,7 +634,7 @@ def create_app(
 
         tts_url = os.environ.get("TTS_URL", "http://127.0.0.1:3002")
 
-        # Priority 1: Local XTTS v2 + RVC streaming (cloned JARVIS voice)
+        # Priority 1: Local Silero + RVC ONNX streaming (cloned JARVIS voice)
         try:
             import httpx
 
@@ -632,7 +656,7 @@ def create_app(
         except Exception as e:
             logger.debug("Local TTS streaming not available: %s", e)
 
-        # Priority 1b: Local XTTS v2 + RVC non-streaming fallback
+        # Priority 1b: Local Silero + RVC ONNX non-streaming fallback
         try:
             import httpx
 
