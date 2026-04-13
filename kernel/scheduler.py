@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from croniter import CroniterBadCronError, croniter
+
 from kernel.event_bus import EventBus
 from kernel.models import Event, ScheduleConfig
 
@@ -27,6 +29,7 @@ class Scheduler:
         self._last_evening: str = ""
         self._last_hourly: int = -1
         self._tz = self._resolve_tz(config.timezone)
+        self._cron_jobs: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _resolve_tz(tz_str: str) -> ZoneInfo | None:
@@ -87,6 +90,51 @@ class Scheduler:
             "is_running": self._running,
         }
 
+    def register_cron(self, name: str, cron_expr: str, topic: str | None = None) -> None:
+        """Register a dynamic cron job.
+
+        Args:
+            name: Unique identifier for this cron job.
+            cron_expr: Standard 5-field cron expression (e.g. "0 */2 * * *").
+            topic: Event topic to emit. Defaults to "schedule.cron.{name}".
+
+        Raises:
+            ValueError: If cron_expr is not a valid cron expression.
+        """
+        if not croniter.is_valid(cron_expr):
+            raise ValueError(f"Invalid cron expression: '{cron_expr}'")
+        resolved_topic = topic or f"schedule.cron.{name}"
+        now = datetime.now()
+        next_run: datetime = croniter(cron_expr, now).get_next(datetime)
+        self._cron_jobs[name] = {
+            "cron_expr": cron_expr,
+            "topic": resolved_topic,
+            "next_run": next_run,
+        }
+        logger.info("Registered cron job '%s': %s -> %s", name, cron_expr, resolved_topic)
+
+    def unregister_cron(self, name: str) -> bool:
+        """Remove a cron job by name.
+
+        Args:
+            name: Cron job identifier to remove.
+
+        Returns:
+            True if the job existed and was removed, False otherwise.
+        """
+        removed = self._cron_jobs.pop(name, None) is not None
+        if removed:
+            logger.info("Unregistered cron job '%s'", name)
+        return removed
+
+    def list_cron_jobs(self) -> dict[str, dict[str, Any]]:
+        """Return all registered cron jobs with their metadata.
+
+        Returns:
+            Dict mapping job name to job info (cron_expr, topic, next_run).
+        """
+        return dict(self._cron_jobs)
+
     async def _loop(self) -> None:
         """Main scheduler loop — checks local time every 30 seconds."""
         while self._running:
@@ -105,6 +153,17 @@ class Scheduler:
                 if now.hour != self._last_hourly:
                     self._last_hourly = now.hour
                     await self.emit("schedule.hourly")
+
+                # Dynamic cron jobs
+                now_naive = now.replace(tzinfo=None)
+                for job_name, job in list(self._cron_jobs.items()):
+                    next_run: datetime = job["next_run"]
+                    if now_naive >= next_run:
+                        await self.emit(job["topic"])
+                        job["next_run"] = croniter(job["cron_expr"], now_naive).get_next(datetime)
+                        logger.debug(
+                            "Cron job '%s' fired; next at %s", job_name, job["next_run"]
+                        )
 
             except Exception:
                 logger.exception("Scheduler loop error")
