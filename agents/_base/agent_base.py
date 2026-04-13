@@ -70,17 +70,85 @@ class BaseAgent(ABC):
 
         return {"jsonrpc": "2.0", "result": result, "id": request_id}
 
-    def _load_json(self, filename: str) -> Any:
-        """Load data from a JSON file in the agent's data directory."""
+    def _validate_path(self, filename: str) -> Path:
+        """Validate filename stays within agent data directory.
+
+        Args:
+            filename: Simple filename (no path separators).
+
+        Returns:
+            Resolved Path inside the agent's data directory.
+
+        Raises:
+            ValueError: If the filename contains path traversal sequences.
+        """
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError(f"Invalid filename (path traversal blocked): {filename}")
         path = self._data_dir / filename
+        if not path.resolve().is_relative_to(self._data_dir.resolve()):
+            raise ValueError(f"Path escapes data directory: {path}")
+        return path
+
+    def _load_json(self, filename: str) -> Any:
+        """Load data from a JSON file in the agent's data directory.
+
+        Args:
+            filename: Simple filename (no path separators).
+
+        Returns:
+            Parsed JSON data, or None if the file does not exist.
+        """
+        path = self._validate_path(filename)
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
         return None
 
     def _save_json(self, filename: str, data: Any) -> None:
-        """Save data to a JSON file in the agent's data directory."""
-        path = self._data_dir / filename
+        """Save data to a JSON file in the agent's data directory.
+
+        Args:
+            filename: Simple filename (no path separators).
+            data: JSON-serialisable data to persist.
+        """
+        path = self._validate_path(filename)
         path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+
+    def http_request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        """Send HTTP request through kernel proxy. Requires 'network' permission.
+
+        Args:
+            method: HTTP method (GET, POST, …).
+            url: Target URL.
+            **kwargs: Additional parameters forwarded to the network proxy.
+
+        Returns:
+            Dict with 'status' and 'body' on success, or 'error' on failure.
+        """
+        return self._rpc_call("network.request", {"method": method, "url": url, **kwargs})
+
+    def _rpc_call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Call kernel RPC method via JSON-RPC.
+
+        Args:
+            method: RPC method name.
+            params: Method parameters.
+
+        Returns:
+            Result dict from the kernel, or a dict containing 'error'.
+        """
+        import json as _json
+
+        request = {"jsonrpc": "2.0", "method": method, "params": params, "id": 99999}
+        sys.stdout.write(_json.dumps(request) + "\n")
+        sys.stdout.flush()
+        response_line = sys.stdin.readline()
+        if not response_line:
+            return {"error": "No response from kernel"}
+        response = _json.loads(response_line.strip())
+        if "error" in response:
+            err = response["error"]
+            return {"error": err.get("message", str(err)) if isinstance(err, dict) else str(err)}
+        return response.get("result", {})
 
     def run(self) -> None:
         """Main loop — read JSON-RPC from stdin."""

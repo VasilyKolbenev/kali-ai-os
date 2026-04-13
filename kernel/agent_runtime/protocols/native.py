@@ -5,9 +5,12 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kernel.agent_runtime.protocols.base import AgentProtocol
+
+if TYPE_CHECKING:
+    from kernel.sandbox.network_proxy import NetworkProxy
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,11 @@ class NativeProtocol(AgentProtocol):
         self._process: asyncio.subprocess.Process | None = None
         self._request_id = 0
         self._lock = asyncio.Lock()
+        self._network_proxy: NetworkProxy | None = None
+
+    def set_network_proxy(self, proxy: "NetworkProxy") -> None:
+        """Wire in a NetworkProxy to handle agent network.request calls."""
+        self._network_proxy = proxy
 
     @property
     def is_running(self) -> bool:
@@ -89,14 +97,35 @@ class NativeProtocol(AgentProtocol):
             self._process.stdin.write(line.encode())
             await self._process.stdin.drain()
 
-            response_line = await asyncio.wait_for(self._process.stdout.readline(), timeout=10.0)
+            while True:
+                response_line = await asyncio.wait_for(
+                    self._process.stdout.readline(), timeout=10.0
+                )
 
-            if not response_line:
-                raise RuntimeError(f"Agent '{self.agent_name}' closed stdout")
+                if not response_line:
+                    raise RuntimeError(f"Agent '{self.agent_name}' closed stdout")
 
-            response = json.loads(response_line.decode().strip())
+                response = json.loads(response_line.decode().strip())
 
-            if "error" in response:
-                raise RuntimeError(f"Agent error: {response['error'].get('message', 'unknown')}")
+                # Check if this is a reverse RPC from agent (has "method" instead of "result")
+                if "method" in response and response["method"] == "network.request":
+                    if self._network_proxy:
+                        result = await self._network_proxy.handle(
+                            self.agent_name, response.get("params", {})
+                        )
+                    else:
+                        result = {"error": "NetworkProxy not available"}
+                    rpc_response = (
+                        json.dumps({"jsonrpc": "2.0", "result": result, "id": response.get("id")})
+                        + "\n"
+                    )
+                    self._process.stdin.write(rpc_response.encode())
+                    await self._process.stdin.drain()
+                    continue
 
-            return response.get("result", {})
+                if "error" in response:
+                    raise RuntimeError(
+                        f"Agent error: {response['error'].get('message', 'unknown')}"
+                    )
+
+                return response.get("result", {})

@@ -32,6 +32,26 @@ class SkillTemplate(ABC):
     ) -> dict[str, Any]:
         """Execute a skill action with given config."""
 
+    def _validate_filename(self, filename: str) -> Path:
+        """Validate filename stays within skill data directory.
+
+        Args:
+            filename: Filename to validate.
+
+        Returns:
+            Resolved Path within the skill's data directory.
+
+        Raises:
+            ValueError: If the filename contains path traversal sequences or
+                resolves outside the data directory.
+        """
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError(f"Invalid filename (path traversal blocked): {filename}")
+        path = self._data_path / filename
+        if not path.resolve().is_relative_to(self._data_path.resolve()):
+            raise ValueError(f"Path escapes data directory: {path}")
+        return path
+
     async def save_data(self, filename: str, data: Any) -> None:
         """Save JSON data to skill's storage directory.
 
@@ -39,7 +59,7 @@ class SkillTemplate(ABC):
             filename: Name of the file to save within the skill's data directory.
             data: JSON-serializable data to persist.
         """
-        path = self._data_path / filename
+        path = self._validate_filename(filename)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
     async def load_data(self, filename: str, default: Any = None) -> Any:
@@ -52,7 +72,7 @@ class SkillTemplate(ABC):
         Returns:
             Parsed JSON data or the default value.
         """
-        path = self._data_path / filename
+        path = self._validate_filename(filename)
         if not path.exists():
             return default
         try:

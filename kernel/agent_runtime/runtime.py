@@ -1,9 +1,11 @@
 """Agent runtime — manages agent lifecycle, loading, dispatching."""
 
+from __future__ import annotations
+
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kernel.agent_runtime.protocols.base import AgentProtocol
 from kernel.agent_runtime.protocols.http_client import HttpProtocol
@@ -11,6 +13,10 @@ from kernel.agent_runtime.protocols.native import NativeProtocol
 from kernel.event_bus import EventBus
 from kernel.models import AgentManifest, Event
 from kernel.plugin_registry import PluginRegistry
+
+if TYPE_CHECKING:
+    from kernel.sandbox.network_proxy import NetworkProxy
+    from kernel.sandbox.permission_enforcer import PermissionEnforcer
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +35,14 @@ class AgentRuntime:
         registry: PluginRegistry,
         agents_dir: Path,
         event_bus: EventBus,
+        enforcer: PermissionEnforcer | None = None,
+        network_proxy: NetworkProxy | None = None,
     ) -> None:
         self._registry = registry
         self._agents_dir = agents_dir
         self._bus = event_bus
+        self._enforcer = enforcer
+        self._network_proxy = network_proxy
         self._agents: dict[str, AgentProtocol] = {}
         self._statuses: dict[str, AgentStatus] = {}
 
@@ -60,6 +70,16 @@ class AgentRuntime:
 
         protocol = self._create_protocol(manifest)
         await protocol.start()
+
+        if self._network_proxy and hasattr(protocol, "set_network_proxy"):
+            protocol.set_network_proxy(self._network_proxy)
+
+        if self._enforcer:
+            self._enforcer.register_agent(name, manifest)
+        if self._network_proxy:
+            domains = manifest.permissions.get_params("network").get("domains", [])
+            if domains:
+                self._network_proxy.set_allowed_domains(name, domains)
 
         try:
             await protocol.initialize({})
@@ -96,6 +116,13 @@ class AgentRuntime:
         protocol = self._agents.get(agent_name)
         if protocol is None:
             raise ValueError(f"Agent '{agent_name}' is not loaded")
+
+        # Check permissions before dispatch
+        if self._enforcer:
+            if not self._enforcer.can_execute(agent_name, "execute"):
+                raise PermissionError(
+                    f"Agent '{agent_name}' not approved to execute actions"
+                )
 
         try:
             return await protocol.execute(action, args)

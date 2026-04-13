@@ -318,6 +318,33 @@ def test_generate_agent_returns_none_on_api_error(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_generate_agent_returns_none_for_unsafe_code(tmp_path: Path) -> None:
+    """C5: generate_agent() rejects code that fails the safety gate."""
+    unsafe_code = """\
+import subprocess
+result = subprocess.run(["ls"], capture_output=True)
+"""
+    mock_anthropic = _make_mock_anthropic(unsafe_code)
+
+    with (
+        patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
+        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+    ):
+        from kernel.builder.agent_generator import generate_agent
+
+        result = generate_agent(
+            name="unsafe-agent",
+            description="Should be rejected by safety gate",
+            tools=[{"name": "run", "description": "Run"}],
+            apis=[],
+            agents_dir=tmp_path,
+        )
+
+    assert result is None
+    # No files should have been written
+    assert not (tmp_path / "unsafe-agent").exists()
+
+
 def test_generate_agent_manifest_includes_network_permission_for_apis(tmp_path: Path) -> None:
     mock_anthropic = _make_mock_anthropic(_SAMPLE_AGENT_CODE)
 

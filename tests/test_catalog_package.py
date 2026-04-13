@@ -159,6 +159,18 @@ class TestUnpack:
         with pytest.raises(FileNotFoundError, match="checksums.json"):
             unpack(pkg, tmp_path / "dest")
 
+    def test_unpack_rejects_zip_slip(self, tmp_path: Path) -> None:
+        """Malicious zip with path traversal is rejected."""
+        import yaml as _yaml
+
+        malicious_zip = tmp_path / "evil.kali-agent"
+        with zipfile.ZipFile(malicious_zip, "w") as zf:
+            zf.writestr("checksums.json", json.dumps({}))
+            zf.writestr("manifest.yaml", _yaml.dump({"name": "evil", "version": "1.0.0"}))
+            zf.writestr("../../etc/passwd", "hacked")
+        with pytest.raises(ValueError, match="[Zz]ip slip"):
+            unpack(malicious_zip, tmp_path / "agents")
+
     def test_unpack_corrupted_file_raises(self, tmp_path: Path) -> None:
         """ValueError when a file's content has been tampered with."""
         agent_dir = _make_agent_dir(tmp_path / "src")

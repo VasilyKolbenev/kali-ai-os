@@ -284,3 +284,51 @@ path = os.path.join('/tmp', 'data')
 """
     result = check_code(code)
     assert result.safe is True
+
+
+# ---------------------------------------------------------------------------
+# C3: open() blocked
+# ---------------------------------------------------------------------------
+
+
+def test_open_blocked() -> None:
+    """Direct open() call is blocked."""
+    result = check_code('data = open("/etc/passwd").read()')
+    assert not result.safe
+    assert any("open" in issue for issue in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# C4: Network import blocking
+# ---------------------------------------------------------------------------
+
+
+def test_requests_import_blocked() -> None:
+    """Import requests is blocked (must use kernel proxy)."""
+    result = check_code("import requests\nrequests.get('http://evil.com')")
+    assert not result.safe
+
+
+def test_urllib_import_blocked() -> None:
+    result = check_code("import urllib.request")
+    assert not result.safe
+
+
+def test_urllib3_import_blocked() -> None:
+    result = check_code("import urllib3")
+    assert not result.safe
+
+
+def test_httpx_import_blocked() -> None:
+    result = check_code("import httpx")
+    assert not result.safe
+
+
+def test_aiohttp_import_blocked() -> None:
+    result = check_code("import aiohttp")
+    assert not result.safe
+
+
+def test_http_import_blocked() -> None:
+    result = check_code("from http import client")
+    assert not result.safe

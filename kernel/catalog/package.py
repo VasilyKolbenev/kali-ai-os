@@ -94,10 +94,15 @@ def unpack(package_path: Path, target_dir: Path) -> Path:
             raise FileNotFoundError(f"{_CHECKSUMS_FILE} missing from package")
 
         checksums: dict[str, str] = json.loads(zf.read(_CHECKSUMS_FILE))
-        for name in names:
-            if name == _CHECKSUMS_FILE:
+        agent_dir_resolved = target_dir.resolve()
+        for info in zf.infolist():
+            if info.filename == _CHECKSUMS_FILE:
                 continue
-            zf.extract(name, target_dir)
+            # Zip slip protection
+            target = (target_dir / info.filename).resolve()
+            if not str(target).startswith(str(agent_dir_resolved)):
+                raise ValueError(f"Zip slip detected: {info.filename}")
+            zf.extract(info, target_dir)
 
     for rel_path, expected in checksums.items():
         extracted = target_dir / rel_path
