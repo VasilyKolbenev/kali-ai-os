@@ -6,6 +6,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+VALID_PERMISSIONS = frozenset({
+    "storage", "notifications", "event_bus", "network", "agents", "system",
+})
+
 
 class Event(BaseModel):
     """Event Bus message envelope."""
@@ -33,6 +37,64 @@ class WSMessage(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class PermissionGrant(BaseModel):
+    """Individual permission with optional parameters."""
+
+    name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_valid(cls, v: str) -> str:
+        """Validate permission name against known set.
+
+        Args:
+            v: Permission name to validate.
+
+        Returns:
+            Validated permission name.
+
+        Raises:
+            ValueError: If name is not in VALID_PERMISSIONS.
+        """
+        if v not in VALID_PERMISSIONS:
+            raise ValueError(f"Permission must be one of {VALID_PERMISSIONS}, got: {v}")
+        return v
+
+
+class PermissionSet(BaseModel):
+    """Collection of permissions with approval tracking."""
+
+    grants: list[PermissionGrant] = Field(default_factory=list)
+    user_approved: bool = False
+    approval_timestamp: datetime | None = None
+
+    def has(self, name: str) -> bool:
+        """Check if a named permission is in the grant list.
+
+        Args:
+            name: Permission name to look up.
+
+        Returns:
+            True if the permission is granted.
+        """
+        return any(g.name == name for g in self.grants)
+
+    def get_params(self, name: str) -> dict[str, Any]:
+        """Get parameters for a named permission.
+
+        Args:
+            name: Permission name to look up.
+
+        Returns:
+            Params dict, or empty dict if not found.
+        """
+        for g in self.grants:
+            if g.name == name:
+                return g.params
+        return {}
+
+
 class AgentToolDef(BaseModel):
     """Tool definition exposed to LLM for function calling."""
 
@@ -52,7 +114,30 @@ class AgentManifest(BaseModel):
     scheduled_events: list[str] = Field(default_factory=list)
     health_check: str = "/health"
     protocol: str = "native"
-    permissions: list[str] = Field(default_factory=list)
+    permissions: PermissionSet = Field(default_factory=PermissionSet)
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def coerce_permissions(cls, v: Any) -> Any:
+        """Accept flat list ['storage', 'network'] for backward compat.
+
+        Args:
+            v: Raw permissions value — list of strings/dicts, or PermissionSet dict.
+
+        Returns:
+            Value suitable for PermissionSet construction.
+        """
+        if isinstance(v, list):
+            grants = []
+            for p in v:
+                if isinstance(p, str):
+                    # Silently skip unknown permissions for backward compat
+                    if p in VALID_PERMISSIONS:
+                        grants.append(PermissionGrant(name=p))
+                elif isinstance(p, dict):
+                    grants.append(PermissionGrant(**p))
+            return PermissionSet(grants=grants)
+        return v
 
     @field_validator("protocol")
     @classmethod

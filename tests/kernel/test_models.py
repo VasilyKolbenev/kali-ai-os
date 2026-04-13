@@ -8,6 +8,7 @@ from kernel.models import (
     AgentToolDef,
     ConfigSchema,
     Event,
+    PermissionSet,
     WSMessage,
 )
 
@@ -89,7 +90,8 @@ class TestAgentManifest:
         assert manifest.capabilities == []
         assert manifest.tools == []
         assert manifest.protocol == "native"
-        assert manifest.permissions == []
+        assert isinstance(manifest.permissions, PermissionSet)
+        assert manifest.permissions.grants == []
         assert manifest.scheduled_events == []
 
     def test_manifest_invalid_protocol(self) -> None:
