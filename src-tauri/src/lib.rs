@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -17,19 +18,54 @@ fn backend_status() -> String {
     }
 }
 
-fn start_backend(app: &AppHandle) {
-    let app_dir = app
-        .path()
-        .resource_dir()
-        .unwrap_or_else(|_| std::env::current_exe().unwrap().parent().unwrap().to_path_buf());
+fn find_backend() -> Option<PathBuf> {
+    // Search in multiple locations for kali-backend.exe
+    let candidates = [
+        // 1. Next to this exe (installed mode)
+        std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("kali-backend.exe"))),
+        // 2. In dist/ (dev mode — built by PyInstaller)
+        std::env::current_exe().ok().and_then(|p| {
+            p.parent()
+                .and_then(|d| d.parent()) // src-tauri/target/release -> src-tauri/target
+                .and_then(|d| d.parent()) // -> src-tauri
+                .and_then(|d| d.parent()) // -> project root
+                .map(|root| root.join("dist").join("kali-backend.exe"))
+        }),
+        // 3. Current working directory
+        Some(PathBuf::from("kali-backend.exe")),
+        // 4. Program Files
+        Some(PathBuf::from(r"C:\Program Files\KALI\kali-backend.exe")),
+    ];
 
-    let backend_exe = app_dir.join("kali-backend.exe");
-    if !backend_exe.exists() {
-        eprintln!("kali-backend.exe not found, start kernel manually: uv run python -m kernel.main");
-        return;
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn start_backend(app: &AppHandle) {
+    // First check if backend is already running
+    if let Ok(resp) = ureq::get("http://localhost:3005/health").call() {
+        if resp.status() == 200 {
+            eprintln!("Backend already running on :3005");
+            return;
+        }
     }
 
-    match Command::new(&backend_exe).current_dir(&app_dir).spawn() {
+    let backend_exe = match find_backend() {
+        Some(path) => path,
+        None => {
+            eprintln!("kali-backend.exe not found. Start kernel manually: uv run python -m kernel.main");
+            return;
+        }
+    };
+
+    let work_dir = backend_exe.parent().unwrap_or(&backend_exe).to_path_buf();
+    eprintln!("Starting backend: {:?}", backend_exe);
+
+    match Command::new(&backend_exe).current_dir(&work_dir).spawn() {
         Ok(child) => {
             eprintln!("Started kali-backend (PID: {})", child.id());
             *app.state::<BackendProcess>().0.lock().unwrap() = Some(child);

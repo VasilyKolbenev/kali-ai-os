@@ -27,13 +27,12 @@
       "tooltip": "KALI — Personal AI OS"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:3002 http://localhost:3005 ws://localhost:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:3002 http://localhost:3005 ws://localhost:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:3005"
     }
   },
   "plugins": {
     "shell": {
       "open": true
-    },
-    "global-shortcut": {}
+    }
   }
 }
