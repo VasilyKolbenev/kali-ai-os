@@ -24,6 +24,7 @@ function playSound(category: keyof typeof SOUNDS) {
 export function ChatInput() {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
+  const [voiceActive, setVoiceActive] = useState(false);
   const messages = useChatStore((s) => s.messages);
   const addMessage = useChatStore((s) => s.addMessage);
   const isLoading = useChatStore((s) => s.isLoading);
@@ -36,33 +37,23 @@ export function ChatInput() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Speak response with JARVIS voice — try local Qwen3-TTS first, then kernel /tts
+  // Speak response with JARVIS voice — full synthesis (best quality)
+  // XTTS v2 + RVC pipeline on port 3002
+  const TTS_URL = "http://localhost:3002";
+
   const speakJarvis = async (text: string) => {
     if (!text || text.length < 5) return;
+    setVoiceState("speaking");
+
     try {
-      setVoiceState("speaking");
+      const res = await fetch(`${TTS_URL}/synthesize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
 
-      // Try local TTS service directly (port 3001)
-      let res: Response | null = null;
-      try {
-        res = await fetch("http://localhost:3001/synthesize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, language: "russian" }),
-        });
-      } catch {
-        // Local TTS not running, try kernel proxy
-        res = await fetch("http://localhost:3000/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        });
-      }
-
-      if (!res || !res.ok) {
-        console.warn("TTS failed:", res?.status);
-        setVoiceState("idle");
-        return;
+      if (!res.ok) {
+        throw new Error(`TTS failed: ${res.status}`);
       }
 
       const blob = await res.blob();
@@ -72,9 +63,11 @@ export function ChatInput() {
         setVoiceState("idle");
         URL.revokeObjectURL(url);
       };
-      audio.play();
-    } catch (e) {
-      console.error("TTS error:", e);
+      audio.play().catch(() => {
+        setVoiceState("idle");
+        URL.revokeObjectURL(url);
+      });
+    } catch {
       setVoiceState("idle");
     }
   };
@@ -168,6 +161,20 @@ export function ChatInput() {
     recognition.start();
   };
 
+  const toggleVoice = async () => {
+    try {
+      if (voiceActive) {
+        await api.voiceStop();
+        setVoiceActive(false);
+      } else {
+        await api.voiceStart();
+        setVoiceActive(true);
+      }
+    } catch {
+      // Voice pipeline not available
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -238,6 +245,19 @@ export function ChatInput() {
           title={listening ? "Stop listening" : "Start voice input"}
         >
           {listening ? "\u25FC" : "\uD83C\uDFA4"}
+        </button>
+
+        {/* JARVIS backend voice toggle */}
+        <button
+          onClick={toggleVoice}
+          className={`p-2 rounded-lg transition flex-shrink-0 ${
+            voiceActive
+              ? "bg-[var(--j-green)]/20 text-[var(--j-green)]"
+              : "text-white/30 hover:text-white/60"
+          }`}
+          title={voiceActive ? "Stop JARVIS voice" : "Start JARVIS voice"}
+        >
+          <span className="text-xs font-mono">{voiceActive ? "J\u25CF" : "J\u25CB"}</span>
         </button>
 
         {/* Text input */}

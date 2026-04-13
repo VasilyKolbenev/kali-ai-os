@@ -50,4 +50,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  // Agent tool execution
+  executeAgentTool: (agentName: string, action: string, args: Record<string, unknown> = {}) =>
+    fetchJSON<Record<string, unknown>>(`/agents/${agentName}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, args }),
+    }),
+
+  // Skill execution
+  executeSkill: (skillName: string, action: string, args: Record<string, unknown> = {}) =>
+    fetchJSON<Record<string, unknown>>(`/skills/${skillName}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    }),
 };

@@ -7,12 +7,12 @@ interface DashboardState {
 
 export const useDashboardStore = create<DashboardState>((set) => ({
   widgets: {
-    sleep: { hours: 7.2, hrv: 51 },
-    tasks: { done: 5, total: 8 },
-    calendar: { next: "Team call", time: "10:00 AM" },
-    spending: { amount: 340, currency: "$" },
-    energy: { calories: 1800 },
-    agents: { running: 0 },
+    sleep: null,
+    tasks: null,
+    calendar: null,
+    spending: null,
+    energy: null,
+    agents: null,
   },
   updateWidget: (name, data) =>
     set((state) => ({ widgets: { ...state.widgets, [name]: data } })),

@@ -5,7 +5,7 @@ import { useDashboardStore } from "../stores/dashboardStore";
 import { useAppStore } from "../stores/appStore";
 import type { WSMessage } from "./types";
 
-const WS_URL = "ws://localhost:3000/ws";
+const WS_URL = "ws://localhost:3005/ws";
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);

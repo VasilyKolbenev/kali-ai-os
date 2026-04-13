@@ -13,19 +13,51 @@ export function Dashboard() {
 
   useEffect(() => {
     async function fetchLiveData() {
+      // Agents widget
       try {
-        const [running, _health] = await Promise.all([
-          api.runningAgents(),
-          api.health(),
-        ]);
+        const running = await api.runningAgents();
         updateWidget("agents", { running: running.length });
-        // _health available for future widget updates
-      } catch (e) {
-        // Kernel may not be running — keep mock data
+      } catch {
+        // kernel not running — keep previous data
+      }
+
+      // Tasks widget
+      try {
+        const taskData = await api.executeAgentTool("tasks", "get_summary") as {
+          total?: number; done?: number; pending?: number;
+        };
+        updateWidget("tasks", { done: taskData.done ?? 0, total: taskData.total ?? 0 });
+      } catch {
+        // agent not running — keep previous data
+      }
+
+      // Calendar widget
+      try {
+        const calData = await api.executeAgentTool("calendar", "get_events", { date: "today" }) as {
+          events?: Array<{ title?: string; start?: string }>;
+        };
+        const events = calData.events ?? [];
+        updateWidget("calendar", {
+          next: events[0]?.title ?? "No events",
+          time: events[0]?.start ?? "",
+        });
+      } catch {
+        // agent not running — keep previous data
+      }
+
+      // Weather widget (stored in energy slot if no dedicated widget)
+      try {
+        const wx = await api.executeAgentTool("weather", "get_weather", { city: "Moscow" }) as {
+          temp_c?: number; condition?: string;
+        };
+        updateWidget("weather", { temp_c: wx.temp_c, condition: wx.condition });
+      } catch {
+        // agent not running — keep previous data
       }
     }
+
     fetchLiveData();
-    const interval = setInterval(fetchLiveData, 10000);
+    const interval = setInterval(fetchLiveData, 30000);
     return () => clearInterval(interval);
   }, [updateWidget]);
 

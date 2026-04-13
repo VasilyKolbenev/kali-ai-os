@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Search, Download, Package, Sparkles, Zap } from "lucide-react";
 import { api } from "../../api/client";
+import { Builder } from "../Builder/Builder";
 
 interface SkillInfo {
   name: string;
@@ -27,6 +28,9 @@ export function AgentStore() {
 
   useEffect(() => {
     api.skills().then(setSkills).catch(console.error);
+    api.catalogTrending()
+      .then((data) => setCatalogResults(data.results || []))
+      .catch(() => {}); // silently fail if catalog not configured
   }, []);
 
   const handleSearch = async () => {
@@ -61,6 +65,9 @@ export function AgentStore() {
             {skills.length} installed
           </span>
         </div>
+
+        {/* Builder */}
+        <Builder />
 
         {/* Search */}
         <div className="glass p-3 mb-6 flex gap-2">
@@ -131,6 +138,11 @@ export function AgentStore() {
                     </div>
                   </div>
                   <button
+                    onClick={async () => {
+                      // For cloud packages, would call api.catalogInstall
+                      // For now, show that install from catalog requires Supabase
+                      alert(`Install "${item.name}" — catalog not configured yet`);
+                    }}
                     className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
                       text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
                       transition flex items-center gap-1"
