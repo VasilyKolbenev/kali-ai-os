@@ -792,9 +792,12 @@ def create_app(
 
     @app.get("/catalog/search")
     async def catalog_search(request: Request, q: str = "", category: str = "") -> dict[str, Any]:
-        """Search cloud catalog."""
+        """Search catalog — local agents first, then cloud."""
         client = request.app.state.catalog_client
-        results = await client.search(q, category=category or None)
+        local = await client.local_search(q, resolved_agents_dir) if q else []
+        cloud = await client.search(q, category=category or None) if q else []
+        local_names = {r["name"] for r in local}
+        results = local + [c for c in cloud if c.get("name") not in local_names]
         return {"results": results, "count": len(results)}
 
     @app.post("/catalog/pack/{name}")
@@ -843,8 +846,12 @@ def create_app(
 
     @app.get("/catalog/trending")
     async def catalog_trending(request: Request) -> dict[str, Any]:
-        """Get trending packages from cloud catalog."""
+        """Trending — cloud packages, or local agents as fallback."""
         client = request.app.state.catalog_client
-        return {"results": await client.trending()}
+        cloud = await client.trending()
+        if cloud:
+            return {"results": cloud}
+        local = await client.local_search("", resolved_agents_dir)
+        return {"results": local}
 
     return app

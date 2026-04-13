@@ -18,6 +18,7 @@ interface CatalogItem {
   downloads: number;
   rating_avg: number;
   trust_level: string;
+  installed?: boolean;
 }
 
 export function AgentStore() {
@@ -138,15 +139,21 @@ export function AgentStore() {
                       &#9733; {item.rating_avg?.toFixed(1)}
                     </div>
                   </div>
-                  <button
-                    onClick={() => setInstallMsg(`Configure Supabase to install "${item.name}" from cloud`)}
-                    className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
-                      text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
-                      transition flex items-center gap-1"
-                  >
-                    <Download className="w-3 h-3" />
-                    Install
-                  </button>
+                  {item.installed ? (
+                    <span className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10 text-[var(--j-green)]">
+                      Installed
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setInstallMsg(`Configure Supabase to install "${item.name}" from cloud`)}
+                      className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
+                        text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
+                        transition flex items-center gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      Install
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

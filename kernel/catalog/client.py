@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,56 @@ class CatalogClient:
         except Exception as exc:
             logger.error("catalog.publish failed: %s", exc)
             return {}
+
+    async def local_search(
+        self,
+        query: str,
+        agents_dir: Path | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search locally installed agents/skills by name/description.
+
+        Args:
+            query: Search string (empty returns all).
+            agents_dir: Path to agents directory. Defaults to agents/.
+
+        Returns:
+            List of matching package dicts with installed=True.
+        """
+        if agents_dir is None:
+            agents_dir = Path("agents")
+        results: list[dict[str, Any]] = []
+        if not agents_dir.is_dir():
+            return results
+        query_lower = query.lower()
+        for agent_dir in agents_dir.iterdir():
+            if not agent_dir.is_dir() or agent_dir.name.startswith("_"):
+                continue
+            manifest_path = agent_dir / "manifest.yaml"
+            if not manifest_path.exists():
+                continue
+            try:
+                import yaml  # type: ignore[import-untyped]
+
+                with open(manifest_path) as f:
+                    manifest = yaml.safe_load(f)
+                name: str = manifest.get("name", "")
+                desc: str = manifest.get("description", "")
+                if query_lower and query_lower not in name.lower() and query_lower not in desc.lower():
+                    continue
+                results.append({
+                    "name": name,
+                    "description": desc,
+                    "type": "skill" if (agent_dir / "skill.yaml").exists() else "agent",
+                    "category": "local",
+                    "downloads": 0,
+                    "rating_avg": 0,
+                    "trust_level": "official",
+                    "version": manifest.get("version", "1.0.0"),
+                    "installed": True,
+                })
+            except Exception:
+                continue
+        return results
 
     async def trending(self, limit: int = 10) -> list[dict]:
         """Return top packages sorted by download count.
