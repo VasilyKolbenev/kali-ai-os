@@ -1,0 +1,14 @@
+template: tracker
+display_name: "Трекер воды"
+config:
+  unit: "мл"
+  daily_goal: 2000
+  reminders:
+    enabled: true
+    interval_hours: 2
+    start_hour: 8
+    end_hour: 22
+    message: "Время выпить воды!"
+  tracking:
+    daily_summary: true
+    weekly_chart: true

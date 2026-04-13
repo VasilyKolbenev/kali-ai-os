@@ -26,6 +26,7 @@ from kernel.notifications import NotificationManager
 from kernel.plugin_registry import PluginRegistry
 from kernel.routines import RoutineManager
 from kernel.scheduler import Scheduler
+from kernel.skill_executor import SkillExecutor
 from kernel.voice.pipeline import VoicePipeline
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,18 @@ def create_app(
         config_manager.load()
         plugin_registry = PluginRegistry(resolved_agents_dir)
         plugin_registry.discover()
+
+        # Initialize skill executor
+        skill_executor = SkillExecutor(data_dir=Path("data"))
+        for manifest in plugin_registry.list_skills():
+            skill_dir = Path("agents") / manifest.name
+            try:
+                skill_executor.load_skill(skill_dir)
+                logger.info("Loaded skill: %s", manifest.name)
+            except Exception as e:
+                logger.warning("Failed to load skill %s: %s", manifest.name, e)
+        app.state.skill_executor = skill_executor
+
         agent_runtime = AgentRuntime(
             registry=plugin_registry,
             agents_dir=resolved_agents_dir,
@@ -92,6 +105,25 @@ def create_app(
         app.state.agent_builder = agent_builder
         scheduler = Scheduler(event_bus, config_manager.config.schedule)
         scheduler.start()
+
+        # Register skill schedules
+        for name in skill_executor.list_skills():
+            info = skill_executor.get_skill_info(name)
+            if info:
+                config = info.get("config", {})
+                cron = None
+                if "schedule" in config and "cron" in config["schedule"]:
+                    cron = config["schedule"]["cron"]
+                elif "reminders" in config and config["reminders"].get("enabled"):
+                    interval_h = config["reminders"].get("interval_hours")
+                    if interval_h:
+                        cron = f"0 */{interval_h} * * *"
+                if cron:
+                    try:
+                        scheduler.register_cron(name, cron, topic=f"skill.{name}.trigger")
+                        logger.info("Registered cron for skill %s: %s", name, cron)
+                    except ValueError as e:
+                        logger.warning("Invalid cron for skill %s: %s", name, e)
 
         # Voice pipeline (optional — only if dependencies available)
         try:
@@ -465,35 +497,59 @@ def create_app(
             except Exception:
                 pass
 
-        # Default: route through LLM
+        # Default: direct OpenAI call (no voice pipeline dependency)
         try:
-            from kernel.llm_router import LLMRequest
+            import openai
 
-            llm_request = LLMRequest(
-                text=text,
-                context=s.memory.get_context(),
-                available_tools=s.plugin_registry.get_all_tools(),
+            client = openai.AsyncOpenAI()
+            llm_config = s.config_manager.config.llm
+            messages = s.memory.get_context() + [
+                {"role": "user", "content": text},
+            ]
+
+            completion = await client.chat.completions.create(
+                model=llm_config.cloud_model,
+                messages=messages,
             )
-            llm_response = await s.voice_pipeline._llm.route(llm_request)
-            s.memory.add_turn("user", text)
-            s.memory.add_turn("assistant", llm_response.text)
+
+            response_text = (completion.choices[0].message.content or "").strip()
+            if response_text:
+                s.memory.add_turn("user", text)
+                s.memory.add_turn("assistant", response_text)
             return {
-                "response": llm_response.text,
-                "source": f"llm-{llm_response.provider_used}",
+                "response": response_text or "Не удалось получить ответ.",
+                "source": f"llm-{llm_config.cloud_provider}",
             }
         except Exception as e:
             logger.warning("LLM call failed: %s", e)
             return {
-                "response": (
-                    f"I heard: \"{text}\". LLM error: {e}. "
-                    "Check your API key in .env file."
-                ),
+                "response": f"LLM ошибка: {e}",
                 "source": "system",
             }
 
+    @app.get("/skills")
+    async def list_skills_route(request: Request) -> list[dict[str, Any]]:
+        """List all loaded skills."""
+        executor = request.app.state.skill_executor
+        return [executor.get_skill_info(name) for name in executor.list_skills()]
+
+    @app.post("/skills/{name}/{action}")
+    async def execute_skill_route(name: str, action: str, request: Request) -> Any:
+        """Execute a skill action."""
+        body: dict[str, Any] = {}
+        if request.headers.get("content-type") == "application/json":
+            body = await request.json()
+        try:
+            result = await request.app.state.skill_executor.execute(name, action, body)
+            return result
+        except ValueError as e:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse({"error": str(e)}, status_code=404)
+
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech — ElevenLabs (cloned JARVIS) or OpenAI fallback."""
+        """Convert text to speech — local XTTS v2 + RVC (streaming) with cloud fallbacks."""
         from fastapi.responses import StreamingResponse
         import io
         import os
@@ -503,15 +559,39 @@ def create_app(
         if not text:
             return {"error": "No text provided"}
 
-        # Priority 1: Local NeuTTS Air (cloned JARVIS voice, no cloud dependency)
+        tts_url = os.environ.get("TTS_URL", "http://127.0.0.1:3002")
+
+        # Priority 1: Local XTTS v2 + RVC streaming (cloned JARVIS voice)
         try:
             import httpx
 
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    "http://127.0.0.1:3001/synthesize",
+                    f"{tts_url}/synthesize/stream",
                     json={"text": text},
-                    timeout=30.0,
+                    timeout=120.0,
+                )
+                if resp.status_code == 200:
+                    return StreamingResponse(
+                        io.BytesIO(resp.content),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+        except Exception as e:
+            logger.debug("Local TTS streaming not available: %s", e)
+
+        # Priority 1b: Local XTTS v2 + RVC non-streaming fallback
+        try:
+            import httpx
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{tts_url}/synthesize",
+                    json={"text": text},
+                    timeout=120.0,
                 )
                 if resp.status_code == 200:
                     return StreamingResponse(

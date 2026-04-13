@@ -1,0 +1,23 @@
+name: water-tracker
+version: "1.0.0"
+description: "Tracks daily water intake with reminders every 2 hours"
+protocol: skill
+capabilities:
+  - tracker
+tools:
+  - name: log
+    description: "Log water intake"
+    parameters:
+      amount:
+        type: number
+        description: "Amount in ml"
+  - name: summary
+    description: "Get daily summary"
+    parameters: {}
+  - name: trend
+    description: "Get weekly trend"
+    parameters: {}
+scheduled_events: []
+permissions:
+  - storage
+  - notifications

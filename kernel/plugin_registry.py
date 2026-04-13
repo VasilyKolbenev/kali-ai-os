@@ -81,3 +81,11 @@ class PluginRegistry:
             return None
         agent_name = tool_name.split("__")[0]
         return self._agents.get(agent_name)
+
+    def list_skills(self) -> list[AgentManifest]:
+        """Return only manifests with protocol='skill'."""
+        return [m for m in self._agents.values() if m.protocol == "skill"]
+
+    def list_agents_only(self) -> list[AgentManifest]:
+        """Return only manifests with protocol!='skill'."""
+        return [m for m in self._agents.values() if m.protocol != "skill"]
