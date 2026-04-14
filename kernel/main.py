@@ -954,9 +954,9 @@ def create_app(
                 "speaker": os.environ.get("SILERO_SPEAKER", "eugene"),
             },
             "voice": {
-                "wake_word": request.app.state.config_manager.config.voice.wake_word,
-                "mode": request.app.state.config_manager.config.voice.mode,
-                "stt_model": request.app.state.config_manager.config.voice.stt_model,
+                "wake_word": getattr(getattr(getattr(request.app.state, "config_manager", None), "config", None), "voice", None) and request.app.state.config_manager.config.voice.wake_word or os.environ.get("WAKE_WORD", "jarvis"),
+                "mode": os.environ.get("VOICE_MODE", "wake_word"),
+                "stt_model": os.environ.get("STT_MODEL", "base"),
             },
             "language": os.environ.get("KALI_LANGUAGE", "ru"),
         }
