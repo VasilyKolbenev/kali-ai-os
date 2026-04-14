@@ -44,19 +44,39 @@ class SpeechToText:
 
     def load(self) -> None:
         """Load the Whisper model via faster-whisper."""
+        import os
+
+        # Use project-local HF cache to avoid Windows symlink issues
+        hf_cache = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", ".hf_cache",
+        )
+        os.makedirs(hf_cache, exist_ok=True)
+        os.environ.setdefault("HF_HOME", hf_cache)
+        os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
         try:
             from faster_whisper import WhisperModel
 
-            compute_type = "int8" if self._device == "cpu" else "auto"
+            # Auto-detect GPU: try CUDA first, fallback to CPU
+            device = "cpu"
+            compute_type = "int8"
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    compute_type = "float16"
+            except ImportError:
+                pass
+
             self._model = WhisperModel(
                 self.model_size,
-                device=self._device if self._device != "auto" else "auto",
+                device=device,
                 compute_type=compute_type,
             )
             self._loaded = True
-            logger.info("Whisper model loaded: %s", self.model_size)
-        except Exception:
-            logger.warning("Failed to load Whisper model, STT disabled")
+            logger.info("Whisper model loaded: %s (%s/%s)", self.model_size, device, compute_type)
+        except Exception as e:
+            logger.warning("Failed to load Whisper model: %s", e)
             self._loaded = False
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> STTResult:

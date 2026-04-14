@@ -22,6 +22,8 @@ DATAS = [
     (str(ROOT / "config"), "config"),
     # RVC ONNX inference module
     (str(ROOT / "services" / "tts" / "rvc_onnx.py"), "services/tts"),
+    # JARVIS voice clips
+    (str(ROOT / "resources" / "sounds"), "resources/sounds"),
 ]
 
 # Hidden imports that PyInstaller can't detect

@@ -134,7 +134,7 @@ export function ChatInput() {
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       // Ignore input while JARVIS is speaking (prevents self-echo)
-      const currentState = useVoiceStore.getState().voiceState;
+      const currentState = useVoiceStore.getState().state;
       if (currentState === "speaking") {
         return;
       }

@@ -77,7 +77,14 @@ Section "Install"
     SetOutPath "$INSTDIR\agents"
     File /r "..\agents\*.*"
 
+    ; JARVIS voice clips
+    SetOutPath "$INSTDIR\resources\sounds\ru"
+    File /r "..\resources\sounds\ru\*.*"
+    SetOutPath "$INSTDIR\resources\sounds\en"
+    File /r "..\resources\sounds\en\*.*"
+
     ; Create data directories
+    SetOutPath "$INSTDIR"
     CreateDirectory "$INSTDIR\data"
     CreateDirectory "$INSTDIR\data\agents"
     CreateDirectory "$INSTDIR\models"
