@@ -44,6 +44,26 @@ from kernel.catalog.installer import install_package
 logger = logging.getLogger(__name__)
 
 
+def _mask_key(key: str) -> str:
+    """Mask API key for display: sk-abc...xyz"""
+    if not key or len(key) < 8:
+        return ""
+    return f"{key[:7]}***{key[-4:]}"
+
+
+def _save_env(updates: dict[str, str]) -> None:
+    """Save/update keys in .env file."""
+    env_path = Path(".env")
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+    existing.update(updates)
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+
+
 def _play_audio(audio: Any, sr: int) -> None:
     """Play audio through system speakers via sounddevice."""
     import numpy as np
@@ -908,6 +928,58 @@ def create_app(
             return {"results": cloud}
         local = await client.local_search("", resolved_agents_dir)
         return {"results": local}
+
+    @app.get("/settings")
+    async def get_settings(request: Request) -> dict[str, Any]:
+        """Get current settings."""
+        import os
+        return {
+            "llm": {
+                "provider": os.environ.get("LLM_PROVIDER", "openai"),
+                "openai_key": _mask_key(os.environ.get("OPENAI_API_KEY", "")),
+                "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                "anthropic_key": _mask_key(os.environ.get("ANTHROPIC_API_KEY", "")),
+                "anthropic_model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            },
+            "tts": {
+                "enabled": os.environ.get("RVC_ENABLED", "1") == "1",
+                "pitch_shift": int(os.environ.get("RVC_PITCH_SHIFT", "5")),
+                "speaker": os.environ.get("SILERO_SPEAKER", "eugene"),
+            },
+            "voice": {
+                "wake_word": request.app.state.config_manager.config.voice.wake_word,
+                "mode": request.app.state.config_manager.config.voice.mode,
+                "stt_model": request.app.state.config_manager.config.voice.stt_model,
+            },
+        }
+
+    @app.post("/settings")
+    async def update_settings(request: Request) -> dict[str, Any]:
+        """Update settings. Persists API keys to .env file."""
+        import os
+        body = await request.json()
+
+        updates: dict[str, str] = {}
+        if "openai_key" in body and body["openai_key"] and not body["openai_key"].startswith("sk-***"):
+            os.environ["OPENAI_API_KEY"] = body["openai_key"]
+            updates["OPENAI_API_KEY"] = body["openai_key"]
+        if "anthropic_key" in body and body["anthropic_key"] and not body["anthropic_key"].startswith("sk-***"):
+            os.environ["ANTHROPIC_API_KEY"] = body["anthropic_key"]
+            updates["ANTHROPIC_API_KEY"] = body["anthropic_key"]
+        if "openai_model" in body:
+            os.environ["OPENAI_MODEL"] = body["openai_model"]
+            updates["OPENAI_MODEL"] = body["openai_model"]
+        if "anthropic_model" in body:
+            os.environ["ANTHROPIC_MODEL"] = body["anthropic_model"]
+            updates["ANTHROPIC_MODEL"] = body["anthropic_model"]
+        if "provider" in body:
+            os.environ["LLM_PROVIDER"] = body["provider"]
+            updates["LLM_PROVIDER"] = body["provider"]
+
+        if updates:
+            _save_env(updates)
+
+        return {"status": "updated", "keys": list(updates.keys())}
 
     return app
 

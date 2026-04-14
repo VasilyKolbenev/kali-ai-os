@@ -66,4 +66,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args),
     }),
+
+  // Settings
+  settings: () => fetchJSON<Record<string, unknown>>("/settings"),
+  updateSettings: (data: Record<string, unknown>) =>
+    fetchJSON<Record<string, unknown>>("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
 };
