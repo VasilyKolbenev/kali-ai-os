@@ -482,44 +482,76 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [x] Agent lifecycle (load/dispatch/health/shutdown)
 - [x] 9 built-in agents
 
-### Phase 4: UI Shell 🔧 IN PROGRESS
+### Phase 4: UI Shell ✅ DONE
 - [x] React 19 + TypeScript frontend
 - [x] Three.js animated blob avatar
-- [x] Dashboard with widgets
-- [x] Agent panel
-- [x] Voice visualizer
+- [x] Dashboard with widgets (real data: weather, tasks, calendar, sleep, spending)
+- [x] Agent panel (start/stop agents)
+- [x] Voice visualizer (Web Audio API FFT)
 - [x] WebSocket real-time updates
-- [ ] Agent Store UI (marketplace browse/install)
-- [ ] AgentBuilder visual companion
-- [ ] Tauri desktop packaging
+- [x] Agent Store UI (browse, search, installed badges)
+- [x] Builder UI (classify intent + create skill from text)
+- [x] Settings page (4 LLM providers, language selector, API keys)
+- [x] Tauri 2 desktop packaging (13 MB exe)
+- [x] NSIS installer (KALI-Setup-0.1.0.exe, ~300 MB)
+- [x] System tray + Ctrl+Space global hotkey
+- [x] Russian labels throughout UI
 
-### Phase 5: AI OS Layer 📋 PLANNED
-- [ ] Skill template engine (tracker, monitor, notifier, reminder, logger)
-- [ ] AgentBuilder v2 (LLM-powered code generation)
-- [ ] Voice Wizard (guided agent/skill creation)
-- [ ] Permission Enforcer (sandbox runtime)
-- [ ] Code Safety Gate (static analysis + LLM review)
-- [ ] Network Proxy (domain whitelist)
-- [ ] Agent-to-agent communication
+### Phase 5: AI OS Layer ✅ DONE
+- [x] Skill template engine (tracker, monitor, notifier, reminder, logger)
+- [x] SkillExecutor (in-process, no subprocess)
+- [x] Dynamic cron scheduler (croniter)
+- [x] AgentBuilder v2 (LLM-powered code generation via Claude API)
+- [x] Intent Classifier (skill vs agent detection)
+- [x] Voice Wizard (guided creation with questions)
+- [x] Permission Enforcer (sandbox runtime, per-agent approval)
+- [x] Code Safety Gate (true AST analysis, not string matching)
+- [x] Network Proxy (JSON-RPC, domain whitelist, rate limiting)
+- [x] Filesystem sandbox (path traversal protection)
+- [ ] Agent-to-agent communication (v2.5)
 
-### Phase 6: Cloud Catalog 📋 PLANNED
-- [ ] Supabase backend (catalog, auth, storage)
-- [ ] Package format (.kali-agent)
-- [ ] Publish flow (voice → package → upload)
-- [ ] Install flow (search → download → verify → install)
+### Phase 6: Cloud Catalog ✅ DONE (local mode)
+- [x] Package format (.kali-agent zip with checksums)
+- [x] Local catalog search (scans agents/*/manifest.yaml)
+- [x] Install flow (unpack → safety gate → deploy)
+- [x] Pack flow (agent dir → .kali-agent)
+- [x] Supabase client (ready, needs cloud deployment)
+- [ ] Supabase cloud deployment (schema, auth, storage)
+- [ ] Publish flow (voice → package → upload to cloud)
 - [ ] Ratings & reviews
 - [ ] Trust levels (official/verified/community)
 - [ ] Author profiles
 
-### Phase 7: Smart Integrations 📋 PLANNED
-- [ ] Home Assistant (smart-home agent v2)
-- [ ] Claude Code (coding agent v2)
-- [ ] Google Calendar sync
+### Phase 7: Smart Integrations ✅ MOSTLY DONE
+- [x] Home Assistant (smart-home agent v2 — REST API with mock fallback)
+- [x] Claude Code (coding agent v2 — explain/review/suggest via Claude API)
+- [x] JARVIS pre-recorded voice clips (greet, ok, reply, thanks — 17 clips)
+- [x] Numbers-to-words for TTS (Russian numerals)
+- [x] Server-side audio playback (sounddevice, no browser dependency)
+- [ ] Google Calendar sync (agent exists, needs OAuth setup)
 - [ ] Garmin/Apple Health
 - [ ] Banking APIs
 - [ ] Notion/Obsidian
 
-### Phase 8: Hardware 📋 FUTURE
+### Phase 8: Desktop Distribution 🔧 IN PROGRESS
+- [x] PyInstaller backend (kali-backend.exe, 292 MB)
+- [x] Tauri desktop (kali-desktop.exe, 13 MB)
+- [x] NSIS installer (WebView2 auto-install, desktop shortcut)
+- [x] Auto-start backend from Tauri (find_backend in 4 locations)
+- [x] AppData for writable data (DB, models — Program Files is read-only)
+- [x] Model downloader for first run
+- [ ] PyInstaller backend E2E verification on clean install
+- [ ] Auto-download ONNX voice models on first launch (progress bar in UI)
+- [ ] Installer version bumping + auto-update mechanism
+
+### Phase 9: Mobile 📋 PLANNED
+- [ ] Server consolidation (one process, one port) ✅ DONE
+- [ ] React Native app (iOS + Android)
+- [ ] Push notifications
+- [ ] Background microphone (wake word)
+- [ ] Cloud relay (Tailscale / Cloudflare Tunnel)
+
+### Phase 10: Hardware 📋 FUTURE
 - [ ] Raspberry Pi build
 - [ ] Touchscreen UI optimization
 - [ ] Audio I/O hardware optimization
