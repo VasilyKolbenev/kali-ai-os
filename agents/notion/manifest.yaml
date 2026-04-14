@@ -1,0 +1,29 @@
+name: notion
+version: "1.0.0"
+description: "Notion workspace integration — search, read, and create pages"
+protocol: native
+capabilities:
+  - notion.search
+  - notion.read
+  - notion.write
+tools:
+  - name: search
+    description: "Search Notion pages and databases"
+    parameters:
+      query: { type: string, description: "Search query" }
+  - name: get_page
+    description: "Get a Notion page by ID"
+    parameters:
+      page_id: { type: string, description: "Notion page UUID" }
+  - name: create_page
+    description: "Create a new page in a Notion database"
+    parameters:
+      title: { type: string, description: "Page title" }
+      content: { type: string, description: "Page text content" }
+      database_id: { type: string, description: "Parent database ID" }
+permissions:
+  - name: network
+    params:
+      domains:
+        - "api.notion.com"
+  - name: storage

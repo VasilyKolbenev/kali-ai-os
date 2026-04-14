@@ -1,0 +1,27 @@
+name: todoist
+version: "1.0.0"
+description: "Todoist task management — list, add, and complete tasks"
+protocol: native
+capabilities:
+  - todoist.read
+  - todoist.write
+tools:
+  - name: get_tasks
+    description: "List all active Todoist tasks"
+    parameters: {}
+  - name: add_task
+    description: "Create a new Todoist task"
+    parameters:
+      content: { type: string, description: "Task text" }
+      priority: { type: integer, description: "Priority 1-4 (4=urgent), default 1" }
+      due_string: { type: string, description: "Natural language due date, e.g. 'tomorrow'" }
+  - name: complete_task
+    description: "Mark a Todoist task as completed"
+    parameters:
+      task_id: { type: string, description: "Task ID to complete" }
+permissions:
+  - name: network
+    params:
+      domains:
+        - "api.todoist.com"
+  - name: storage

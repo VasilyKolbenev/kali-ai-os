@@ -796,6 +796,78 @@ def create_app(
             except Exception:
                 pass
 
+        # Notion routing
+        if any(w in text_lower for w in ["notion", "заметк", "note"]):
+            try:
+                result = await s.agent_runtime.dispatch("notion", "search", {"query": text})
+                count = result.get("count", 0)
+                if _is_ru:
+                    resp = f"Notion: найдено {count} результатов"
+                else:
+                    resp = f"Notion: found {count} results"
+                return {"response": resp, "source": "notion-agent", "data": result}
+            except Exception:
+                pass
+
+        # Todoist routing
+        if any(w in text_lower for w in ["todoist", "задач", "task", "todo"]):
+            try:
+                result = await s.agent_runtime.dispatch("todoist", "get_tasks", {})
+                if "error" not in result:
+                    count = result.get("count", 0)
+                    if _is_ru:
+                        resp = f"Todoist: {count} активных задач"
+                    else:
+                        resp = f"Todoist: {count} active tasks"
+                    return {"response": resp, "source": "todoist-agent", "data": result}
+            except Exception:
+                pass
+
+        # GitHub routing
+        if any(w in text_lower for w in ["github", "гитхаб", "pr", "pull request", "issue"]):
+            try:
+                result = await s.agent_runtime.dispatch("github", "my_repos", {})
+                if "error" not in result:
+                    count = result.get("count", 0)
+                    if _is_ru:
+                        resp = f"GitHub: {count} репозиториев"
+                    else:
+                        resp = f"GitHub: {count} repositories"
+                    return {"response": resp, "source": "github-agent", "data": result}
+            except Exception:
+                pass
+
+        # News routing
+        if any(w in text_lower for w in ["news", "новост", "дайджест"]):
+            try:
+                result = await s.agent_runtime.dispatch("news", "top_headlines", {"country": "ru" if _is_ru else "us"})
+                if "error" not in result:
+                    articles = result.get("articles", [])
+                    headlines = [a["title"] for a in articles[:3] if a.get("title")]
+                    if _is_ru:
+                        resp = "Топ новости: " + " | ".join(headlines)
+                    else:
+                        resp = "Top news: " + " | ".join(headlines)
+                    return {"response": resp, "source": "news-agent", "data": result}
+            except Exception:
+                pass
+
+        # Currency routing
+        if any(w in text_lower for w in ["курс", "валют", "dollar", "евро", "currency", "exchange"]):
+            try:
+                result = await s.agent_runtime.dispatch("currency", "get_rates", {"base": "USD"})
+                if "error" not in result:
+                    rates = result.get("rates", {})
+                    rub = rates.get("RUB", "?")
+                    eur = rates.get("EUR", "?")
+                    if _is_ru:
+                        resp = f"Курс USD: {rub} руб, EUR/USD: {eur}"
+                    else:
+                        resp = f"USD rates — RUB: {rub}, EUR: {eur}"
+                    return {"response": resp, "source": "currency-agent", "data": result}
+            except Exception:
+                pass
+
         # Agent/skill creation routing
         _create_words = [
             "создай агент", "создай навык", "создай скилл",

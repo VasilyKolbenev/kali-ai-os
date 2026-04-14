@@ -1,0 +1,23 @@
+name: news
+version: "1.0.0"
+description: "News headlines and search via NewsAPI"
+protocol: native
+capabilities:
+  - news.headlines
+  - news.search
+tools:
+  - name: top_headlines
+    description: "Fetch top news headlines"
+    parameters:
+      country: { type: string, description: "ISO country code, e.g. 'ru', 'us' (default: ru)" }
+      category: { type: string, description: "Category: business, entertainment, health, science, sports, technology" }
+  - name: search
+    description: "Search news articles by query"
+    parameters:
+      query: { type: string, description: "Search query" }
+permissions:
+  - name: network
+    params:
+      domains:
+        - "newsapi.org"
+  - name: storage

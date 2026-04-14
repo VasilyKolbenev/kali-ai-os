@@ -1,0 +1,24 @@
+name: currency
+version: "1.0.0"
+description: "Exchange rates and currency conversion via open.er-api.com (free, no key required)"
+protocol: native
+capabilities:
+  - currency.rates
+  - currency.convert
+tools:
+  - name: get_rates
+    description: "Get current exchange rates for a base currency"
+    parameters:
+      base: { type: string, description: "Base currency code, e.g. 'USD', 'EUR', 'RUB' (default: USD)" }
+  - name: convert
+    description: "Convert an amount from one currency to another"
+    parameters:
+      amount: { type: number, description: "Amount to convert" }
+      from_currency: { type: string, description: "Source currency code, e.g. 'USD'" }
+      to_currency: { type: string, description: "Target currency code, e.g. 'RUB'" }
+permissions:
+  - name: network
+    params:
+      domains:
+        - "open.er-api.com"
+  - name: storage

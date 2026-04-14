@@ -1,0 +1,29 @@
+name: github
+version: "1.0.0"
+description: "GitHub integration — repos, issues, and pull requests"
+protocol: native
+capabilities:
+  - github.repos
+  - github.issues
+  - github.prs
+tools:
+  - name: my_repos
+    description: "List the authenticated user's repositories (sorted by last update)"
+    parameters: {}
+  - name: my_issues
+    description: "List issues assigned to the authenticated user"
+    parameters: {}
+  - name: my_prs
+    description: "List open pull requests authored by the authenticated user"
+    parameters: {}
+  - name: repo_status
+    description: "Get detailed info about a specific repository"
+    parameters:
+      owner: { type: string, description: "Repository owner or org name" }
+      repo: { type: string, description: "Repository name" }
+permissions:
+  - name: network
+    params:
+      domains:
+        - "api.github.com"
+  - name: storage
