@@ -45,27 +45,21 @@ export function ChatInput() {
     setVoiceState("speaking");
 
     try {
-      const res = await fetch("http://localhost:3005/synthesize", {
+      // Backend plays audio through system speakers directly
+      // No WebView2 audio restrictions — sound goes straight to OS
+      const res = await fetch("http://localhost:3005/tts/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
 
-      if (!res.ok) {
-        throw new Error(`TTS failed: ${res.status}`);
+      const data = await res.json();
+      if (data.duration) {
+        // Wait for audio to finish playing on backend
+        setTimeout(() => setVoiceState("idle"), data.duration * 1000 + 200);
+      } else {
+        setVoiceState("idle");
       }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => {
-        setVoiceState("idle");
-        URL.revokeObjectURL(url);
-      };
-      audio.play().catch(() => {
-        setVoiceState("idle");
-        URL.revokeObjectURL(url);
-      });
     } catch {
       setVoiceState("idle");
     }
@@ -97,7 +91,7 @@ export function ChatInput() {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
       // Speak ALL responses with JARVIS voice
-      speakJarvis(res.response);
+      // TTS auto-plays on backend — no frontend call needed
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
     } finally {
@@ -139,6 +133,11 @@ export function ChatInput() {
 
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
+      // Ignore input while JARVIS is speaking (prevents self-echo)
+      const currentState = useVoiceStore.getState().voiceState;
+      if (currentState === "speaking") {
+        return;
+      }
       send(transcript);
       setListening(false);
       setVoiceState("idle");

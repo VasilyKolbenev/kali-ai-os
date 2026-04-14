@@ -44,6 +44,19 @@ from kernel.catalog.installer import install_package
 logger = logging.getLogger(__name__)
 
 
+def _play_audio(audio: Any, sr: int) -> None:
+    """Play audio through system speakers via sounddevice."""
+    import numpy as np
+    import sounddevice as sd
+    # Ensure float32 for sounddevice
+    if not isinstance(audio, np.ndarray):
+        audio = np.array(audio, dtype=np.float32)
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32)
+    sd.play(audio, sr)
+    sd.wait()
+
+
 def create_app(
     config_path: Path | None = None,
     agents_dir: Path | None = None,
@@ -496,9 +509,43 @@ def create_app(
     async def delete_custom_agent(name: str, request: Request) -> dict[str, Any]:
         return request.app.state.agent_builder.delete_agent(name)
 
+    async def _speak_response(text: str) -> None:
+        """Speak text through system speakers (fire-and-forget).
+
+        Uses pre-recorded JARVIS clips for common phrases (greetings, ok, thanks).
+        Falls back to Silero + RVC TTS for custom responses.
+        """
+        import asyncio
+        if not text or len(text) < 3:
+            return
+        try:
+            # Try pre-recorded JARVIS clip first
+            from kernel.voice.jarvis_sounds import should_use_clip, play_reaction
+            clip = should_use_clip(text)
+            if clip:
+                await asyncio.to_thread(play_reaction, clip)
+                return
+
+            # Generate TTS for custom responses
+            from kernel.voice.tts_engine import generate_audio, is_loaded, load_models
+            if not is_loaded():
+                await asyncio.to_thread(load_models)
+            audio, sr = await asyncio.to_thread(generate_audio, text)
+            await asyncio.to_thread(_play_audio, audio, sr)
+        except Exception as e:
+            logger.warning("Auto-speak failed: %s", e)
+
     @app.post("/chat")
     async def chat(request: Request) -> dict[str, Any]:
-        """Process a chat message through LLM or agents."""
+        """Process a chat message through LLM or agents. Auto-speaks response."""
+        result = await _chat_logic(request)
+        # Auto-speak the response through system speakers
+        import asyncio as _aio
+        _aio.create_task(_speak_response(result.get("response", "")))
+        return result
+
+    async def _chat_logic(request: Request) -> dict[str, Any]:
+        """Internal chat logic — returns response dict."""
         body = await request.json()
         text = body.get("text", "")
         if not text:
@@ -649,77 +696,66 @@ def create_app(
 
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech — in-process Silero + RVC ONNX with cloud fallbacks."""
-        from fastapi.responses import Response, StreamingResponse
+        """Convert text to speech — Silero TTS + RVC ONNX JARVIS voice."""
+        from fastapi.responses import JSONResponse, Response
         import asyncio
-        import io
-        import os
 
         body = await request.json()
         text = body.get("text", "")
         language = body.get("language")
+        play = body.get("play", False)
         if not text:
-            return {"error": "No text provided"}
+            return JSONResponse({"error": "No text provided"}, status_code=400)
 
-        # Priority 1: In-process Silero + RVC ONNX (no HTTP round-trip)
         try:
             from kernel.voice.tts_engine import (
                 generate_audio, audio_to_wav_bytes, is_loaded, load_models,
             )
             if not is_loaded():
-                logger.info("TTS not loaded yet, attempting lazy init...")
+                logger.info("TTS loading on first request...")
                 await asyncio.to_thread(load_models)
-            if is_loaded():
-                audio, sr = await asyncio.to_thread(generate_audio, text, language)
-                wav_bytes = audio_to_wav_bytes(audio, sr)
-                return Response(content=wav_bytes, media_type="audio/wav")
+
+            audio, sr = await asyncio.to_thread(generate_audio, text, language)
+
+            # Play through system speakers if requested
+            if play:
+                await asyncio.to_thread(_play_audio, audio, sr)
+
+            wav_bytes = audio_to_wav_bytes(audio, sr)
+            return Response(content=wav_bytes, media_type="audio/wav")
         except Exception as e:
-            logger.warning("Local TTS failed: %s, trying cloud fallbacks", e)
+            logger.exception("TTS failed for: '%s'", text[:80])
+            return JSONResponse({"error": str(e)}, status_code=500)
 
-        # Priority 2: ElevenLabs (cloned voice, cloud)
-        el_key = os.environ.get("ELEVENLABS_API_KEY")
-        el_voice = os.environ.get("ELEVENLABS_VOICE_ID")
+    @app.post("/tts/speak")
+    async def tts_speak(request: Request) -> dict[str, Any]:
+        """Synthesize and play through system speakers directly."""
+        import asyncio
+        import json as _json
 
-        if el_key and el_voice:
-            try:
-                from elevenlabs.client import ElevenLabs
-
-                client = ElevenLabs(api_key=el_key)
-                audio_generator = client.text_to_speech.convert(
-                    voice_id=el_voice,
-                    text=text,
-                    model_id="eleven_multilingual_v2",
-                    output_format="mp3_44100_128",
-                )
-                audio_bytes = b"".join(audio_generator)
-                return StreamingResponse(
-                    io.BytesIO(audio_bytes),
-                    media_type="audio/mpeg",
-                    headers={"Content-Disposition": "inline"},
-                )
-            except Exception as e:
-                logger.warning("ElevenLabs TTS failed: %s", e)
-
-        # Priority 3: OpenAI TTS (onyx voice, cloud fallback)
+        # Handle encoding issues from Tauri WebView2
+        raw = await request.body()
         try:
-            import openai
+            body = _json.loads(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            body = _json.loads(raw.decode("utf-8", errors="replace"))
+        text = body.get("text", "")
+        language = body.get("language")
+        if not text:
+            return {"error": "No text provided"}
 
-            client = openai.OpenAI()
-            response = client.audio.speech.create(
-                model="tts-1",
-                voice="onyx",
-                input=text,
-                response_format="mp3",
-                speed=1.05,
+        try:
+            from kernel.voice.tts_engine import (
+                generate_audio, is_loaded, load_models,
             )
-            audio_bytes = response.content
-            return StreamingResponse(
-                io.BytesIO(audio_bytes),
-                media_type="audio/mpeg",
-                headers={"Content-Disposition": "inline"},
-            )
+            if not is_loaded():
+                await asyncio.to_thread(load_models)
+
+            audio, sr = await asyncio.to_thread(generate_audio, text, language)
+            await asyncio.to_thread(_play_audio, audio, sr)
+            return {"status": "ok", "duration": len(audio) / sr}
         except Exception as e:
-            logger.warning("TTS failed: %s", e)
+            logger.exception("TTS speak failed: '%s'", text[:80])
             return {"error": str(e)}
 
     @app.post("/synthesize")
