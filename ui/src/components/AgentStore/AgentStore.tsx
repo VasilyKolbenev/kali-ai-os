@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Search, Download, Package, Sparkles, Zap } from "lucide-react";
 import { api } from "../../api/client";
+import { useAppStore } from "../../stores/appStore";
 
 interface SkillInfo {
   name: string;
@@ -24,26 +25,51 @@ export function AgentStore() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [catalogResults, setCatalogResults] = useState<CatalogItem[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [installMsg, setInstallMsg] = useState<string | null>(null);
+  const setMode = useAppStore((s) => s.setMode);
+
+  const loadTrending = async () => {
+    try {
+      const data = await api.catalogTrending();
+      setCatalogResults(data.results || []);
+    } catch {
+      // silently fail if catalog not configured
+    }
+  };
 
   useEffect(() => {
     api.skills().then(setSkills).catch(console.error);
-    api.catalogTrending()
-      .then((data) => setCatalogResults(data.results || []))
-      .catch(() => {}); // silently fail if catalog not configured
+    loadTrending();
   }, []);
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      // Empty search: reload trending
+      setIsSearching(false);
+      await loadTrending();
+      return;
+    }
+    setIsSearching(true);
     setLoading(true);
     try {
-      const data = await api.catalogSearch(searchQuery);
+      const data = await api.catalogSearch(q);
       setCatalogResults(data.results || []);
     } catch {
       setCatalogResults([]);
     }
     setLoading(false);
+  };
+
+  const handleQueryChange = async (value: string) => {
+    setSearchQuery(value);
+    if (!value.trim()) {
+      // Reset to trending when query is cleared
+      setIsSearching(false);
+      await loadTrending();
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -73,7 +99,7 @@ export function AgentStore() {
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search agents and skills..."
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/20"
@@ -121,7 +147,7 @@ export function AgentStore() {
         {catalogResults.length > 0 && (
           <div>
             <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-3">
-              Catalog Results
+              {isSearching ? "Результаты поиска" : "Trending"}
             </h3>
             <div className="grid gap-2 stagger">
               {catalogResults.map((item) => (
@@ -136,9 +162,13 @@ export function AgentStore() {
                     </div>
                   </div>
                   {item.installed ? (
-                    <span className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10 text-[var(--j-green)]">
-                      Installed
-                    </span>
+                    <button
+                      onClick={() => setMode("agents")}
+                      className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10
+                        text-[var(--j-green)] hover:bg-[var(--j-green)]/20 transition"
+                    >
+                      Настроить
+                    </button>
                   ) : (
                     <button
                       onClick={() => setInstallMsg(`Configure Supabase to install "${item.name}" from cloud`)}

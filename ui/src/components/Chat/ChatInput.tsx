@@ -30,6 +30,8 @@ export function ChatInput() {
   const addMessage = useChatStore((s) => s.addMessage);
   const isLoading = useChatStore((s) => s.isLoading);
   const setLoading = useChatStore((s) => s.setLoading);
+  const pendingMessage = useChatStore((s) => s.pendingMessage);
+  const setPendingMessage = useChatStore((s) => s.setPendingMessage);
   const setVoiceState = useVoiceStore((s) => s.setState);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance>(null);
@@ -37,6 +39,14 @@ export function ChatInput() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-send pending message from dashboard widget clicks
+  useEffect(() => {
+    if (pendingMessage && !isLoading) {
+      setPendingMessage(null);
+      send(pendingMessage);
+    }
+  }, [pendingMessage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Speak response with JARVIS voice — full synthesis (best quality)
   // Silero + RVC ONNX pipeline, in-process on port 3005

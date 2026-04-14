@@ -1,6 +1,9 @@
 import { useEffect } from "react";
 import { useDashboardStore } from "../../stores/dashboardStore";
+import { useAppStore } from "../../stores/appStore";
+import { useChatStore } from "../../stores/chatStore";
 import { api } from "../../api/client";
+import type { AppMode } from "../../stores/appStore";
 import { SleepWidget } from "./widgets/SleepWidget";
 import { TasksWidget } from "./widgets/TasksWidget";
 import { CalendarWidget } from "./widgets/CalendarWidget";
@@ -11,6 +14,13 @@ import { WeatherWidget } from "./widgets/WeatherWidget";
 
 export function Dashboard() {
   const updateWidget = useDashboardStore((s) => s.updateWidget);
+  const setMode = useAppStore((s) => s.setMode);
+  const setPendingMessage = useChatStore((s) => s.setPendingMessage);
+
+  const openChat = (query: string) => {
+    setPendingMessage(query);
+    setMode("focus" as AppMode);
+  };
 
   useEffect(() => {
     async function fetchLiveData() {
@@ -85,13 +95,48 @@ export function Dashboard() {
           <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>В реальном времени</span>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 stagger">
-          <SleepWidget />
-          <CalendarWidget />
-          <TasksWidget />
-          <SpendingWidget />
-          <EnergyWidget />
-          <AgentsWidget />
-          <WeatherWidget />
+          <div
+            onClick={() => openChat("покажи статистику сна")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <SleepWidget />
+          </div>
+          <div
+            onClick={() => openChat("события сегодня")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <CalendarWidget />
+          </div>
+          <div
+            onClick={() => openChat("покажи задачи")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <TasksWidget />
+          </div>
+          <div
+            onClick={() => openChat("покажи расходы")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <SpendingWidget />
+          </div>
+          <div
+            onClick={() => openChat("покажи калории за сегодня")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <EnergyWidget />
+          </div>
+          <div
+            onClick={() => setMode("agents" as AppMode)}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <AgentsWidget />
+          </div>
+          <div
+            onClick={() => openChat("какая погода?")}
+            className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
+          >
+            <WeatherWidget />
+          </div>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 name: telegram
 version: "1.0.0"
-description: "Telegram bot — remote control and notifications"
+description: "Telegram bot - remote control and notifications"
 capabilities:
   - telegram.send
   - telegram.notify

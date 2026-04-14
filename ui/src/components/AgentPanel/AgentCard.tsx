@@ -1,6 +1,18 @@
 import { api } from "../../api/client";
 import { useAgentStore } from "../../stores/agentStore";
 
+const AGENT_HINTS: Record<string, string> = {
+  weather: "Напишите: 'какая погода?'",
+  system: "Напишите: 'который час?'",
+  tasks: "Напишите: 'покажи задачи'",
+  calendar: "Напишите: 'события сегодня'",
+  "life-dashboard": "Напишите: 'расходы' или 'сон'",
+  email: "Напишите: 'проверь почту'",
+  telegram: "Напишите: 'отправь в телеграм'",
+  "smart-home": "Напишите: 'включи свет'",
+  coding: "Напишите: 'объясни код'",
+};
+
 interface Props {
   agent: { name: string; status: string; description?: string };
 }
@@ -8,6 +20,7 @@ interface Props {
 export function AgentCard({ agent }: Props) {
   const updateAgent = useAgentStore((s) => s.updateAgent);
   const isRunning = agent.status === "running";
+  const hint = AGENT_HINTS[agent.name];
 
   const toggle = async () => {
     try {
@@ -33,6 +46,9 @@ export function AgentCard({ agent }: Props) {
         <div className="mono text-sm font-medium" style={{ color: "var(--j-text)" }}>{agent.name}</div>
         {agent.description && (
           <div className="text-xs truncate mt-0.5" style={{ color: "var(--j-text-muted)" }}>{agent.description}</div>
+        )}
+        {hint && (
+          <div className="text-[10px] mt-1 italic" style={{ color: "var(--j-cyan-dim, rgba(0,212,255,0.4))" }}>{hint}</div>
         )}
       </div>
       <button

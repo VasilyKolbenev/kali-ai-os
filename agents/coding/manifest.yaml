@@ -1,6 +1,6 @@
 name: coding
 version: "1.0.0"
-description: "Coding assistant — code review, generation, explanation"
+description: "Coding assistant - code review, generation, explanation"
 capabilities:
   - coding.review
   - coding.generate

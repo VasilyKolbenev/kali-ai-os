@@ -1,6 +1,6 @@
 name: system
 version: "1.0.0"
-description: "System commands — time, timers, system info"
+description: "System commands - time, timers, system info"
 capabilities:
   - system.info
   - system.timer

@@ -1,6 +1,6 @@
 name: life-dashboard
 version: "1.0.0"
-description: "Life tracking — sleep, spending, energy, habits"
+description: "Life tracking - sleep, spending, energy, habits"
 capabilities:
   - dashboard.read
   - dashboard.write

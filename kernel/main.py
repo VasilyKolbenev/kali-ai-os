@@ -51,6 +51,114 @@ def _mask_key(key: str) -> str:
     return f"{key[:7]}***{key[-4:]}"
 
 
+async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
+    """Build a personalized daily briefing from all active agents."""
+    import time as _time
+
+    hour = _time.localtime().tm_hour
+    parts: list[str] = []
+
+    # Time-appropriate greeting
+    if is_ru:
+        if 5 <= hour < 12:
+            parts.append("Доброе утро, сэр.")
+        elif 12 <= hour < 17:
+            parts.append("Добрый день, сэр.")
+        elif 17 <= hour < 22:
+            parts.append("Добрый вечер, сэр.")
+        else:
+            parts.append("Доброй ночи, сэр.")
+    else:
+        if 5 <= hour < 12:
+            parts.append("Good morning, sir.")
+        elif 12 <= hour < 17:
+            parts.append("Good afternoon, sir.")
+        elif 17 <= hour < 22:
+            parts.append("Good evening, sir.")
+        else:
+            parts.append("Good night, sir.")
+
+    # Weather
+    try:
+        wx = await s.agent_runtime.dispatch("weather", "get_weather", {"city": "Moscow"})
+        temp = wx.get("temperature_c", "?")
+        cond = wx.get("condition", "")
+        if is_ru:
+            _WRU = {"Clear sky": "ясно", "Partly cloudy": "облачно", "Overcast": "пасмурно",
+                    "Moderate rain": "дождь", "Light rain": "небольшой дождь", "Heavy rain": "ливень",
+                    "Light snow": "снег", "Fog": "туман", "Thunderstorm": "гроза", "Drizzle": "морось",
+                    "Slight rain": "слабый дождь", "Mainly clear": "ясно"}
+            cond = _WRU.get(cond, cond)
+            parts.append(f"На улице {temp}°C, {cond}.")
+        else:
+            parts.append(f"Weather: {temp}°C, {cond}.")
+    except Exception:
+        pass
+
+    # Tasks
+    try:
+        tasks = await s.agent_runtime.dispatch("tasks", "get_summary", {})
+        total = tasks.get("total", 0)
+        done = tasks.get("done", 0)
+        pending = tasks.get("pending", 0)
+        if total > 0:
+            if is_ru:
+                parts.append(f"Задачи: {done} из {total} выполнено, {pending} в ожидании.")
+            else:
+                parts.append(f"Tasks: {done} of {total} done, {pending} pending.")
+        else:
+            parts.append("Нет активных задач." if is_ru else "No active tasks.")
+    except Exception:
+        pass
+
+    # Calendar
+    try:
+        cal = await s.agent_runtime.dispatch("calendar", "get_events", {"date": "today"})
+        events = cal.get("events", [])
+        if events:
+            next_ev = events[0]
+            title = next_ev.get("title", "")
+            start = next_ev.get("start", "")
+            if is_ru:
+                parts.append(f"Ближайшее событие: {title} в {start}. Всего {len(events)} событий сегодня.")
+            else:
+                parts.append(f"Next event: {title} at {start}. {len(events)} events today.")
+        else:
+            parts.append("Календарь на сегодня пуст." if is_ru else "Calendar is clear today.")
+    except Exception:
+        pass
+
+    # Active agents count
+    try:
+        running = [a for a in s.agent_runtime.list_agents() if a.get("status") == "running"]
+        count = len(running)
+        if is_ru:
+            parts.append(f"{count} агентов активно.")
+        else:
+            parts.append(f"{count} agents active.")
+    except Exception:
+        pass
+
+    # Skills
+    try:
+        skill_count = len(s.skill_executor.list_skills())
+        if skill_count > 0:
+            if is_ru:
+                parts.append(f"{skill_count} навыков загружено.")
+            else:
+                parts.append(f"{skill_count} skills loaded.")
+    except Exception:
+        pass
+
+    # Final
+    if is_ru:
+        parts.append("Чем могу помочь?")
+    else:
+        parts.append("How can I help you?")
+
+    return " ".join(parts)
+
+
 def _save_env(updates: dict[str, str]) -> None:
     """Save/update keys in .env file."""
     env_path = Path(".env")
@@ -577,51 +685,74 @@ def create_app(
         s = request.app.state
         text_lower = text.lower()
 
+        # Detect user language from input text
+        _cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
+        _is_ru = _cyrillic > len(text) * 0.3
+
+        # Morning briefing on first greeting of the day
+        _greet_words = ["привет", "здравствуй", "добр", "hello", "hi", "hey", "good morning", "доброе"]
+        if any(w in text_lower for w in _greet_words):
+            try:
+                briefing = await _build_daily_briefing(s, _is_ru)
+                return {"response": briefing, "source": "daily-briefing"}
+            except Exception:
+                pass
+
+        _WEATHER_RU = {
+            "Clear sky": "ясно", "Mainly clear": "преимущественно ясно",
+            "Partly cloudy": "переменная облачность", "Overcast": "пасмурно",
+            "Fog": "туман", "Light rain": "небольшой дождь",
+            "Moderate rain": "умеренный дождь", "Heavy rain": "сильный дождь",
+            "Light snow": "небольшой снег", "Moderate snow": "умеренный снег",
+            "Heavy snow": "сильный снег", "Thunderstorm": "гроза",
+            "Slight rain": "слабый дождь", "Drizzle": "морось",
+        }
+        _WEEKDAY_RU = {
+            "Monday": "понедельник", "Tuesday": "вторник", "Wednesday": "среда",
+            "Thursday": "четверг", "Friday": "пятница", "Saturday": "суббота",
+            "Sunday": "воскресенье",
+        }
+
         # Direct agent commands (simple keyword matching for v1)
         if any(w in text_lower for w in ["weather", "погода", "температура"]):
             try:
                 result = await s.agent_runtime.dispatch(
                     "weather", "get_weather", {"city": "Moscow"},
                 )
-                return {
-                    "response": (
-                        f"Погода в {result.get('city', 'Москве')}: "
-                        f"{result.get('temperature_c')}°C, "
-                        f"{result.get('condition', '')}"
-                    ),
-                    "source": "weather-agent",
-                    "data": result,
-                }
+                condition = result.get("condition", "")
+                if _is_ru:
+                    condition = _WEATHER_RU.get(condition, condition)
+                    resp = f"Погода в Москве: {result.get('temperature_c')}°C, {condition}"
+                else:
+                    resp = f"Weather in Moscow: {result.get('temperature_c')}°C, {condition}"
+                return {"response": resp, "source": "weather-agent", "data": result}
             except Exception:
                 pass
 
         if any(w in text_lower for w in ["time", "время", "час"]):
             try:
                 result = await s.agent_runtime.dispatch("system", "get_time", {})
-                return {
-                    "response": (
-                        f"Сейчас {result.get('time', '')}, "
-                        f"{result.get('weekday', '')}"
-                    ),
-                    "source": "system-agent",
-                    "data": result,
-                }
+                weekday = result.get("weekday", "")
+                if _is_ru:
+                    weekday = _WEEKDAY_RU.get(weekday, weekday)
+                    resp = f"Сейчас {result.get('time', '')}, {weekday}"
+                else:
+                    resp = f"It's {result.get('time', '')}, {weekday}"
+                return {"response": resp, "source": "system-agent", "data": result}
             except Exception:
                 pass
 
         if any(w in text_lower for w in ["task", "задач", "todo"]):
             try:
-                result = await s.agent_runtime.dispatch(
-                    "tasks", "get_summary", {},
-                )
-                return {
-                    "response": (
-                        f"Задачи: {result.get('done', 0)} из {result.get('total', 0)} выполнено, "
-                        f"{result.get('pending', 0)} в ожидании"
-                    ),
-                    "source": "tasks-agent",
-                    "data": result,
-                }
+                result = await s.agent_runtime.dispatch("tasks", "get_summary", {})
+                done = result.get("done", 0)
+                total = result.get("total", 0)
+                pending = result.get("pending", 0)
+                if _is_ru:
+                    resp = f"Задачи: {done} из {total} выполнено, {pending} в ожидании"
+                else:
+                    resp = f"Tasks: {done} of {total} done, {pending} pending"
+                return {"response": resp, "source": "tasks-agent", "data": result}
             except Exception:
                 pass
 
@@ -632,16 +763,14 @@ def create_app(
             except Exception:
                 pass
 
-        if any(
-            w in text_lower
-            for w in ["focus", "фокус", "pomodoro", "помодоро", "таймер"]
-        ):
+        if any(w in text_lower for w in ["focus", "фокус", "pomodoro", "помодоро", "таймер"]):
             try:
                 await s.focus.start(25, "work")
-                return {
-                    "response": "Таймер фокусировки запущен. 25 минут. Удачной работы, сэр.",
-                    "source": "focus-timer",
-                }
+                if _is_ru:
+                    resp = "Таймер фокусировки запущен. 25 минут. Удачной работы, сэр."
+                else:
+                    resp = "Focus timer started. 25 minutes. Good luck, sir."
+                return {"response": resp, "source": "focus-timer"}
             except Exception:
                 pass
 
@@ -667,13 +796,48 @@ def create_app(
             except Exception:
                 pass
 
-        # Default: direct OpenAI call (no voice pipeline dependency)
+        # Agent/skill creation routing
+        _create_words = [
+            "создай агент", "создай навык", "создай скилл",
+            "create agent", "create skill", "make agent",
+            "сделай агент", "сделай навык",
+        ]
+        if any(w in text_lower for w in _create_words):
+            try:
+                intent = classify_intent(text)
+                if _is_ru:
+                    resp = f"Анализирую запрос... Тип: {intent.type}"
+                    if intent.template:
+                        resp += f", шаблон: {intent.template}"
+                    resp += ". Скажите подробнее что именно нужно отслеживать или автоматизировать."
+                else:
+                    resp = f"Analyzing... Type: {intent.type}"
+                    if intent.template:
+                        resp += f", template: {intent.template}"
+                    resp += ". Tell me more about what you want to track or automate."
+                return {
+                    "response": resp,
+                    "source": "agent-builder",
+                    "data": {"intent": intent.__dict__},
+                }
+            except Exception:
+                pass
+
+        # Default: direct OpenAI call with language-aware system prompt
         try:
             import openai
 
             client = openai.AsyncOpenAI()
             llm_config = s.config_manager.config.llm
-            messages = s.memory.get_context() + [
+
+            system_msg = (
+                "You are KALI (JARVIS-like AI assistant). "
+                "ALWAYS respond in the SAME language the user writes in. "
+                "If user writes in Russian — respond in Russian. "
+                "If in English — respond in English. "
+                "Be concise, helpful, and professional."
+            )
+            messages = [{"role": "system", "content": system_msg}] + s.memory.get_context() + [
                 {"role": "user", "content": text},
             ]
 
@@ -686,8 +850,9 @@ def create_app(
             if response_text:
                 s.memory.add_turn("user", text)
                 s.memory.add_turn("assistant", response_text)
+            err_msg = "Не удалось получить ответ." if _is_ru else "Failed to get response."
             return {
-                "response": response_text or "Не удалось получить ответ.",
+                "response": response_text or err_msg,
                 "source": f"llm-{llm_config.cloud_provider}",
             }
         except Exception as e:
