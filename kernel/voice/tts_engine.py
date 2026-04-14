@@ -37,13 +37,14 @@ if hasattr(_sys, "_MEIPASS"):
 else:
     MODELS_DIR = Path(__file__).parent.parent.parent / "models"
 
-# EQ profile matched to JARVIS Sound Pack (FINAL1 tuning)
+# EQ profile — JARVIS voice, more natural/alive sounding
 EQ_BANDS = [
-    (20, 800, 0.30),      # low cut
-    (800, 2000, 1.30),    # mid clarity boost
-    (2000, 4000, 0.65),   # upper-mid cut (mud)
-    (4000, 6000, 0.20),   # presence cut (harshness)
-    (6000, 10000, 0.45),  # brilliance cut
+    (20, 300, 0.45),      # sub-bass: warmer, not hollow
+    (300, 800, 0.75),     # low-mid: body of voice
+    (800, 2000, 1.20),    # mid clarity: slightly boosted
+    (2000, 4000, 0.80),   # upper-mid: keep more for articulation
+    (4000, 6000, 0.40),   # presence: less harsh but still present
+    (6000, 10000, 0.55),  # brilliance: keep some air/sparkle
 ]
 
 # Global state

@@ -20,18 +20,22 @@ export function Settings() {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
 
   useEffect(() => {
     fetch("http://localhost:3005/settings")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data: SettingsData) => {
         setSettings(data);
-        setOpenaiKey(data.llm.openai_key);
-        setAnthropicKey(data.llm.anthropic_key);
+        setOpenaiKey(data.llm?.openai_key || "");
+        setAnthropicKey(data.llm?.anthropic_key || "");
       })
-      .catch(() => {});
+      .catch((e) => setError(`Cannot load settings: ${e.message}`));
   }, []);
 
   const save = async () => {
@@ -56,6 +60,7 @@ export function Settings() {
     setSaving(false);
   };
 
+  if (error) return <div className="p-8 text-[var(--j-red)]">{error}</div>;
   if (!settings) return <div className="p-8 text-white/30">Loading settings...</div>;
 
   return (
@@ -107,22 +112,13 @@ export function Settings() {
             </div>
             <div>
               <label className="text-xs text-white/40 block mb-1">OpenAI Model</label>
-              <select
-                value={settings.llm.openai_model}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    llm: { ...settings.llm, openai_model: e.target.value },
-                  })
-                }
-                className="w-full bg-white/5 rounded px-3 py-2 text-sm outline-none text-white"
-              >
+              <div className="flex flex-wrap gap-1">
                 {OPENAI_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
+                  <button key={m} onClick={() => setSettings({...settings, llm: {...settings.llm, openai_model: m}})}
+                    className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.openai_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
+                  >{m}</button>
                 ))}
-              </select>
+              </div>
             </div>
           </div>
 
@@ -143,22 +139,13 @@ export function Settings() {
             </div>
             <div>
               <label className="text-xs text-white/40 block mb-1">Anthropic Model</label>
-              <select
-                value={settings.llm.anthropic_model}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    llm: { ...settings.llm, anthropic_model: e.target.value },
-                  })
-                }
-                className="w-full bg-white/5 rounded px-3 py-2 text-sm outline-none text-white"
-              >
+              <div className="flex flex-wrap gap-1">
                 {ANTHROPIC_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
+                  <button key={m} onClick={() => setSettings({...settings, llm: {...settings.llm, anthropic_model: m}})}
+                    className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.anthropic_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
+                  >{m}</button>
                 ))}
-              </select>
+              </div>
             </div>
           </div>
         </div>

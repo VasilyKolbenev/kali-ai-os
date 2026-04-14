@@ -90,13 +90,17 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
-      // Speak ALL responses with JARVIS voice
-      // TTS auto-plays on backend — no frontend call needed
+      // Backend auto-speaks response — mark as speaking to prevent self-echo
+      setVoiceState("speaking");
+      // Estimate speech duration (~100ms per word) then return to idle
+      const wordCount = (res.response || "").split(/\s+/).length;
+      const estimatedMs = Math.max(2000, wordCount * 400);
+      setTimeout(() => setVoiceState("idle"), estimatedMs);
     } catch {
       addMessage("assistant", "Connection error. Is the kernel running?", "error");
+      setVoiceState("idle");
     } finally {
       setLoading(false);
-      setVoiceState("idle");
     }
   };
 
