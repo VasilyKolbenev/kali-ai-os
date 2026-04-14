@@ -195,10 +195,62 @@ def _expand_abbreviations(text: str) -> str:
     return text
 
 
+def _numbers_to_words(text: str) -> str:
+    """Convert digits to Russian words for Silero TTS pronunciation."""
+    _ONES = {
+        "0": "ноль", "1": "один", "2": "два", "3": "три", "4": "четыре",
+        "5": "пять", "6": "шесть", "7": "семь", "8": "восемь", "9": "девять",
+        "10": "десять", "11": "одиннадцать", "12": "двенадцать",
+        "13": "тринадцать", "14": "четырнадцать", "15": "пятнадцать",
+        "16": "шестнадцать", "17": "семнадцать", "18": "восемнадцать",
+        "19": "девятнадцать",
+    }
+    _TENS = {
+        "2": "двадцать", "3": "тридцать", "4": "сорок", "5": "пятьдесят",
+        "6": "шестьдесят", "7": "семьдесят", "8": "восемьдесят", "9": "девяносто",
+    }
+    _HUNDREDS = {
+        "1": "сто", "2": "двести", "3": "триста", "4": "четыреста",
+        "5": "пятьсот", "6": "шестьсот", "7": "семьсот", "8": "восемьсот",
+        "9": "девятьсот",
+    }
+
+    def _n2w(n: str) -> str:
+        n = n.lstrip("0") or "0"
+        if n in _ONES:
+            return _ONES[n]
+        if len(n) == 2:
+            if n[0] == "1":
+                return _ONES.get(n, n)
+            return f"{_TENS.get(n[0], '')} {_ONES.get(n[1], '')}".strip()
+        if len(n) == 3:
+            h = _HUNDREDS.get(n[0], "")
+            r = _n2w(n[1:])
+            return f"{h} {r}".strip() if r != "ноль" else h
+        if len(n) <= 6:
+            th = _n2w(n[:-3])
+            r = _n2w(n[-3:])
+            result = f"{th} тысяч"
+            return f"{result} {r}" if r != "ноль" else result
+        return n
+
+    def _repl(m: re.Match) -> str:
+        num = m.group(0)
+        if "." in num:
+            p = num.split(".")
+            return f"{_n2w(p[0])} точка {_n2w(p[1])}"
+        return _n2w(num)
+
+    # Also strip markdown bold **text**
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    return re.sub(r"\d+\.?\d*", _repl, text)
+
+
 def _text_to_ssml(text: str) -> str:
     """Convert plain text to SSML for better intonation and punctuation."""
     text = _fix_stress(text)
     text = _expand_abbreviations(text)
+    text = _numbers_to_words(text)
 
     # Escape XML special chars
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

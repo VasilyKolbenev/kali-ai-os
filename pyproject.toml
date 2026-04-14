@@ -33,6 +33,7 @@ dependencies = [
     "croniter>=6.2.2",
     "pillow>=12.2.0",
     "openwakeword>=0.4.0",
+    "soundfile>=0.13.1",
 ]
 
 [project.optional-dependencies]

@@ -160,7 +160,27 @@
       "Bash(cat /c/Users/User/Desktop/Jarvis/agents/*/manifest.yaml)",
       "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
       "Bash(cargo clean:*)",
-      "Bash(powershell.exe -Command \"& { cmd /c '\\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\\\\\" x64 && set PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH% && cd /d C:\\\\Users\\\\User\\\\Desktop\\\\Jarvis && npx tauri build' }\")"
+      "Bash(powershell.exe -Command \"& { cmd /c '\\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\\\\\" x64 && set PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH% && cd /d C:\\\\Users\\\\User\\\\Desktop\\\\Jarvis && npx tauri build' }\")",
+      "Bash(powershell.exe -Command \"& { cmd /c '\\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\\\\\" x64 && set PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH% && cd /d C:\\\\Users\\\\User\\\\Desktop\\\\Jarvis\\\\src-tauri && cargo build --release 2>&1' }\")",
+      "Bash(reg query:*)",
+      "Bash(powershell.exe -Command \"Start-Process powershell -Verb RunAs -ArgumentList '-Command Copy-Item -Path \\\\\"C:\\\\\\\\Users\\\\\\\\User\\\\\\\\Desktop\\\\\\\\Jarvis\\\\\\\\src-tauri\\\\\\\\target\\\\\\\\release\\\\\\\\kali-desktop.exe\\\\\" -Destination \\\\\"C:\\\\\\\\Program Files\\\\\\\\KALI\\\\\\\\kali-desktop.exe\\\\\" -Force'\")",
+      "Bash(powershell.exe -Command \"Start-Process -FilePath 'cmd.exe' -ArgumentList '/c copy /Y \\\\\"C:\\\\Users\\\\User\\\\Desktop\\\\Jarvis\\\\src-tauri\\\\target\\\\release\\\\kali-desktop.exe\\\\\" \\\\\"C:\\\\Program Files\\\\KALI\\\\kali-desktop.exe\\\\\"' -Verb RunAs -Wait\")",
+      "Bash(curl -s http://localhost:3005/health/tts)",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\": \"Тест\"}' -o test_endpoint.wav -w \"HTTP %{http_code}, Size: %{size_download} bytes, Content-Type: %{content_type}\")",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\": \"Test\"}')",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Привет, я KALI\"}' -o /tmp/test_tts.wav -w \"HTTP %{http_code}, Size: %{size_download} bytes, Type: %{content_type}\\\\n\")",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Test\"}')",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Тест голоса\"}' -o C:/Users/User/Desktop/test_tts_check.wav -w \"HTTP %{http_code}, Size: %{size_download}\\\\n\")",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Test voice\"}')",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Hello test\"}' -w \"\\\\n---\\\\nHTTP: %{http_code}\\\\nContent-Type: %{content_type}\\\\nSize: %{size_download}\\\\n\" -o C:/Users/User/Desktop/Jarvis/test_debug.wav)",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Привет сэр\"}' -w \"\\\\nHTTP %{http_code}, Size: %{size_download}\\\\n\" -o C:/Users/User/Desktop/test_voice.wav)",
+      "Bash(curl -s -X POST http://localhost:3005/synthesize -H \"Content-Type: application/json\" -d '{\"text\":\"Test\"}' -w \"\\\\nHTTP %{http_code}\\\\n\" -o /dev/null)",
+      "Bash(curl -s -X POST http://localhost:3005/tts/speak -H \"Content-Type: application/json\" -d '{\"text\":\"Hello I am KALI\"}')",
+      "Bash(grep \"tts/speak\\\\|synthesize\" C:/Users/User/Desktop/Jarvis/ui/dist/assets/index-*.js)",
+      "Bash(curl -s -X POST http://localhost:3005/tts/speak -H \"Content-Type: application/json\" -d '{\"text\":\"Тест голоса KALI\"}')",
+      "Bash(cp \"C:/Users/User/Desktop/jarvis-original/resources/sound/voices/jarvis-remaster/ru/\"*.mp3 C:/Users/User/Desktop/Jarvis/resources/sounds/ru/)",
+      "Bash(cp \"C:/Users/User/Desktop/jarvis-original/resources/sound/voices/jarvis-remaster/en/\"*.mp3 C:/Users/User/Desktop/Jarvis/resources/sounds/en/)",
+      "Bash(curl -s -X POST http://localhost:3005/chat -H \"Content-Type: application/json\" -d '{\"text\":\"Привет\"}')"
     ]
   }
 }
