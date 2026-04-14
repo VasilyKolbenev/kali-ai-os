@@ -39,7 +39,7 @@ export function Dashboard() {
         };
         const events = calData.events ?? [];
         updateWidget("calendar", {
-          next: events[0]?.title ?? "No events",
+          next: events[0]?.title ?? "Нет событий",
           time: events[0]?.start ?? "",
         });
       } catch {
@@ -82,7 +82,7 @@ export function Dashboard() {
       <div className="max-w-4xl mx-auto">
         <div className="flex items-baseline gap-3 mb-8">
           <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>Dashboard</h2>
-          <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>Live</span>
+          <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>В реальном времени</span>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 stagger">
           <SleepWidget />

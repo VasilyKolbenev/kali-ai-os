@@ -5,7 +5,7 @@ export function TasksWidget() {
   const pct = data && data.total > 0 ? Math.round((data.done / data.total) * 100) : 0;
   return (
     <div className="glass p-5">
-      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>Tasks</div>
+      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>ЗАДАЧИ</div>
       <div className="flex items-baseline gap-1">
         <span className="mono text-3xl font-light" style={{ color: "var(--j-green)" }}>{data?.done ?? "—"}</span>
         <span className="mono text-sm" style={{ color: "var(--j-text-muted)" }}>{data ? `/${data.total}` : ""}</span>

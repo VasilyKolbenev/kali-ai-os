@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save, Key, Cpu } from "lucide-react";
+import { Settings as SettingsIcon, Save, Key, Cpu, Globe } from "lucide-react";
 
 interface SettingsData {
   llm: {
@@ -8,13 +8,51 @@ interface SettingsData {
     openai_model: string;
     anthropic_key: string;
     anthropic_model: string;
+    google_key: string;
+    google_model: string;
+    deepseek_key: string;
+    deepseek_model: string;
   };
   tts: { enabled: boolean; pitch_shift: number; speaker: string };
   voice: { wake_word: string; mode: string; stt_model: string };
+  language: string; // "ru" | "en" | "zh"
 }
 
-const OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"];
-const ANTHROPIC_MODELS = ["claude-sonnet-4-20250514", "claude-haiku-4-20250414", "claude-opus-4-20250414"];
+// Актуальные модели — апрель 2026
+const PROVIDERS = [
+  { id: "openai", label: "OpenAI" },
+  { id: "anthropic", label: "Anthropic" },
+  { id: "google", label: "Google" },
+  { id: "deepseek", label: "DeepSeek" },
+] as const;
+
+const OPENAI_MODELS = [
+  "gpt-5.4",           // Flagship (March 2026)
+  "gpt-5.4-thinking",  // Extended reasoning
+  "gpt-4.1-mini",      // Fast & cheap
+  "gpt-4.1-nano",      // Fastest
+];
+const ANTHROPIC_MODELS = [
+  "claude-sonnet-4-20250514",   // Best value (near-Opus)
+  "claude-opus-4-20250414",     // Most capable
+  "claude-haiku-4-20250414",    // Fastest
+];
+const GOOGLE_MODELS = [
+  "gemini-3.1-ultra",      // Top reasoning
+  "gemini-3.1-pro",        // Balanced
+  "gemini-3.1-flash-lite", // Speed optimized
+];
+const DEEPSEEK_MODELS = [
+  "deepseek-v3.2",       // 90% of GPT-5.4 at 1/50 cost
+  "deepseek-r1",          // Reasoning model
+  "deepseek-coder-v3",   // Code specialist
+];
+
+const LANGUAGES = [
+  { id: "ru", label: "Русский" },
+  { id: "en", label: "English" },
+  { id: "zh", label: "中文" },
+];
 
 export function Settings() {
   const [settings, setSettings] = useState<SettingsData | null>(null);
@@ -23,6 +61,8 @@ export function Settings() {
   const [error, setError] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
+  const [googleKey, setGoogleKey] = useState("");
+  const [deepseekKey, setDeepseekKey] = useState("");
 
   useEffect(() => {
     fetch("http://localhost:3005/settings")
@@ -34,6 +74,8 @@ export function Settings() {
         setSettings(data);
         setOpenaiKey(data.llm?.openai_key || "");
         setAnthropicKey(data.llm?.anthropic_key || "");
+        setGoogleKey(data.llm?.google_key || "");
+        setDeepseekKey(data.llm?.deepseek_key || "");
       })
       .catch((e) => setError(`Cannot load settings: ${e.message}`));
   }, []);
@@ -52,6 +94,11 @@ export function Settings() {
           openai_model: settings.llm.openai_model,
           anthropic_key: anthropicKey,
           anthropic_model: settings.llm.anthropic_model,
+          google_key: googleKey,
+          google_model: settings.llm.google_model,
+          deepseek_key: deepseekKey,
+          deepseek_model: settings.llm.deepseek_model,
+          language: settings.language,
         }),
       });
       setSaved(true);
@@ -71,6 +118,29 @@ export function Settings() {
           <h2 className="text-lg font-medium">Settings</h2>
         </div>
 
+        {/* Language */}
+        <div className="glass p-4 mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Globe className="w-4 h-4 text-[var(--j-cyan)]" />
+            <span className="text-sm font-medium">Language / Язык</span>
+          </div>
+          <div className="flex gap-2">
+            {LANGUAGES.map((l) => (
+              <button
+                key={l.id}
+                onClick={() => setSettings({ ...settings, language: l.id })}
+                className={`px-4 py-2 rounded text-xs transition ${
+                  (settings.language || "ru") === l.id
+                    ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30"
+                    : "bg-white/5 text-white/40 border border-white/10"
+                }`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* LLM Provider */}
         <div className="glass p-4 mb-4">
           <div className="flex items-center gap-2 mb-3">
@@ -78,19 +148,19 @@ export function Settings() {
             <span className="text-sm font-medium">LLM Provider</span>
           </div>
           <div className="flex gap-2 mb-4">
-            {["openai", "anthropic"].map((p) => (
+            {PROVIDERS.map((p) => (
               <button
-                key={p}
+                key={p.id}
                 onClick={() =>
-                  setSettings({ ...settings, llm: { ...settings.llm, provider: p } })
+                  setSettings({ ...settings, llm: { ...settings.llm, provider: p.id } })
                 }
                 className={`px-4 py-2 rounded text-xs transition ${
-                  settings.llm.provider === p
+                  settings.llm.provider === p.id
                     ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30"
                     : "bg-white/5 text-white/40 border border-white/10"
                 }`}
               >
-                {p === "openai" ? "OpenAI" : "Anthropic"}
+                {p.label}
               </button>
             ))}
           </div>
@@ -114,9 +184,13 @@ export function Settings() {
               <label className="text-xs text-white/40 block mb-1">OpenAI Model</label>
               <div className="flex flex-wrap gap-1">
                 {OPENAI_MODELS.map((m) => (
-                  <button key={m} onClick={() => setSettings({...settings, llm: {...settings.llm, openai_model: m}})}
+                  <button
+                    key={m}
+                    onClick={() => setSettings({ ...settings, llm: { ...settings.llm, openai_model: m } })}
                     className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.openai_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
-                  >{m}</button>
+                  >
+                    {m}
+                  </button>
                 ))}
               </div>
             </div>
@@ -141,9 +215,75 @@ export function Settings() {
               <label className="text-xs text-white/40 block mb-1">Anthropic Model</label>
               <div className="flex flex-wrap gap-1">
                 {ANTHROPIC_MODELS.map((m) => (
-                  <button key={m} onClick={() => setSettings({...settings, llm: {...settings.llm, anthropic_model: m}})}
+                  <button
+                    key={m}
+                    onClick={() => setSettings({ ...settings, llm: { ...settings.llm, anthropic_model: m } })}
                     className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.anthropic_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
-                  >{m}</button>
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Google settings */}
+          <div className="space-y-3 mt-4 pt-4 border-t border-white/5">
+            <div>
+              <label className="text-xs text-white/40 block mb-1">Google API Key</label>
+              <div className="flex gap-2">
+                <Key className="w-4 h-4 text-white/20 mt-2" />
+                <input
+                  type="password"
+                  value={googleKey}
+                  onChange={(e) => setGoogleKey(e.target.value)}
+                  placeholder="AIza..."
+                  className="flex-1 bg-white/5 rounded px-3 py-2 text-sm outline-none placeholder:text-white/20 focus:bg-white/10 font-mono"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-white/40 block mb-1">Google Model</label>
+              <div className="flex flex-wrap gap-1">
+                {GOOGLE_MODELS.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setSettings({ ...settings, llm: { ...settings.llm, google_model: m } })}
+                    className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.google_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* DeepSeek settings */}
+          <div className="space-y-3 mt-4 pt-4 border-t border-white/5">
+            <div>
+              <label className="text-xs text-white/40 block mb-1">DeepSeek API Key</label>
+              <div className="flex gap-2">
+                <Key className="w-4 h-4 text-white/20 mt-2" />
+                <input
+                  type="password"
+                  value={deepseekKey}
+                  onChange={(e) => setDeepseekKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="flex-1 bg-white/5 rounded px-3 py-2 text-sm outline-none placeholder:text-white/20 focus:bg-white/10 font-mono"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-white/40 block mb-1">DeepSeek Model</label>
+              <div className="flex flex-wrap gap-1">
+                {DEEPSEEK_MODELS.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setSettings({ ...settings, llm: { ...settings.llm, deepseek_model: m } })}
+                    className={`px-3 py-1.5 rounded text-xs transition ${settings.llm.deepseek_model === m ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30" : "bg-white/5 text-white/40 border border-white/10"}`}
+                  >
+                    {m}
+                  </button>
                 ))}
               </div>
             </div>

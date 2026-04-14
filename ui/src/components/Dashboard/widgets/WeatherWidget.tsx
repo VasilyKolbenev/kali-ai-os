@@ -5,7 +5,7 @@ export function WeatherWidget() {
 
   return (
     <div className="glass p-5">
-      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>Weather</div>
+      <div className="mono text-[10px] tracking-[2px] uppercase mb-3" style={{ color: "var(--j-text-muted)" }}>ПОГОДА</div>
       <div className="flex items-baseline gap-1">
         <span className="mono text-3xl font-light" style={{ color: "var(--j-cyan)" }}>
           {data?.temp_c != null ? `${Math.round(data.temp_c)}°` : "—"}

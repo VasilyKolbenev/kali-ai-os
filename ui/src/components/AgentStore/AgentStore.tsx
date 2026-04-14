@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Search, Download, Package, Sparkles, Zap } from "lucide-react";
 import { api } from "../../api/client";
-import { Builder } from "../Builder/Builder";
 
 interface SkillInfo {
   name: string;
@@ -67,9 +66,6 @@ export function AgentStore() {
             {skills.length} installed
           </span>
         </div>
-
-        {/* Builder */}
-        <Builder />
 
         {/* Search */}
         <div className="glass p-3 mb-6 flex gap-2">

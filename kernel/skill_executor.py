@@ -44,7 +44,7 @@ class SkillExecutor:
         skill_yaml_path = skill_dir / "skill.yaml"
         if not skill_yaml_path.exists():
             raise FileNotFoundError(f"No skill.yaml in {skill_dir}")
-        with open(skill_yaml_path) as f:
+        with open(skill_yaml_path, encoding="utf-8") as f:
             skill_yaml = yaml.safe_load(f)
         template_name = skill_yaml.get("template")
         if template_name not in TEMPLATE_REGISTRY:
