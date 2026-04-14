@@ -940,6 +940,10 @@ def create_app(
                 "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
                 "anthropic_key": _mask_key(os.environ.get("ANTHROPIC_API_KEY", "")),
                 "anthropic_model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+                "google_key": _mask_key(os.environ.get("GOOGLE_API_KEY", "")),
+                "google_model": os.environ.get("GOOGLE_MODEL", "gemini-3.1-pro"),
+                "deepseek_key": _mask_key(os.environ.get("DEEPSEEK_API_KEY", "")),
+                "deepseek_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2"),
             },
             "tts": {
                 "enabled": os.environ.get("RVC_ENABLED", "1") == "1",
@@ -951,6 +955,7 @@ def create_app(
                 "mode": request.app.state.config_manager.config.voice.mode,
                 "stt_model": request.app.state.config_manager.config.voice.stt_model,
             },
+            "language": os.environ.get("KALI_LANGUAGE", "ru"),
         }
 
     @app.post("/settings")
@@ -966,15 +971,30 @@ def create_app(
         if "anthropic_key" in body and body["anthropic_key"] and not body["anthropic_key"].startswith("sk-***"):
             os.environ["ANTHROPIC_API_KEY"] = body["anthropic_key"]
             updates["ANTHROPIC_API_KEY"] = body["anthropic_key"]
+        if "google_key" in body and body["google_key"] and not body["google_key"].startswith("AI***"):
+            os.environ["GOOGLE_API_KEY"] = body["google_key"]
+            updates["GOOGLE_API_KEY"] = body["google_key"]
+        if "deepseek_key" in body and body["deepseek_key"] and not body["deepseek_key"].startswith("sk-***"):
+            os.environ["DEEPSEEK_API_KEY"] = body["deepseek_key"]
+            updates["DEEPSEEK_API_KEY"] = body["deepseek_key"]
         if "openai_model" in body:
             os.environ["OPENAI_MODEL"] = body["openai_model"]
             updates["OPENAI_MODEL"] = body["openai_model"]
         if "anthropic_model" in body:
             os.environ["ANTHROPIC_MODEL"] = body["anthropic_model"]
             updates["ANTHROPIC_MODEL"] = body["anthropic_model"]
+        if "google_model" in body:
+            os.environ["GOOGLE_MODEL"] = body["google_model"]
+            updates["GOOGLE_MODEL"] = body["google_model"]
+        if "deepseek_model" in body:
+            os.environ["DEEPSEEK_MODEL"] = body["deepseek_model"]
+            updates["DEEPSEEK_MODEL"] = body["deepseek_model"]
         if "provider" in body:
             os.environ["LLM_PROVIDER"] = body["provider"]
             updates["LLM_PROVIDER"] = body["provider"]
+        if "language" in body:
+            os.environ["KALI_LANGUAGE"] = body["language"]
+            updates["KALI_LANGUAGE"] = body["language"]
 
         if updates:
             _save_env(updates)

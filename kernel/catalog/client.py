@@ -158,7 +158,7 @@ class CatalogClient:
             try:
                 import yaml  # type: ignore[import-untyped]
 
-                with open(manifest_path) as f:
+                with open(manifest_path, encoding="utf-8") as f:
                     manifest = yaml.safe_load(f)
                 name: str = manifest.get("name", "")
                 desc: str = manifest.get("description", "")
