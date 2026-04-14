@@ -25,6 +25,7 @@ export function ChatInput() {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
+  const [isTogglingVoice, setIsTogglingVoice] = useState(false);
   const messages = useChatStore((s) => s.messages);
   const addMessage = useChatStore((s) => s.addMessage);
   const isLoading = useChatStore((s) => s.isLoading);
@@ -160,6 +161,8 @@ export function ChatInput() {
   };
 
   const toggleVoice = async () => {
+    if (isTogglingVoice) return;
+    setIsTogglingVoice(true);
     try {
       if (voiceActive) {
         await api.voiceStop();
@@ -170,6 +173,8 @@ export function ChatInput() {
       }
     } catch {
       // Voice pipeline not available
+    } finally {
+      setIsTogglingVoice(false);
     }
   };
 
@@ -248,11 +253,12 @@ export function ChatInput() {
         {/* JARVIS backend voice toggle */}
         <button
           onClick={toggleVoice}
+          disabled={isTogglingVoice}
           className={`p-2 rounded-lg transition flex-shrink-0 ${
             voiceActive
               ? "bg-[var(--j-green)]/20 text-[var(--j-green)]"
               : "text-white/30 hover:text-white/60"
-          }`}
+          } ${isTogglingVoice ? "opacity-50 cursor-wait" : ""}`}
           title={voiceActive ? "Stop JARVIS voice" : "Start JARVIS voice"}
         >
           <span className="text-xs font-mono">{voiceActive ? "J\u25CF" : "J\u25CB"}</span>

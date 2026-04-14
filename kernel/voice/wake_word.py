@@ -39,15 +39,13 @@ class WakeWordDetector:
     def load(self) -> None:
         """Load the OpenWakeWord model."""
         try:
-            import openwakeword
             from openwakeword.model import Model
 
-            openwakeword.utils.download_models()
-            self._model = Model(inference_framework="onnx")
+            self._model = Model()
             self._loaded = True
             logger.info("OpenWakeWord model loaded for '%s'", self.wake_word)
-        except Exception:
-            logger.warning("Failed to load OpenWakeWord, wake word detection disabled")
+        except Exception as e:
+            logger.warning("Failed to load OpenWakeWord: %s", e)
             self._loaded = False
 
     def process(self, audio: np.ndarray) -> WakeWordResult:

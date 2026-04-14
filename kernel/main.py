@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -62,9 +63,26 @@ def create_app(
     """
     load_dotenv()
 
-    resolved_config_path = config_path or Path("config/kali.yaml")
-    resolved_agents_dir = agents_dir or Path("agents")
-    resolved_db_path = db_path or Path("data/kali.db")
+    # When running as a PyInstaller bundle, bundled data lives under _MEIPASS;
+    # the writable data dir is next to the .exe itself.
+    _bundle_dir = Path(getattr(sys, "_MEIPASS", ""))
+    _is_frozen = hasattr(sys, "_MEIPASS")
+    if _is_frozen:
+        _exe_dir = Path(sys.executable).parent
+        _default_config = _bundle_dir / "config" / "kali.yaml"
+        _default_agents = _bundle_dir / "agents"
+        _default_db = _exe_dir / "data" / "kali.db"
+    else:
+        _default_config = Path("config/kali.yaml")
+        _default_agents = Path("agents")
+        _default_db = Path("data/kali.db")
+
+    resolved_config_path = config_path or _default_config
+    resolved_agents_dir = agents_dir or _default_agents
+    resolved_db_path = db_path or _default_db
+
+    # Ensure writable data directory exists (important for frozen exe)
+    resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[misc]
@@ -76,9 +94,9 @@ def create_app(
         plugin_registry.discover()
 
         # Initialize skill executor
-        skill_executor = SkillExecutor(data_dir=Path("data"))
+        skill_executor = SkillExecutor(data_dir=resolved_db_path.parent)
         for manifest in plugin_registry.list_skills():
-            skill_dir = Path("agents") / manifest.name
+            skill_dir = resolved_agents_dir / manifest.name
             try:
                 skill_executor.load_skill(skill_dir)
                 logger.info("Loaded skill: %s", manifest.name)
@@ -645,7 +663,12 @@ def create_app(
 
         # Priority 1: In-process Silero + RVC ONNX (no HTTP round-trip)
         try:
-            from kernel.voice.tts_engine import generate_audio, audio_to_wav_bytes, is_loaded
+            from kernel.voice.tts_engine import (
+                generate_audio, audio_to_wav_bytes, is_loaded, load_models,
+            )
+            if not is_loaded():
+                logger.info("TTS not loaded yet, attempting lazy init...")
+                await asyncio.to_thread(load_models)
             if is_loaded():
                 audio, sr = await asyncio.to_thread(generate_audio, text, language)
                 wav_bytes = audio_to_wav_bytes(audio, sr)
@@ -744,7 +767,7 @@ def create_app(
             template=template,
             description=description,
             config=config,
-            agents_dir=Path("agents"),
+            agents_dir=resolved_agents_dir,
         )
         return await deploy_skill(
             skill_dir,
@@ -768,7 +791,7 @@ def create_app(
             description=description,
             tools=tools,
             apis=apis,
-            agents_dir=Path("agents"),
+            agents_dir=resolved_agents_dir,
         )
         if not agent_dir:
             return {"status": "error", "message": "Agent generation failed"}
@@ -799,7 +822,7 @@ def create_app(
     @app.post("/catalog/pack/{name}")
     async def catalog_pack(name: str) -> dict[str, Any]:
         """Pack agent/skill into .kali-agent file."""
-        agent_dir = Path("agents") / name
+        agent_dir = resolved_agents_dir / name
         if not agent_dir.exists():
             return {"error": f"Agent '{name}' not found"}
         try:
@@ -822,7 +845,7 @@ def create_app(
             return {"error": f"File not found: {path}"}
         result = await install_package(
             path,
-            agents_dir=Path("agents"),
+            agents_dir=resolved_agents_dir,
             skill_executor=getattr(request.app.state, "skill_executor", None),
             plugin_registry=getattr(request.app.state, "plugin_registry", None),
             agent_runtime=getattr(request.app.state, "agent_runtime", None),

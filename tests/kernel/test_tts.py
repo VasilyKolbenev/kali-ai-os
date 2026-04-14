@@ -1,5 +1,7 @@
 """Tests for Text-to-Speech."""
 
+from unittest.mock import patch
+
 import numpy as np
 
 from kernel.voice.tts import TextToSpeech, TTSResult
@@ -23,7 +25,8 @@ class TestTextToSpeech:
         tts = TextToSpeech()
         assert not tts.is_loaded
 
-    def test_synthesize_without_model_returns_empty(self) -> None:
+    @patch("kernel.voice.tts_engine.is_loaded", return_value=False)
+    def test_synthesize_without_model_returns_empty(self, _mock_loaded) -> None:  # type: ignore[no-untyped-def]
         tts = TextToSpeech()
         result = tts.synthesize("hello world")
         assert isinstance(result, TTSResult)

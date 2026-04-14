@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     import numpy as np
@@ -35,10 +36,18 @@ class VoiceActivityDetector:
         return self._loaded
 
     def load(self) -> None:
-        """Load the Silero VAD model."""
+        """Load the Silero VAD model.
+
+        On Windows the default torch hub cache can become locked by another
+        process. We pre-check cache readability and redirect to a temp dir
+        when needed, then fall back to energy-based detection on failure.
+        """
+        self._ensure_hub_cache()
         try:
             import torch
 
+            # Skip GitHub fork-check that crashes on rate-limit (PyTorch bug)
+            torch.hub._validate_not_a_forked_repo = lambda a, b, c: True
             model, _ = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",
@@ -47,9 +56,34 @@ class VoiceActivityDetector:
             self._model = model
             self._loaded = True
             logger.info("Silero VAD model loaded")
-        except Exception:
-            logger.warning("Failed to load Silero VAD, using energy-based fallback")
+        except Exception as e:
+            logger.warning("Failed to load Silero VAD: %s, using energy fallback", e)
             self._loaded = False
+
+    @staticmethod
+    def _ensure_hub_cache() -> None:
+        """Redirect torch hub cache if the default dir is inaccessible."""
+        import os
+        import tempfile
+
+        import torch
+
+        default_dir = torch.hub.get_dir()
+        vad_cache = Path(default_dir) / "snakers4_silero-vad_master"
+        if not vad_cache.exists():
+            return  # no cached dir yet, let torch.hub download to default location
+
+        try:
+            os.listdir(vad_cache)
+            return  # cache is readable, nothing to fix
+        except PermissionError:
+            logger.warning(
+                "Silero VAD cache at %s is locked, redirecting to temp dir",
+                vad_cache,
+            )
+            tmp_hub = Path(tempfile.gettempdir()) / "kali_torch_hub"
+            tmp_hub.mkdir(exist_ok=True)
+            torch.hub.set_dir(str(tmp_hub))
 
     def process(self, audio: np.ndarray, sample_rate: int = 16000) -> VADResult:
         if self._model is not None:

@@ -99,8 +99,14 @@ def _get_rvc_engine() -> RVCEngine:
 
 
 def load_models() -> None:
-    """Load Silero TTS + RVC ONNX models. Call once at startup."""
+    """Load Silero TTS + RVC ONNX models. Call once at startup.
+
+    Safe to call multiple times -- skips if already loaded.
+    """
     global _loaded
+
+    if _loaded:
+        return
 
     _get_tts_model()
     if RVC_ENABLED:
