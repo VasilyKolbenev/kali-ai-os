@@ -102,9 +102,12 @@ def create_app(
     _is_frozen = hasattr(sys, "_MEIPASS")
     if _is_frozen:
         _exe_dir = Path(sys.executable).parent
+        # Writable data goes to %APPDATA%\KALI (Program Files is read-only)
+        _appdata = Path(os.environ.get("APPDATA", _exe_dir)) / "KALI"
+        _appdata.mkdir(parents=True, exist_ok=True)
         _default_config = _bundle_dir / "config" / "kali.yaml"
         _default_agents = _bundle_dir / "agents"
-        _default_db = _exe_dir / "data" / "kali.db"
+        _default_db = _appdata / "kali.db"
     else:
         _default_config = Path("config/kali.yaml")
         _default_agents = Path("agents")

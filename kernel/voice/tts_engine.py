@@ -30,10 +30,10 @@ RVC_PITCH_SHIFT = int(os.environ.get("RVC_PITCH_SHIFT", "5"))
 RVC_INDEX_INFLUENCE = float(os.environ.get("RVC_INDEX_INFLUENCE", "0.8"))
 MODEL_SR = 40000  # RVC output sample rate
 
-# Models live next to the exe (not inside _MEIPASS bundle)
+# Models dir: AppData for installed mode, project root for dev
 import sys as _sys
 if hasattr(_sys, "_MEIPASS"):
-    MODELS_DIR = Path(_sys.executable).parent / "models"
+    MODELS_DIR = Path(os.environ.get("APPDATA", "")) / "KALI" / "models"
 else:
     MODELS_DIR = Path(__file__).parent.parent.parent / "models"
 
