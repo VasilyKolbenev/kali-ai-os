@@ -98,6 +98,7 @@ class LLMRouter:
     async def _call_anthropic(self, request: LLMRequest) -> LLMResponse:
         """Call Claude API via anthropic SDK."""
         import anthropic
+        from kernel.jarvis_persona import get_prompt
 
         client = anthropic.AsyncAnthropic()
         messages = [{"role": "user", "content": request.text}]
@@ -108,6 +109,7 @@ class LLMRouter:
         kwargs: dict[str, Any] = {
             "model": self.config.cloud_model,
             "max_tokens": 1024,
+            "system": get_prompt(),
             "messages": messages,
         }
 
@@ -134,9 +136,12 @@ class LLMRouter:
     async def _call_openai(self, request: LLMRequest) -> LLMResponse:
         """Call OpenAI API via openai SDK."""
         import openai
+        from kernel.jarvis_persona import get_prompt
 
         client = openai.AsyncOpenAI()
-        messages: list[dict[str, Any]] = []
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": get_prompt()},
+        ]
 
         for ctx in request.context:
             messages.append(ctx)

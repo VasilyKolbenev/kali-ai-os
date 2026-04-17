@@ -5,6 +5,9 @@ echo   KALI - Kernel Agent Lifecycle Intelligence
 echo ========================================
 echo.
 
+if "%KALI_HOST%"=="" set "KALI_HOST=127.0.0.1"
+if "%KALI_PORT%"=="" set "KALI_PORT=3005"
+
 :: Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -30,19 +33,9 @@ if not exist ".env" (
     echo.
 )
 
-:: Start RVC voice conversion (WSL, conda rvc, port 3003)
-echo [START] Starting RVC JARVIS voice conversion (WSL, port 3003)...
-start "" wsl bash -c "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rvc && python /mnt/c/Users/User/Desktop/Jarvis/services/rvc/server.py"
-timeout /t 8 /nobreak >nul
-
-:: Start TTS service (WSL, Silero + RVC, port 3002)
-echo [START] Starting Silero TTS + RVC pipeline (WSL, port 3002)...
-start "" wsl bash -c "cd ~/kali-tts-wsl && source .venv/bin/activate && python /mnt/c/Users/User/Desktop/Jarvis/services/tts/server.py"
-timeout /t 15 /nobreak >nul
-
-:: Start kernel (port 3005)
-echo [START] Starting KALI kernel on port 3005...
-start /b "" uv run uvicorn kernel.main:create_app --factory --host 0.0.0.0 --port 3005
+:: Start kernel (native Windows, in-process TTS)
+echo [START] Starting KALI kernel on %KALI_HOST%:%KALI_PORT%...
+start /b "" uv run uvicorn kernel.main:create_app --factory --host %KALI_HOST% --port %KALI_PORT%
 
 :: Wait for kernel to start
 timeout /t 3 /nobreak >nul
@@ -59,9 +52,8 @@ echo.
 echo ========================================
 echo   KALI is running!
 echo   UI:      http://localhost:1420
-echo   Kernel:  http://localhost:3005/health
-echo   TTS:     http://localhost:3002/health
-echo   RVC:     http://localhost:3003/health
+echo   Kernel:  http://%KALI_HOST%:%KALI_PORT%/health
+echo   Voice:   in-process (kernel /tts, /tts/speak)
 echo   Press Ctrl+C to stop
 echo ========================================
 echo.

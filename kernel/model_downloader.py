@@ -7,12 +7,13 @@ Downloads from HuggingFace with progress reporting.
 import logging
 import os
 import urllib.request
-from pathlib import Path
 from typing import Any
+
+from kernel.runtime_paths import models_dir
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path(os.environ.get("KALI_MODELS_DIR", "models"))
+MODELS_DIR = models_dir()
 
 REQUIRED_MODELS = {
     "vec-768-layer-12.onnx": {
@@ -32,13 +33,30 @@ BUNDLED_MODELS = ["jarvis_v2.onnx", "jarvis_v2.index"]
 
 
 def get_missing_models() -> list[dict[str, Any]]:
-    """Check which models need to be downloaded."""
+    """Check which downloadable support models are missing."""
     missing = []
     for name, info in REQUIRED_MODELS.items():
         path = MODELS_DIR / name
         if not path.exists():
             missing.append({"name": name, **info})
     return missing
+
+
+def get_missing_bundled_models() -> list[str]:
+    """Check which bundled JARVIS voice artifacts are missing."""
+    return [name for name in BUNDLED_MODELS if not (MODELS_DIR / name).exists()]
+
+
+def get_models_status() -> dict[str, Any]:
+    """Return a detailed voice-model readiness summary."""
+    downloadable_missing = get_missing_models()
+    bundled_missing = get_missing_bundled_models()
+    return {
+        "models_dir": str(MODELS_DIR),
+        "ready": not downloadable_missing and not bundled_missing,
+        "missing_downloadable": [item["name"] for item in downloadable_missing],
+        "missing_bundled": bundled_missing,
+    }
 
 
 def download_model(name: str, url: str, callback: Any = None) -> bool:
@@ -90,6 +108,15 @@ def download_model(name: str, url: str, callback: Any = None) -> bool:
 
 def ensure_models(callback: Any = None) -> bool:
     """Download all missing models. Returns True if all models are available."""
+    bundled_missing = get_missing_bundled_models()
+    if bundled_missing:
+        logger.error(
+            "Bundled voice models are missing from %s: %s",
+            MODELS_DIR,
+            ", ".join(bundled_missing),
+        )
+        return False
+
     missing = get_missing_models()
     if not missing:
         logger.info("All voice models present")
@@ -108,4 +135,5 @@ def ensure_models(callback: Any = None) -> bool:
 
 def models_ready() -> bool:
     """Check if all required models are downloaded."""
-    return len(get_missing_models()) == 0
+    status = get_models_status()
+    return bool(status["ready"])

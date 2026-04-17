@@ -1,8 +1,9 @@
-"""Build KALI backend as a single .exe with PyInstaller.
+"""Build Premium backend — F5-TTS + CUDA torch for local GPU voice synthesis.
 
-Usage:
-    cd C:/Users/User/Desktop/Jarvis
-    uv run python scripts/build_backend.py
+Target: ~4GB installer (includes torch+cu128, F5 model, FFmpeg DLLs).
+For users with NVIDIA GPU (RTX 20+ series) who want fully offline JARVIS voice.
+
+Distribution: Google Drive / Yandex.Disk link (too big for Telegram).
 """
 
 import subprocess
@@ -11,20 +12,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 ENTRY = ROOT / "kernel" / "entry.py"
-DIST = ROOT / "dist"
+DIST = ROOT / "dist_premium"
 NAME = "kali-backend"
 
-# Data files to bundle
 DATAS = [
-    # Agent directories (manifests + code)
     (str(ROOT / "agents"), "agents"),
-    # Config
     (str(ROOT / "config"), "config"),
-    # JARVIS voice clips
     (str(ROOT / "resources" / "sounds"), "resources/sounds"),
 ]
 
-# Hidden imports that PyInstaller can't detect
 HIDDEN = [
     "kernel.runtime_paths",
     "kernel.model_downloader",
@@ -58,65 +54,59 @@ HIDDEN = [
     "uvicorn.lifespan.on",
     "yaml",
     "croniter",
-    "faiss",
     "soundfile",
     "sounddevice",
-    "onnxruntime",
     "openwakeword.model",
     "requests",
-    # F5-TTS + torchaudio
+    # F5-TTS + torch CUDA stack
     "f5_tts",
     "f5_tts.api",
     "f5_tts.infer",
     "f5_tts.model",
     "vocos",
+    "torch",
     "torchaudio",
     "torchaudio.compliance",
     "torchaudio.compliance.kaldi",
     "torchaudio.transforms",
     "torchcodec",
+    "transformers",
+    "huggingface_hub",
+    "faster_whisper",
     "elevenlabs",
     "elevenlabs.client",
-    "huggingface_hub",
 ]
 
 
 def main() -> None:
-    """Build the backend executable."""
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", NAME,
-        # onedir instead of onefile: backend too big (3GB with torch+CUDA) for NSIS mmap
-        "--onedir",
-        "--console",  # Keep console for now (debug). Change to --noconsole for release.
+        "--onedir",  # NSIS-friendly for 3+ GB backend
+        "--console",
         "--distpath", str(DIST),
-        "--workpath", str(ROOT / "build" / "pyinstaller"),
+        "--workpath", str(ROOT / "build" / "pyinstaller_premium"),
         "--specpath", str(ROOT / "build"),
         "--noconfirm",
-        # Icon
         "--icon", str(ROOT / "src-tauri" / "icons" / "icon.ico"),
     ]
 
-    # Add data files
     for src, dst in DATAS:
         cmd.extend(["--add-data", f"{src};{dst}"])
-
-    # Add hidden imports
     for imp in HIDDEN:
         cmd.extend(["--hidden-import", imp])
 
-    # Entry point
     cmd.append(str(ENTRY))
 
-    print(f"Building {NAME}.exe...")
-    print(f"Command: {' '.join(cmd[:10])}...")
-
+    print(f"Building Premium {NAME} (F5 + CUDA torch)...")
     result = subprocess.run(cmd, cwd=str(ROOT))
 
     if result.returncode == 0:
-        exe = DIST / f"{NAME}.exe"
-        size_mb = exe.stat().st_size / 1024 / 1024 if exe.exists() else 0
-        print(f"\nSuccess! Built: {exe} ({size_mb:.1f} MB)")
+        out_dir = DIST / NAME
+        if out_dir.exists():
+            total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
+            print(f"\nSuccess! Built Premium backend at {out_dir}")
+            print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
     else:
         print(f"\nBuild failed with exit code {result.returncode}")
         sys.exit(1)

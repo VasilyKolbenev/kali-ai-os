@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useChatStore } from "../../stores/chatStore";
 import { useVoiceStore } from "../../stores/voiceStore";
 import { api } from "../../api/client";
+import { apiUrl } from "../../api/runtime";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type SpeechRecognitionInstance = any;
@@ -40,6 +41,26 @@ export function ChatInput() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    api.voiceStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setVoiceActive(Boolean(status.available));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVoiceActive(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Auto-send pending message from dashboard widget clicks
   useEffect(() => {
     if (pendingMessage && !isLoading) {
@@ -57,7 +78,7 @@ export function ChatInput() {
     try {
       // Backend plays audio through system speakers directly
       // No WebView2 audio restrictions — sound goes straight to OS
-      const res = await fetch("http://localhost:3005/tts/speak", {
+      const res = await fetch(apiUrl("/tts/speak"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -183,13 +204,14 @@ export function ChatInput() {
     try {
       if (voiceActive) {
         await api.voiceStop();
-        setVoiceActive(false);
       } else {
         await api.voiceStart();
-        setVoiceActive(true);
       }
+      const status = await api.voiceStatus();
+      setVoiceActive(Boolean(status.available));
     } catch {
       // Voice pipeline not available
+      setVoiceActive(false);
     } finally {
       setIsTogglingVoice(false);
     }

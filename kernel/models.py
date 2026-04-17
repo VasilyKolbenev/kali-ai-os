@@ -152,17 +152,18 @@ class ServerConfig(BaseModel):
     """Server configuration."""
 
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 3005
 
 
 class VoiceConfig(BaseModel):
     """Voice pipeline configuration."""
 
     wake_word: str = "jarvis"
-    mode: str = "wake_word"
+    mode: str = "wake_word"  # wake_word | push_to_talk | off
     stt_model: str = "base"
     tts_voice: str = "default"
     vad_threshold: float = 0.5
+    auto_start: bool = False  # If true: pipeline starts with app. Otherwise on-demand.
 
 
 class LLMConfig(BaseModel):

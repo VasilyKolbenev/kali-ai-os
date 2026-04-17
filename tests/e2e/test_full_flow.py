@@ -93,5 +93,5 @@ class TestE2EFlow:
     async def test_config_endpoint(self, client: AsyncClient) -> None:
         resp = await client.get("/config")
         data = resp.json()
-        assert data["server"]["port"] == 8000
+        assert data["server"]["port"] == 3005
         assert data["voice"]["wake_word"] == "jarvis"

@@ -3,9 +3,8 @@ import { useVoiceStore } from "../stores/voiceStore";
 import { useAgentStore } from "../stores/agentStore";
 import { useDashboardStore } from "../stores/dashboardStore";
 import { useAppStore } from "../stores/appStore";
+import { wsUrl } from "./runtime";
 import type { WSMessage } from "./types";
-
-const WS_URL = "ws://localhost:3005/ws";
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -16,7 +15,7 @@ export function useWebSocket() {
 
   useEffect(() => {
     const connect = () => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

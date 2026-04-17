@@ -52,7 +52,19 @@ class TextToSpeech:
         return self._loaded
 
     def load(self) -> None:
-        """Check if TTS service is available."""
+        """Load in-process TTS first, then fall back to the legacy HTTP service."""
+        try:
+            from kernel.voice.tts_router import is_loaded, load_models
+
+            if not is_loaded():
+                load_models()
+            self._loaded = is_loaded()
+            if self._loaded:
+                logger.info("TTS ready via in-process engine")
+                return
+        except Exception as exc:
+            logger.warning("In-process TTS not ready: %s", exc)
+
         try:
             import requests
 
@@ -81,7 +93,7 @@ class TextToSpeech:
 
         # Try in-process engine first (no HTTP round-trip)
         try:
-            from kernel.voice.tts_engine import generate_audio as _gen, is_loaded
+            from kernel.voice.tts_router import generate_audio as _gen, is_loaded
             if is_loaded():
                 audio, sr = _gen(text, language)
                 elapsed_ms = int((time.perf_counter() - start) * 1000)

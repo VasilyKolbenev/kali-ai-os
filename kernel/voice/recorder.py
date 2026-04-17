@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import queue
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,7 +25,11 @@ class AudioChunk:
 
 
 class AudioRecorder:
-    """Captures audio from the microphone in async chunks."""
+    """Captures audio from the microphone in async chunks.
+
+    Uses a thread-safe queue.Queue for the sounddevice callback thread,
+    bridged to async via a polling loop.
+    """
 
     def __init__(
         self,
@@ -36,7 +41,8 @@ class AudioRecorder:
         self.chunk_size = int(sample_rate * chunk_duration_ms / 1000)
         self._device = device
         self._stream: sd.InputStream | None = None
-        self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
+        # Thread-safe queue for sounddevice callback thread
+        self._thread_queue: queue.Queue[AudioChunk] = queue.Queue(maxsize=300)
         self._recording = False
 
     @property
@@ -57,13 +63,27 @@ class AudioRecorder:
             sample_rate=self.sample_rate,
         )
         try:
-            self._queue.put_nowait(chunk)
-        except asyncio.QueueFull:
-            logger.warning("Audio queue full, dropping chunk")
+            self._thread_queue.put_nowait(chunk)
+        except queue.Full:
+            # Drop oldest chunk to prevent stalling
+            try:
+                self._thread_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._thread_queue.put_nowait(chunk)
+            except queue.Full:
+                pass
 
     async def start(self) -> None:
         if self._recording:
             return
+        # Drain any stale chunks from previous session
+        while not self._thread_queue.empty():
+            try:
+                self._thread_queue.get_nowait()
+            except queue.Empty:
+                break
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -87,4 +107,11 @@ class AudioRecorder:
         logger.info("Audio recording stopped")
 
     async def read_chunk(self) -> AudioChunk:
-        return await self._queue.get()
+        """Read next audio chunk, bridging thread-safe queue to async."""
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                return self._thread_queue.get_nowait()
+            except queue.Empty:
+                # Yield to event loop briefly, then retry
+                await asyncio.sleep(0.005)

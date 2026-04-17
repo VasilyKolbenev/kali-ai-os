@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,12 +44,32 @@ from kernel.catalog.installer import install_package
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:1421",
+    "http://127.0.0.1:1421",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+]
+
 
 def _mask_key(key: str) -> str:
     """Mask API key for display: sk-abc...xyz"""
     if not key or len(key) < 8:
         return ""
     return f"{key[:7]}***{key[-4:]}"
+
+
+def _cors_origins() -> list[str]:
+    """Resolve allowed CORS origins from env or Desktop/dev defaults."""
+    raw = os.environ.get("KALI_CORS_ORIGINS", "")
+    if raw.strip():
+        origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+        if origins:
+            return origins
+    return list(_DEFAULT_CORS_ORIGINS)
 
 
 async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
@@ -160,8 +181,16 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
 
 
 def _save_env(updates: dict[str, str]) -> None:
-    """Save/update keys in .env file."""
-    env_path = Path(".env")
+    """Save/update keys in .env file.
+
+    In frozen (PyInstaller) mode writes to %APPDATA%/KALI/.env,
+    otherwise to the project root .env.
+    """
+    if hasattr(sys, "_MEIPASS"):
+        env_path = Path(os.environ.get("APPDATA", "")) / "KALI" / ".env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        env_path = Path(".env")
     existing: dict[str, str] = {}
     if env_path.exists():
         for line in env_path.read_text().splitlines():
@@ -202,8 +231,6 @@ def create_app(
     Returns:
         Configured FastAPI application instance.
     """
-    load_dotenv()
-
     # When running as a PyInstaller bundle, bundled data lives under _MEIPASS;
     # the writable data dir is next to the .exe itself.
     _bundle_dir = Path(getattr(sys, "_MEIPASS", ""))
@@ -213,10 +240,14 @@ def create_app(
         # Writable data goes to %APPDATA%\KALI (Program Files is read-only)
         _appdata = Path(os.environ.get("APPDATA", _exe_dir)) / "KALI"
         _appdata.mkdir(parents=True, exist_ok=True)
+        # Load .env from AppData (user's keys) → exe dir → cwd
+        load_dotenv(_appdata / ".env")
+        load_dotenv(_exe_dir / ".env")
         _default_config = _bundle_dir / "config" / "kali.yaml"
         _default_agents = _bundle_dir / "agents"
         _default_db = _appdata / "kali.db"
     else:
+        load_dotenv()
         _default_config = Path("config/kali.yaml")
         _default_agents = Path("agents")
         _default_db = Path("data/kali.db")
@@ -230,6 +261,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[misc]
+        import asyncio
+
         # Initialize all components
         event_bus = EventBus()
         config_manager = ConfigManager(resolved_config_path)
@@ -316,6 +349,24 @@ def create_app(
             )
             app.state.voice_pipeline = voice_pipeline
             logger.info("Voice pipeline initialized")
+
+            # Voice pipeline — auto-start only if user opted in via config.
+            # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
+            voice_cfg = config_manager.config.voice
+            if voice_cfg.auto_start and voice_cfg.mode != "off":
+                async def _voice_bg_start() -> None:
+                    try:
+                        import asyncio as _aio_vp
+                        await _aio_vp.to_thread(voice_pipeline.load_models)
+                        await voice_pipeline.start()
+                        logger.info("Voice pipeline auto-started (mode=%s, wake_word=%s)",
+                                   voice_cfg.mode, voice_cfg.wake_word)
+                    except Exception as e:
+                        logger.warning("Voice pipeline auto-start failed: %s", e)
+                asyncio.create_task(_voice_bg_start())
+            else:
+                logger.info("Voice pipeline ready (mode=%s, auto_start=%s) — waiting for /voice/start",
+                           voice_cfg.mode, voice_cfg.auto_start)
         except Exception:
             logger.warning("Voice pipeline not available")
             app.state.voice_pipeline = None
@@ -350,6 +401,21 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
+        # In frozen (PyInstaller) mode, patch AgentRuntime to use in-process
+        # protocol instead of subprocess — prevents fork bomb from sys.executable.
+        if hasattr(sys, "_MEIPASS"):
+            from kernel.agent_runtime.protocols.inprocess import InProcessProtocol
+            _original_create_protocol = agent_runtime._create_protocol
+
+            def _frozen_create_protocol(manifest):  # type: ignore[no-untyped-def]
+                if manifest.protocol == "native":
+                    script = agent_runtime._agents_dir / manifest.name / "agent.py"
+                    return InProcessProtocol(agent_name=manifest.name, script_path=script)
+                return _original_create_protocol(manifest)
+
+            agent_runtime._create_protocol = _frozen_create_protocol  # type: ignore[method-assign]
+            logger.info("Frozen mode: agents will run in-process (no subprocess)")
+
         # Auto-load essential agents (built-in = auto-approved)
         builtin_agents = {"system", "weather", "tasks", "calendar"}
         for agent_name in builtin_agents:
@@ -368,14 +434,20 @@ def create_app(
         catalog_client = CatalogClient()
         app.state.catalog_client = catalog_client
 
-        # Load TTS models (Silero + RVC ONNX) — in-process, no separate server needed
-        try:
-            import asyncio
-            from kernel.voice.tts_engine import load_models, is_loaded
-            await asyncio.to_thread(load_models)
-            logger.info("TTS engine loaded in-process")
-        except Exception:
-            logger.warning("TTS engine not available (will use cloud fallbacks)")
+        # Load TTS models in background — only if voice auto_start is enabled.
+        # Otherwise load on-demand via /tts/speak or /voice/start (avoids unused RAM).
+        async def _tts_bg_load() -> None:
+            if not config_manager.config.voice.auto_start:
+                logger.info("TTS deferred — will load on first /tts/speak or /voice/start")
+                return
+            try:
+                import asyncio as _aio_tts
+                from kernel.voice.tts_router import load_models as _load_tts
+                await _aio_tts.to_thread(_load_tts)
+                logger.info("TTS engine loaded in-process")
+            except Exception:
+                logger.warning("TTS engine not available (will use cloud fallbacks)")
+        asyncio.create_task(_tts_bg_load())
 
         logger.info("KALI kernel started (v%s)", __version__)
         yield
@@ -390,7 +462,7 @@ def create_app(
     app = FastAPI(title="KALI Kernel", version=__version__, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -427,11 +499,61 @@ def create_app(
     async def voice_status(request: Request) -> dict[str, Any]:
         vp = request.app.state.voice_pipeline
         if vp is None:
-            return {"available": False}
+            return {
+                "available": False,
+                "ready": False,
+                "started": False,
+                "state": "idle",
+                "mode": "unavailable",
+                "models_ready": False,
+                "missing_models": [],
+            }
+
+        try:
+            from kernel.model_downloader import get_models_status
+
+            model_status = get_models_status()
+        except Exception:
+            model_status = {
+                "ready": False,
+                "missing_downloadable": [],
+                "missing_bundled": [],
+                "models_dir": "",
+            }
+
+        try:
+            from kernel.voice.tts_router import is_loaded as tts_is_loaded
+
+            tts_loaded = tts_is_loaded()
+        except Exception:
+            tts_loaded = False
+
+        missing_models = [
+            *model_status.get("missing_bundled", []),
+            *model_status.get("missing_downloadable", []),
+        ]
+        ready = bool(
+            vp.is_started
+            and vp._vad.is_loaded
+            and vp._wake_word.is_loaded
+            and vp._stt.is_loaded
+            and tts_loaded
+            and model_status.get("ready")
+        )
+
         return {
             "available": True,
+            "ready": ready,
+            "started": vp.is_started,
             "state": vp.state.value,
             "mode": vp.mode,
+            "vad_loaded": vp._vad.is_loaded,
+            "wake_word_loaded": vp._wake_word.is_loaded,
+            "stt_loaded": vp._stt.is_loaded,
+            "tts_loaded": tts_loaded,
+            "models_ready": model_status.get("ready", False),
+            "models_dir": model_status.get("models_dir", ""),
+            "missing_models": missing_models,
         }
 
     @app.post("/voice/start")
@@ -439,6 +561,8 @@ def create_app(
         vp = request.app.state.voice_pipeline
         if vp is None:
             return {"status": "error", "message": "Voice pipeline not available"}
+        if vp.is_started:
+            return {"status": "already_running"}
         vp.load_models()
         await vp.start()
         return {"status": "started"}
@@ -450,6 +574,30 @@ def create_app(
             return {"status": "error", "message": "Voice pipeline not available"}
         await vp.stop()
         return {"status": "stopped"}
+
+    @app.post("/voice/clone")
+    async def voice_clone(request: Request) -> dict[str, Any]:
+        """Trigger ElevenLabs voice cloning from JARVIS Sound Pack.
+
+        Requires:
+        - ELEVENLABS_API_KEY set (in Settings or .env)
+        - ElevenCreator / ElevenAgents subscription (not just Pay-as-you-go)
+        - Reference clips in Sound Pack directory
+
+        Returns voice_id on success, or error details.
+        """
+        try:
+            from kernel.voice.tts_engine_elevenlabs import ElevenLabsEngine
+            engine = ElevenLabsEngine()
+            auth = engine.check_auth()
+            if not auth.get("ok"):
+                return {"status": "error", "stage": "auth", "message": auth.get("error", "unknown")}
+            # Force re-clone (ignore cached voice_id)
+            engine.voice_id = None
+            voice_id = engine.ensure_voice_clone()
+            return {"status": "ok", "voice_id": voice_id}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
@@ -645,10 +793,17 @@ def create_app(
 
         Uses pre-recorded JARVIS clips for common phrases (greetings, ok, thanks).
         Falls back to Silero + RVC TTS for custom responses.
+        Anti-echo: mutes voice pipeline microphone during playback.
         """
         import asyncio
         if not text or len(text) < 3:
             return
+
+        # Anti-echo: stop voice pipeline mic before speaking
+        vp = getattr(app.state, "voice_pipeline", None)
+        if vp and vp._recorder.is_recording:
+            await vp._recorder.stop()
+
         try:
             # Try pre-recorded JARVIS clip first
             from kernel.voice.jarvis_sounds import should_use_clip, play_reaction
@@ -658,13 +813,20 @@ def create_app(
                 return
 
             # Generate TTS for custom responses
-            from kernel.voice.tts_engine import generate_audio, is_loaded, load_models
+            from kernel.voice.tts_router import generate_audio, is_loaded, load_models
             if not is_loaded():
                 await asyncio.to_thread(load_models)
             audio, sr = await asyncio.to_thread(generate_audio, text)
             await asyncio.to_thread(_play_audio, audio, sr)
         except Exception as e:
             logger.warning("Auto-speak failed: %s", e)
+        finally:
+            # Anti-echo: 500ms buffer lets audio fully drain before mic resumes
+            await asyncio.sleep(0.5)
+            if vp:
+                await vp._recorder.start()
+                vp._wake_word.reset()
+                vp._vad.reset()
 
     @app.post("/chat")
     async def chat(request: Request) -> dict[str, Any]:
@@ -677,6 +839,8 @@ def create_app(
 
     async def _chat_logic(request: Request) -> dict[str, Any]:
         """Internal chat logic — returns response dict."""
+        import re as _re
+
         body = await request.json()
         text = body.get("text", "")
         if not text:
@@ -688,6 +852,49 @@ def create_app(
         # Detect user language from input text
         _cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
         _is_ru = _cyrillic > len(text) * 0.3
+
+        # Word-boundary match helper — prevents "час" matching inside "часто" or "сейчас"
+        def _has_word(txt: str, words: list[str]) -> bool:
+            for w in words:
+                if _re.search(rf"\b{_re.escape(w)}\b", txt, _re.IGNORECASE | _re.UNICODE):
+                    return True
+            return False
+
+        # --- Automation intent detection (PRIORITY: before keyword routing) ---
+        # Patterns: "проверять каждые N", "уведомляй если", "следи за X", "напоминай каждые"
+        _automation_patterns = [
+            r"\bкажд(ый|ые|ую|ого)\s+(час|минут|день|недел|секунд)",
+            r"\bуведом(ляй|и|лять)\b",
+            r"\bскажи\s+мне\s+(когда|если)",
+            r"\b(следи|отслеживай|мониторь)\b",
+            r"\bнапоминай\b",
+            r"\bесли\s+\w+\s+(изменил|увеличил|уменьшил|станет|будет|превыс)",
+            r"\bevery\s+(hour|minute|day|week)",
+            r"\bnotify\s+me\b",
+            r"\btrack\s+my\b",
+            r"\bremind\s+me\b",
+        ]
+        _is_automation = any(_re.search(p, text_lower) for p in _automation_patterns)
+        if _is_automation:
+            try:
+                intent = classify_intent(text)
+                if _is_ru:
+                    resp = (
+                        f"Отлично, сэр. Похоже на {intent.template or 'автоматизацию'}. "
+                        "Создать для вас навык? Скажите «да» или уточните детали."
+                    )
+                else:
+                    resp = (
+                        f"Right away, sir. Sounds like a {intent.template or 'automation'}. "
+                        "Shall I create this skill? Say 'yes' or add details."
+                    )
+                return {
+                    "response": resp,
+                    "source": "agent-builder",
+                    "data": {"intent": intent.__dict__, "pending_creation": True},
+                }
+            except Exception as e:
+                logger.warning("Automation intent classification failed: %s", e)
 
         # Morning briefing on first greeting of the day
         _greet_words = ["привет", "здравствуй", "добр", "hello", "hi", "hey", "good morning", "доброе"]
@@ -729,7 +936,17 @@ def create_app(
             except Exception:
                 pass
 
-        if any(w in text_lower for w in ["time", "время", "час"]):
+        # Strict time query patterns only — avoid false matches on "за всё время", "часто" etc.
+        _time_patterns = [
+            r"\bкотор(ый|ая|ое)\s+час\b",
+            r"\bсколько\s+(сейчас\s+)?времени\b",
+            r"\bкакое\s+(сейчас\s+)?время\b",
+            r"\bтекущ(ее|ий|ая)\s+(врем|час)",
+            r"\bwhat\s+(is\s+)?(the\s+)?time\b",
+            r"\bcurrent\s+time\b",
+            r"\btell\s+me\s+the\s+time\b",
+        ]
+        if any(_re.search(p, text_lower) for p in _time_patterns):
             try:
                 result = await s.agent_runtime.dispatch("system", "get_time", {})
                 weekday = result.get("weekday", "")
@@ -902,13 +1119,8 @@ def create_app(
             client = openai.AsyncOpenAI()
             llm_config = s.config_manager.config.llm
 
-            system_msg = (
-                "You are KALI (JARVIS-like AI assistant). "
-                "ALWAYS respond in the SAME language the user writes in. "
-                "If user writes in Russian — respond in Russian. "
-                "If in English — respond in English. "
-                "Be concise, helpful, and professional."
-            )
+            from kernel.jarvis_persona import get_prompt
+            system_msg = get_prompt()
             messages = [{"role": "system", "content": system_msg}] + s.memory.get_context() + [
                 {"role": "user", "content": text},
             ]
@@ -968,7 +1180,7 @@ def create_app(
             return JSONResponse({"error": "No text provided"}, status_code=400)
 
         try:
-            from kernel.voice.tts_engine import (
+            from kernel.voice.tts_router import (
                 generate_audio, audio_to_wav_bytes, is_loaded, load_models,
             )
             if not is_loaded():
@@ -1005,7 +1217,7 @@ def create_app(
             return {"error": "No text provided"}
 
         try:
-            from kernel.voice.tts_engine import (
+            from kernel.voice.tts_router import (
                 generate_audio, is_loaded, load_models,
             )
             if not is_loaded():
@@ -1027,14 +1239,36 @@ def create_app(
     async def tts_health() -> dict[str, Any]:
         """TTS engine health check."""
         try:
-            from kernel.voice.tts_engine import is_loaded
+            from kernel.voice.tts_router import is_loaded
+            from kernel.model_downloader import get_models_status
+
             loaded = is_loaded()
+            model_status = get_models_status()
         except Exception:
             loaded = False
+            model_status = {
+                "ready": False,
+                "missing_downloadable": [],
+                "missing_bundled": [],
+                "models_dir": "",
+            }
         return {
             "status": "ok" if loaded else "not loaded",
             "engine": "silero-v4 + onnx-rvc-v2",
+            "models_ready": model_status.get("ready", False),
+            "models_dir": model_status.get("models_dir", ""),
+            "missing_models": [
+                *model_status.get("missing_bundled", []),
+                *model_status.get("missing_downloadable", []),
+            ],
         }
+
+    @app.get("/models/status")
+    async def models_status() -> dict[str, Any]:
+        """Voice model availability for desktop diagnostics."""
+        from kernel.model_downloader import get_models_status
+
+        return get_models_status()
 
     @app.post("/builder/classify")
     async def builder_classify(request: Request) -> dict[str, Any]:
@@ -1248,7 +1482,20 @@ def create_app(
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    # CRITICAL: must be first line — prevents fork bomb in PyInstaller --onefile
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     import uvicorn
 
+    # Enable debug logging for voice pipeline components
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.getLogger("kernel.voice").setLevel(logging.DEBUG)
+
     app = create_app()
-    uvicorn.run(app, host="0.0.0.0", port=3005, log_level="info")
+    uvicorn.run(
+        app,
+        host=os.environ.get("KALI_HOST", "127.0.0.1"),
+        port=int(os.environ.get("KALI_PORT", "3005")),
+        log_level="info",
+    )

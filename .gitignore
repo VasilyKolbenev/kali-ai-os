@@ -1,19 +1,54 @@
+# Python
 __pycache__/
 *.py[cod]
-.env
-*.db
+*.egg-info/
 .venv/
+.uv-cache/
+
+# Env & secrets
+.env
+.env.local
+*.db
+
+# Build output — ALL variants (installer output, PyInstaller work dirs)
 dist/
-node_modules/
+dist_lite/
+dist_premium/
+build/
 target/
+node_modules/
+services/tts/.venv/
+
+# Caches
 .mypy_cache/
 .pytest_cache/
+.pytest-tmp/
+.pytest-tmp*/
+.pytest-temp*/
 .ruff_cache/
+.hf_cache/
+tmp*/
+
+# App data & runtime
 data/
-services/tts/.venv/
+
+# Models (downloaded or trained — too big for git)
+models/
 *.pt
 *.onnx
-models/
-dist/
-build/
+*.safetensors
+*.index
+
+# Audio / reference files (too heavy for git)
 *.wav
+*.mp3
+Jarvis Sound Pack*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

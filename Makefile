@@ -5,7 +5,7 @@ install:
 	cd ui && pnpm install
 
 kernel-dev:
-	uv run uvicorn kernel.main:create_app --factory --reload --port 8000
+	uv run uvicorn kernel.main:create_app --factory --reload --port 3005
 
 ui-dev:
 	cd ui && pnpm dev

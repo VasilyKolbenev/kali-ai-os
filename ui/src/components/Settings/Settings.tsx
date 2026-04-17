@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save, Key, Cpu, Globe } from "lucide-react";
+import { apiUrl } from "../../api/runtime";
 
 interface SettingsData {
   llm: {
@@ -65,7 +66,7 @@ export function Settings() {
   const [deepseekKey, setDeepseekKey] = useState("");
 
   useEffect(() => {
-    fetch("http://localhost:3005/settings")
+    fetch(apiUrl("/settings"))
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -85,7 +86,7 @@ export function Settings() {
     setSaving(true);
     setSaved(false);
     try {
-      await fetch("http://localhost:3005/settings", {
+      await fetch(apiUrl("/settings"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

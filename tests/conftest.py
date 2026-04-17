@@ -30,5 +30,5 @@ def sample_agents_dir(tmp_path: Path) -> Path:
 def sample_config_path(tmp_path: Path) -> Path:
     """Create a temp config file."""
     config_path = tmp_path / "kali.yaml"
-    config_path.write_text(yaml.dump({"server": {"port": 8000}}))
+    config_path.write_text(yaml.dump({"server": {"port": 3005}}))
     return config_path

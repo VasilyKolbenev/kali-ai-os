@@ -1,8 +1,7 @@
-"""Build KALI backend as a single .exe with PyInstaller.
+"""Build Lite backend — no F5/CUDA torch. Uses ElevenLabs cloud TTS only.
 
-Usage:
-    cd C:/Users/User/Desktop/Jarvis
-    uv run python scripts/build_backend.py
+Target: ~300-500 MB installer, fits in Telegram (2 GB limit).
+For users without GPU or who don't want local F5-TTS.
 """
 
 import subprocess
@@ -11,26 +10,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 ENTRY = ROOT / "kernel" / "entry.py"
-DIST = ROOT / "dist"
+DIST = ROOT / "dist_lite"
 NAME = "kali-backend"
 
-# Data files to bundle
 DATAS = [
-    # Agent directories (manifests + code)
     (str(ROOT / "agents"), "agents"),
-    # Config
     (str(ROOT / "config"), "config"),
-    # JARVIS voice clips
     (str(ROOT / "resources" / "sounds"), "resources/sounds"),
 ]
 
-# Hidden imports that PyInstaller can't detect
+# Hidden imports — no torch/F5/torchcodec (huge GPU deps)
 HIDDEN = [
     "kernel.runtime_paths",
     "kernel.model_downloader",
     "kernel.jarvis_persona",
     "kernel.voice.tts_router",
-    "kernel.voice.tts_engine_f5",
     "kernel.voice.tts_engine_elevenlabs",
     "kernel.skill_executor",
     "kernel.skill_templates.tracker",
@@ -58,65 +52,73 @@ HIDDEN = [
     "uvicorn.lifespan.on",
     "yaml",
     "croniter",
-    "faiss",
     "soundfile",
     "sounddevice",
-    "onnxruntime",
     "openwakeword.model",
     "requests",
-    # F5-TTS + torchaudio
-    "f5_tts",
-    "f5_tts.api",
-    "f5_tts.infer",
-    "f5_tts.model",
-    "vocos",
-    "torchaudio",
-    "torchaudio.compliance",
-    "torchaudio.compliance.kaldi",
-    "torchaudio.transforms",
-    "torchcodec",
     "elevenlabs",
     "elevenlabs.client",
+]
+
+# Exclude heavy GPU/local-TTS modules (not used in Lite)
+EXCLUDES = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "torchcodec",
+    "f5_tts",
+    "vocos",
+    "transformers",
     "huggingface_hub",
+    "onnxruntime",
+    "onnxruntime_directml",
+    "faiss",
+    "faster_whisper",  # STT also heavy — users can enable later
+    "scipy",
+    "numba",
+    "llvmlite",
+    "matplotlib",
+    "tensorflow",
+    "jax",
+    "wandb",
+    "pandas",
+    "tiktoken",
+    "sympy",
+    "networkx",
 ]
 
 
 def main() -> None:
-    """Build the backend executable."""
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", NAME,
-        # onedir instead of onefile: backend too big (3GB with torch+CUDA) for NSIS mmap
-        "--onedir",
-        "--console",  # Keep console for now (debug). Change to --noconsole for release.
+        "--onedir",  # NSIS-friendly
+        "--console",
         "--distpath", str(DIST),
-        "--workpath", str(ROOT / "build" / "pyinstaller"),
+        "--workpath", str(ROOT / "build" / "pyinstaller_lite"),
         "--specpath", str(ROOT / "build"),
         "--noconfirm",
-        # Icon
         "--icon", str(ROOT / "src-tauri" / "icons" / "icon.ico"),
     ]
 
-    # Add data files
     for src, dst in DATAS:
         cmd.extend(["--add-data", f"{src};{dst}"])
-
-    # Add hidden imports
     for imp in HIDDEN:
         cmd.extend(["--hidden-import", imp])
+    for mod in EXCLUDES:
+        cmd.extend(["--exclude-module", mod])
 
-    # Entry point
     cmd.append(str(ENTRY))
 
-    print(f"Building {NAME}.exe...")
-    print(f"Command: {' '.join(cmd[:10])}...")
-
+    print(f"Building Lite {NAME} (no GPU/F5)...")
     result = subprocess.run(cmd, cwd=str(ROOT))
 
     if result.returncode == 0:
-        exe = DIST / f"{NAME}.exe"
-        size_mb = exe.stat().st_size / 1024 / 1024 if exe.exists() else 0
-        print(f"\nSuccess! Built: {exe} ({size_mb:.1f} MB)")
+        out_dir = DIST / NAME
+        if out_dir.exists():
+            total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
+            print(f"\nSuccess! Built Lite backend at {out_dir}")
+            print(f"Size: {total / 1024 / 1024:.1f} MB uncompressed")
     else:
         print(f"\nBuild failed with exit code {result.returncode}")
         sys.exit(1)

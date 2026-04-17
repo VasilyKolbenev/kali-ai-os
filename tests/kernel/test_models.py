@@ -110,7 +110,7 @@ class TestConfigSchema:
     def test_default_config(self) -> None:
         config = ConfigSchema()
         assert config.server.host == "127.0.0.1"
-        assert config.server.port == 8000
+        assert config.server.port == 3005
         assert config.voice.wake_word == "jarvis"
         assert config.llm.cloud_provider == "anthropic"
         assert config.llm.local_provider == "ollama"

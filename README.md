@@ -69,7 +69,7 @@ Describe what you need — KALI builds it:
 Or use templates via API:
 
 ```bash
-curl -X POST localhost:8000/agents/create \
+curl -X POST http://localhost:3005/agents/create \
   -d '{"name": "btc-monitor", "description": "Bitcoin price alerts", "template": "monitor"}'
 ```
 
@@ -79,7 +79,9 @@ Templates: `monitor`, `tracker`, `notifier` — or write custom logic.
 
 ## Quick Start
 
-**Windows:** double-click `start.bat`
+**Windows (recommended):** run `dist\KALI-Setup-0.1.0.exe`
+
+**Windows (dev):** double-click `start.bat`
 
 **Manual:**
 ```bash
@@ -88,13 +90,15 @@ npm install -g pnpm && cd ui && pnpm install     # UI deps
 cp .env.example .env                             # Add your API key
 
 # Terminal 1: backend
-uv run uvicorn kernel.main:create_app --factory --reload --port 8000
+uv run uvicorn kernel.main:create_app --factory --reload --port 3005
 
 # Terminal 2: frontend
 cd ui && pnpm dev
 
 # Open http://localhost:1420
 ```
+
+If the Desktop app cannot start the backend, collect logs from `%APPDATA%\KALI\logs\`.
 
 Supports **OpenAI** or **Anthropic** — set your preferred provider in `config/kali.yaml`.
 

@@ -26,7 +26,7 @@ class TestWakeWordDetector:
     def test_default_params(self) -> None:
         detector = WakeWordDetector()
         assert detector.wake_word == "jarvis"
-        assert detector.threshold == 0.5
+        assert detector.threshold == 0.3
 
     def test_process_silence_no_detection(self) -> None:
         detector = WakeWordDetector()

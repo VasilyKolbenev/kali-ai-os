@@ -62,7 +62,11 @@ class VoiceActivityDetector:
 
     @staticmethod
     def _ensure_hub_cache() -> None:
-        """Redirect torch hub cache if the default dir is inaccessible."""
+        """Redirect torch hub cache if the default dir is inaccessible.
+
+        Checks both directory listing AND file read access, since Windows
+        can lock individual files while the directory remains listable.
+        """
         import os
         import tempfile
 
@@ -70,20 +74,28 @@ class VoiceActivityDetector:
 
         default_dir = torch.hub.get_dir()
         vad_cache = Path(default_dir) / "snakers4_silero-vad_master"
-        if not vad_cache.exists():
-            return  # no cached dir yet, let torch.hub download to default location
 
-        try:
-            os.listdir(vad_cache)
-            return  # cache is readable, nothing to fix
-        except PermissionError:
-            logger.warning(
-                "Silero VAD cache at %s is locked, redirecting to temp dir",
-                vad_cache,
-            )
-            tmp_hub = Path(tempfile.gettempdir()) / "kali_torch_hub"
-            tmp_hub.mkdir(exist_ok=True)
-            torch.hub.set_dir(str(tmp_hub))
+        needs_redirect = False
+        if vad_cache.exists():
+            try:
+                os.listdir(vad_cache)
+                # Also check file-level access (hubconf.py is required by torch.hub)
+                hubconf = vad_cache / "hubconf.py"
+                if hubconf.exists():
+                    hubconf.read_text(encoding="utf-8")
+            except (PermissionError, OSError):
+                needs_redirect = True
+        # Also redirect if default cache had permission issues previously
+        if not needs_redirect:
+            return
+
+        logger.warning(
+            "Silero VAD cache at %s is locked, redirecting to temp dir",
+            vad_cache,
+        )
+        tmp_hub = Path(tempfile.gettempdir()) / "kali_torch_hub"
+        tmp_hub.mkdir(exist_ok=True)
+        torch.hub.set_dir(str(tmp_hub))
 
     def process(self, audio: np.ndarray, sample_rate: int = 16000) -> VADResult:
         if self._model is not None:

@@ -370,11 +370,13 @@ Text → Silero TTS v4 (CPU, ~60ms)
      → Audio Output (40kHz)
 ```
 
-**Настройки голоса (FINAL1):**
+**Настройки голоса (FINAL2, 2026-04-15):**
 - Model: `jarvis_v2.onnx` (400 epochs, 52-file Sound Pack)
 - FAISS index: `jarvis_v2.index`, influence=0.8
 - Pitch shift: +5 semitones
-- EQ: low cut <800Hz, mid boost 800-2kHz, presence kill 4-6kHz
+- EQ: spectral-matched to reference WAV "Вы создали новый элемент.wav"
+  - Sub-bass boost 0.85 (warmth), low-mid cut 0.55, mid cut 0.65
+  - Presence boost 0.70 (sparkle), brilliance 0.60 (air)
 
 ### Full Voice Loop
 
@@ -497,65 +499,90 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [x] System tray + Ctrl+Space global hotkey
 - [x] Russian labels throughout UI
 
-### Phase 5: AI OS Layer ✅ DONE
-- [x] Skill template engine (tracker, monitor, notifier, reminder, logger)
-- [x] SkillExecutor (in-process, no subprocess)
-- [x] Dynamic cron scheduler (croniter)
-- [x] AgentBuilder v2 (LLM-powered code generation via Claude API)
-- [x] Intent Classifier (skill vs agent detection)
-- [x] Voice Wizard (guided creation with questions)
-- [x] Permission Enforcer (sandbox runtime, per-agent approval)
-- [x] Code Safety Gate (true AST analysis, not string matching)
-- [x] Network Proxy (JSON-RPC, domain whitelist, rate limiting)
-- [x] Filesystem sandbox (path traversal protection)
+### Phase 5: AI OS Layer 🟡 PARTIAL
+- [x] AgentBuilder (LLM code generation via Claude API)
+- [x] Code Safety Gate (true AST analysis, blocks dangerous imports)
+- [x] Skill template declarations (tracker, monitor, notifier, reminder, logger)
+- [x] Basic cron scheduler (croniter, 3 fixed events)
+- [~] Intent Classifier (regex-based, not LLM — stub)
+- [~] Voice Wizard (session tracking exists, multi-turn flow incomplete)
+- [~] Permission Enforcer (class exists, runtime enforcement partial)
+- [~] SkillExecutor (templates declared, execution engine incomplete)
+- [ ] Network Proxy (JSON-RPC domain whitelist — not implemented)
+- [ ] Rate Limiter (per-agent request limits — not implemented)
 - [ ] Agent-to-agent communication (v2.5)
 
-### Phase 6: Cloud Catalog ✅ DONE (local mode)
-- [x] Package format (.kali-agent zip with checksums)
-- [x] Local catalog search (scans agents/*/manifest.yaml)
-- [x] Install flow (unpack → safety gate → deploy)
-- [x] Pack flow (agent dir → .kali-agent)
-- [x] Supabase client (ready, needs cloud deployment)
+### Phase 6: Cloud Catalog ❌ NOT STARTED (local stubs only)
+- [x] CatalogClient (read-only: search, trending, get_package)
+- [x] Local agent discovery (scans agents/*/manifest.yaml)
+- [~] Package format (.kali-agent concept defined, pack/unpack basic)
 - [ ] Supabase cloud deployment (schema, auth, storage)
-- [ ] Publish flow (voice → package → upload to cloud)
-- [ ] Ratings & reviews
+- [ ] Publish flow (package → upload to Supabase Storage)
+- [ ] Install from cloud (download → safety gate → deploy)
+- [ ] Ratings & reviews (tables + UI)
 - [ ] Trust levels (official/verified/community)
 - [ ] Author profiles
+- [ ] Content moderation
 
-### Phase 7: Smart Integrations ✅ MOSTLY DONE
-- [x] Home Assistant (smart-home agent v2 — REST API with mock fallback)
-- [x] Claude Code (coding agent v2 — explain/review/suggest via Claude API)
-- [x] JARVIS pre-recorded voice clips (greet, ok, reply, thanks — 17 clips)
+### Phase 7: Integrations 🟡 PARTIAL
+- [x] JARVIS pre-recorded voice clips (greet, ok, reply — 17 clips)
 - [x] Numbers-to-words for TTS (Russian numerals)
-- [x] Server-side audio playback (sounddevice, no browser dependency)
-- [ ] Google Calendar sync (agent exists, needs OAuth setup)
+- [x] Server-side audio playback (sounddevice)
+- [x] 5 new agents: Notion, Todoist, GitHub, News, Currency
+- [~] Home Assistant (agent exists, needs real HA instance)
+- [~] Claude Code (agent exists, basic explain/review)
+- [ ] Google Calendar sync (agent exists, needs OAuth)
 - [ ] Garmin/Apple Health
 - [ ] Banking APIs
-- [ ] Notion/Obsidian
 
 ### Phase 8: Desktop Distribution 🔧 IN PROGRESS
-- [x] PyInstaller backend (kali-backend.exe, 292 MB)
-- [x] Tauri desktop (kali-desktop.exe, 13 MB)
-- [x] NSIS installer (WebView2 auto-install, desktop shortcut)
-- [x] Auto-start backend from Tauri (find_backend in 4 locations)
-- [x] AppData for writable data (DB, models — Program Files is read-only)
-- [x] Model downloader for first run
-- [ ] PyInstaller backend E2E verification on clean install
-- [ ] Auto-download ONNX voice models on first launch (progress bar in UI)
-- [ ] Installer version bumping + auto-update mechanism
+- [x] PyInstaller backend (kali-backend.exe, 293 MB)
+- [x] Tauri desktop (kali-desktop.exe, 15 MB)
+- [x] NSIS all-in-one installer (933 MB: backend + frontend + models)
+- [x] Auto-start backend from Tauri (PID guard, single instance)
+- [x] AppData for writable data + .env (Program Files read-only)
+- [x] multiprocessing.freeze_support() (prevents fork bomb)
+- [x] Background model loading (non-blocking startup)
+- [ ] E2E verification on clean Windows install
+- [ ] Auto-download voice models on first launch (progress bar)
+- [ ] Auto-update mechanism
+- [ ] Code signing (Windows SmartScreen)
 
-### Phase 9: Mobile 📋 PLANNED
-- [ ] Server consolidation (one process, one port) ✅ DONE
-- [ ] React Native app (iOS + Android)
+### Phase 8.5: Voice Pipeline Polish 🔧 IN PROGRESS
+- [x] Wake word "Hey Jarvis" (OpenWakeWord, threshold 0.3)
+- [x] Audio buffering for OpenWakeWord (1280 sample minimum)
+- [x] Thread-safe audio queue (queue.Queue, not asyncio.Queue)
+- [x] Anti-echo (mic stops during TTS playback)
+- [x] LISTENING timeout (3s, prevents infinite hang)
+- [x] TTS sentence splitting (Silero 500-char limit)
+- [x] EQ matched to JARVIS Sound Pack via spectral analysis
+- [x] Silero VAD cache fix (PermissionError on Windows)
+- [ ] Voice quality A/B testing (pitch shift, speaker variants)
+- [ ] Streaming TTS (play while generating next sentence)
+
+### Phase 9: Agent Marketplace MVP 📋 NEXT
+- [ ] Supabase schema: packages, authors, reviews tables
+- [ ] Publish API: pack agent → upload to Supabase Storage
+- [ ] Install API: download → safety gate → deploy locally
+- [ ] Store UI: install with progress, toast feedback, ratings
+- [ ] Author registration + profile page
+- [ ] Star ratings (1-5) + text reviews
+- [ ] Trust badges (official / verified / community)
+- [ ] Marketplace search (full-text, categories, sorting)
+
+### Phase 10: Mobile 📋 PLANNED
+- [x] Server consolidation (one process, one port)
+- [ ] React Native companion app (iOS + Android)
 - [ ] Push notifications
-- [ ] Background microphone (wake word)
+- [ ] Background wake word on mobile
 - [ ] Cloud relay (Tailscale / Cloudflare Tunnel)
 
-### Phase 10: Hardware 📋 FUTURE
+### Phase 11: Hardware 📋 FUTURE
 - [ ] Raspberry Pi build
 - [ ] Touchscreen UI optimization
 - [ ] Audio I/O hardware optimization
-- [ ] CLIK device prototype
+- [ ] Starlink / satellite connectivity support
+- [ ] Custom KALI device prototype
 
 ---
 
@@ -637,5 +664,5 @@ config/kali.yaml          # Main configuration
 
 ---
 
-*Last updated: 2026-04-13*
-*Version: 0.2.0*
+*Last updated: 2026-04-17*
+*Version: 0.3.0*

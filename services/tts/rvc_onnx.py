@@ -140,21 +140,28 @@ class RVCEngine:
         providers = self._get_providers()
         logger.info("ONNX providers: %s", providers)
 
+        # Thread-limited session options — prevents CPU thread explosion.
+        # Default would spawn N = cpu_count() threads per session × 3 sessions.
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = 2
+        sess_opts.inter_op_num_threads = 1
+        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         logger.info("Loading RVC ONNX model...")
         self._rvc_session = ort.InferenceSession(
-            self.model_path, providers=providers,
+            self.model_path, sess_options=sess_opts, providers=providers,
         )
 
         if self.hubert_path and Path(self.hubert_path).exists():
             logger.info("Loading HuBERT ONNX...")
             self._hubert_session = ort.InferenceSession(
-                self.hubert_path, providers=providers,
+                self.hubert_path, sess_options=sess_opts, providers=providers,
             )
 
         if self.rmvpe_path and Path(self.rmvpe_path).exists():
             logger.info("Loading RMVPE ONNX...")
             self._rmvpe_session = ort.InferenceSession(
-                self.rmvpe_path, providers=providers,
+                self.rmvpe_path, sess_options=sess_opts, providers=providers,
             )
 
         if self.index_path and Path(self.index_path).exists():

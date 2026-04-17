@@ -90,7 +90,7 @@ class TestConfigEndpoint:
         resp = await client.get("/config")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["server"]["port"] == 8000
+        assert data["server"]["port"] == 3005
 
 
 class TestNotificationsEndpoint:

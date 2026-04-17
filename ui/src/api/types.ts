@@ -38,4 +38,13 @@ export interface VoiceStatus {
   available: boolean;
   state: VoiceState;
   mode: string;
+  ready?: boolean;
+  started?: boolean;
+  vad_loaded?: boolean;
+  wake_word_loaded?: boolean;
+  stt_loaded?: boolean;
+  tts_loaded?: boolean;
+  models_ready?: boolean;
+  models_dir?: string;
+  missing_models?: string[];
 }

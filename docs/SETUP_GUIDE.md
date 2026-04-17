@@ -5,6 +5,11 @@
 **Double-click `start.bat`** — it does everything automatically:
 installs deps, starts kernel, starts UI, opens in browser.
 
+For non-technical testers, share `dist\KALI-Setup-0.1.0.exe`.
+If the installed Desktop app cannot start its backend, collect:
+- `%APPDATA%\KALI\logs\kali-backend.out.log`
+- `%APPDATA%\KALI\logs\kali-backend.err.log`
+
 ---
 
 ## Manual Setup (if start.bat doesn't work)
@@ -83,13 +88,13 @@ If you don't have an Anthropic key yet — everything works, just LLM calls will
 ## Step 4: Start the Backend (Kernel)
 
 ```bash
-uv run uvicorn kernel.main:create_app --factory --reload --port 8000
+uv run uvicorn kernel.main:create_app --factory --reload --port 3005
 ```
 
 You should see:
 ```
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Uvicorn running on http://127.0.0.1:3005
 ```
 
 Leave this terminal **running**. Open a **new terminal** for the next steps.
@@ -102,16 +107,16 @@ Open a new terminal and run:
 
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:3005/health
 
 # List agents
-curl http://localhost:8000/agents
+curl http://localhost:3005/agents
 
 # Voice status
-curl http://localhost:8000/voice/status
+curl http://localhost:3005/voice/status
 
 # Config
-curl http://localhost:8000/config
+curl http://localhost:3005/config
 ```
 
 Or open these URLs in your browser — you'll see JSON responses.
@@ -160,78 +165,78 @@ While both kernel and UI are running:
 
 ### Morning Briefing
 ```bash
-curl http://localhost:8000/briefing/morning
+curl http://localhost:3005/briefing/morning
 ```
 Returns: daily digest text.
 
 ### Budget
 ```bash
 # Set a food budget
-curl -X POST http://localhost:8000/budget/goal \
+curl -X POST http://localhost:3005/budget/goal \
   -H "Content-Type: application/json" \
   -d '{"category": "food", "limit": 500}'
 
 # Log an expense
-curl -X POST http://localhost:8000/budget/expense \
+curl -X POST http://localhost:3005/budget/expense \
   -H "Content-Type: application/json" \
   -d '{"amount": 45, "category": "food"}'
 
 # Check goals
-curl http://localhost:8000/budget/goals
+curl http://localhost:3005/budget/goals
 ```
 
 ### Focus Timer
 ```bash
 # Start 25-min focus session
-curl -X POST http://localhost:8000/focus/start \
+curl -X POST http://localhost:3005/focus/start \
   -H "Content-Type: application/json" \
   -d '{"duration_minutes": 25, "label": "coding"}'
 
 # Check status
-curl http://localhost:8000/focus/status
+curl http://localhost:3005/focus/status
 
 # Stop early
-curl -X POST http://localhost:8000/focus/stop
+curl -X POST http://localhost:3005/focus/stop
 ```
 
 ### Create Custom Agent (No-Code Builder!)
 ```bash
 # Create a price monitor agent from template
-curl -X POST http://localhost:8000/agents/create \
+curl -X POST http://localhost:3005/agents/create \
   -H "Content-Type: application/json" \
   -d '{"name": "my-monitor", "description": "My custom monitor", "template": "monitor"}'
 
 # List custom agents
-curl http://localhost:8000/agents/custom
+curl http://localhost:3005/agents/custom
 
 # Delete it
-curl -X DELETE http://localhost:8000/agents/custom/my-monitor
+curl -X DELETE http://localhost:3005/agents/custom/my-monitor
 ```
 
 ### Notifications
 ```bash
 # Send a notification
-curl -X POST http://localhost:8000/notifications/send \
+curl -X POST http://localhost:3005/notifications/send \
   -H "Content-Type: application/json" \
   -d '{"title": "Test", "message": "Hello from KALI!"}'
 
 # Check pending
-curl http://localhost:8000/notifications/pending
+curl http://localhost:3005/notifications/pending
 ```
 
 ### Load & Use an Agent
 ```bash
 # Load system agent
-curl -X POST http://localhost:8000/agents/system/load
+curl -X POST http://localhost:3005/agents/system/load
 
 # Check it's running
-curl http://localhost:8000/agents/running
+curl http://localhost:3005/agents/running
 
 # Check status
-curl http://localhost:8000/agents/system/status
+curl http://localhost:3005/agents/system/status
 
 # Unload
-curl -X POST http://localhost:8000/agents/system/unload
+curl -X POST http://localhost:3005/agents/system/unload
 ```
 
 ---
@@ -271,10 +276,10 @@ curl -X POST http://localhost:8000/agents/system/unload
 
 ```bash
 # Load weather agent
-curl -X POST http://localhost:8000/agents/weather/load
+curl -X POST http://localhost:3005/agents/weather/load
 
 # Wait 2 seconds, then check status
-curl http://localhost:8000/agents/weather/status
+curl http://localhost:3005/agents/weather/status
 ```
 
 Note: The weather agent uses Open-Meteo API (free, no key needed) but needs to be dispatched through the agent runtime to actually call `get_weather`. Direct agent subprocess testing:
@@ -296,7 +301,7 @@ echo '{"jsonrpc":"2.0","method":"execute","params":{"action":"get_weather","args
 |---------|-----|
 | `uv: command not found` | `pip install uv` or check PATH |
 | `pnpm: command not found` | `npm install -g pnpm` |
-| Port 8000 already in use | Kill old process or use `--port 8001` |
+| Port 3005 already in use | Kill old process or use `--port 3006` |
 | CORS errors in browser | Refresh page, kernel has CORS configured |
 | Tests fail | Check Python version `python --version` (need 3.12+) |
 | Red dot in sidebar | Normal — WebSocket auto-reconnects every 3s |
@@ -309,7 +314,7 @@ echo '{"jsonrpc":"2.0","method":"execute","params":{"action":"get_weather","args
 | Command | What it does |
 |---------|-------------|
 | `uv run pytest -v` | Run all 191 tests |
-| `uv run uvicorn kernel.main:create_app --factory --reload --port 8000` | Start backend |
+| `uv run uvicorn kernel.main:create_app --factory --reload --port 3005` | Start backend |
 | `cd ui && pnpm dev` | Start frontend |
 | `uv run ruff check kernel/ tests/ agents/` | Lint Python |
 | `cd ui && npx tsc --noEmit` | TypeScript check |

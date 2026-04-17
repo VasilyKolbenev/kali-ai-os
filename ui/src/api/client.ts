@@ -1,7 +1,7 @@
-const BASE_URL = "http://localhost:3005";
+import { apiUrl } from "./runtime";
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });

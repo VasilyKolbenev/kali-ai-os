@@ -1,14 +1,15 @@
 # KALI Configuration
 server:
   host: "127.0.0.1"
-  port: 8000
+  port: 3005
 
 voice:
   wake_word: "jarvis"
-  mode: "wake_word"
+  mode: "wake_word"                   # wake_word | push_to_talk | off
   stt_model: "base"
   tts_voice: "default"
   vad_threshold: 0.5
+  auto_start: false                   # If true: pipeline starts with app. Otherwise on-demand.
 
 llm:
   cloud_provider: "openai"            # "anthropic" or "openai"

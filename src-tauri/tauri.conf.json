@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "cd ui && pnpm dev",
-    "beforeBuildCommand": "cd ui && pnpm build"
+    "beforeDevCommand": "cmd /c npm --prefix ui run dev",
+    "beforeBuildCommand": "cmd /c npm --prefix ui run build"
   },
   "app": {
     "windows": [
@@ -27,7 +27,24 @@
       "tooltip": "KALI — Personal AI OS"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:3002 http://localhost:3005 ws://localhost:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:3005"
+      "csp": "default-src 'self'; connect-src 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:3005 http://127.0.0.1:3005 ws://localhost:3005 ws://127.0.0.1:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:3005 http://127.0.0.1:3005"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
     }
   },
   "plugins": {

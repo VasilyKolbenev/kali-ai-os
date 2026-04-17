@@ -15,7 +15,7 @@ def config_dir(tmp_path: Path) -> Path:
     config_file.write_text(
         yaml.dump(
             {
-                "server": {"host": "127.0.0.1", "port": 8000},
+                "server": {"host": "127.0.0.1", "port": 3005},
                 "voice": {"wake_word": "jarvis"},
             }
         )
@@ -28,20 +28,20 @@ class TestConfigManager:
         manager = ConfigManager(config_dir / "kali.yaml")
         config = manager.load()
         assert isinstance(config, ConfigSchema)
-        assert config.server.port == 8000
+        assert config.server.port == 3005
         assert config.voice.wake_word == "jarvis"
 
     def test_load_missing_file_returns_defaults(self, tmp_path: Path) -> None:
         manager = ConfigManager(tmp_path / "nonexistent.yaml")
         config = manager.load()
-        assert config.server.port == 8000
+        assert config.server.port == 3005
 
     def test_load_empty_file_returns_defaults(self, tmp_path: Path) -> None:
         empty = tmp_path / "empty.yaml"
         empty.write_text("")
         manager = ConfigManager(empty)
         config = manager.load()
-        assert config.server.port == 8000
+        assert config.server.port == 3005
 
     def test_load_partial_config_merges_defaults(self, tmp_path: Path) -> None:
         partial = tmp_path / "partial.yaml"
@@ -56,7 +56,7 @@ class TestConfigManager:
         path = config_dir / "kali.yaml"
         manager = ConfigManager(path)
         config = manager.load()
-        assert config.server.port == 8000
+        assert config.server.port == 3005
 
         path.write_text(yaml.dump({"server": {"port": 3000}}))
         config = manager.reload()
