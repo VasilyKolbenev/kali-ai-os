@@ -44,6 +44,10 @@ models/
 *.mp3
 Jarvis Sound Pack*/
 
+# EXCEPTION: app sound clips are needed at runtime (small, ~1MB total)
+!resources/sounds/**/*.mp3
+!resources/sounds/**/*.wav
+
 # IDE
 .idea/
 .vscode/
