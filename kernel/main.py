@@ -686,15 +686,42 @@ def create_app(
             except Exception as e:
                 return {"error": f"Agent '{name}' not available: {e}"}
 
-        try:
-            result = await runtime.dispatch(name, action, args)
-            return result
-        except PermissionError as e:
-            logger.warning("Agent permission denied: %s/%s: %s", name, action, e)
-            return {"error": f"Permission denied: {e}"}
-        except Exception as e:
-            logger.warning("Agent execute failed: %s/%s: %s", name, action, e)
-            return {"error": str(e)}
+        # Route through SandboxBackend — adds permission + rate limit + audit
+        sandbox = _get_sandbox(request.app)
+        from kernel.sandbox.backend import DispatchRequest
+        dispatch_result = await sandbox.dispatch(
+            DispatchRequest(
+                agent_name=name, action=action, args=args,
+                caller=body.get("caller", "user"),
+                request_id=body.get("request_id", ""),
+            )
+        )
+
+        if dispatch_result.ok:
+            # Unwrap the single-key "result" envelope for backward compat
+            payload = dispatch_result.result or {}
+            if set(payload.keys()) == {"result"}:
+                payload = payload["result"] if isinstance(payload["result"], dict) else payload
+            return payload
+
+        # Map denial reason → HTTP status for API clients that care
+        from fastapi.responses import JSONResponse
+        http_status = 200
+        if dispatch_result.denied_reason == "rate_limit":
+            http_status = 429
+        elif dispatch_result.denied_reason == "permission":
+            http_status = 403
+
+        return JSONResponse(
+            {
+                "error": dispatch_result.error or "dispatch failed",
+                "denied_reason": dispatch_result.denied_reason,
+                "agent": name,
+                "action": action,
+                "duration_ms": dispatch_result.duration_ms,
+            },
+            status_code=http_status,
+        )
 
     @app.post("/notifications/send")
     async def send_notification(request: Request) -> dict[str, str]:
@@ -1421,6 +1448,31 @@ def create_app(
             app.state.skills_registry = reg
         return app.state.skills_registry
 
+    def _get_sandbox(app_obj):
+        """Lazy-init the SandboxBackend singleton with enforcer + limiter + audit."""
+        if hasattr(app_obj.state, "sandbox"):
+            return app_obj.state.sandbox
+
+        from kernel.sandbox.backend import InProcessSandbox
+        from kernel.sandbox.audit import AuditLog
+        from kernel.sandbox.rate_limiter import RateLimiter
+
+        audit_db = resolved_db_path.parent / "sandbox_audit.db"
+        audit_log = AuditLog(audit_db, retention_days=30)
+        rate_limiter = RateLimiter(max_requests=120, window_seconds=60.0)
+
+        sandbox = InProcessSandbox(
+            agent_runtime=app_obj.state.agent_runtime,
+            enforcer=getattr(app_obj.state, "permission_enforcer", None),
+            rate_limiter=rate_limiter,
+            audit_sink=audit_log.write,
+        )
+
+        app_obj.state.sandbox = sandbox
+        app_obj.state.sandbox_audit = audit_log
+        app_obj.state.sandbox_rate_limiter = rate_limiter
+        return sandbox
+
     @app.get("/skills/catalog/sources")
     async def skills_catalog_sources() -> dict[str, Any]:
         """List configured remote skill sources (for UI tabs)."""
@@ -1555,6 +1607,41 @@ def create_app(
             "errors": errors,
             "warnings": warnings,
         }
+
+    # --- Sandbox inspection endpoints ---
+
+    @app.get("/sandbox/health")
+    async def sandbox_health(request: Request) -> dict[str, Any]:
+        """Inspect the active sandbox backend."""
+        sandbox = _get_sandbox(request.app)
+        return await sandbox.health()
+
+    @app.get("/sandbox/audit")
+    async def sandbox_audit(
+        request: Request,
+        agent: str = "", status: str = "",
+        hours: int = 24, limit: int = 100,
+    ) -> dict[str, Any]:
+        """Recent audit log entries (defaults: last 24h, 100 rows)."""
+        _get_sandbox(request.app)  # ensure audit_log exists
+        import time as _t
+        since = _t.time() - max(1, hours) * 3600
+        rows = request.app.state.sandbox_audit.query(
+            agent=agent or None,
+            status=status or None,
+            since=since,
+            limit=max(1, min(limit, 1000)),
+        )
+        return {"results": rows, "count": len(rows), "since_hours": hours}
+
+    @app.get("/sandbox/stats")
+    async def sandbox_stats(request: Request, hours: int = 24) -> dict[str, Any]:
+        """Aggregate dispatch stats per agent over the last N hours."""
+        _get_sandbox(request.app)
+        import time as _t
+        since = _t.time() - max(1, hours) * 3600
+        stats = request.app.state.sandbox_audit.stats_by_agent(since=since)
+        return {"results": stats, "count": len(stats), "since_hours": hours}
 
     @app.post("/skills/publish")
     async def skills_publish(request: Request) -> dict[str, Any]:
