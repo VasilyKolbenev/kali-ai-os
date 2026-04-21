@@ -1,106 +1,155 @@
-import { useEffect, useState, useRef, useCallback } from "react";
-import { Search, Download, Package, Sparkles, Zap, Check, Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Search, Download, Package, Sparkles, Check, Loader2, X,
+  RefreshCw, Shield, Trash2, ExternalLink,
+} from "lucide-react";
 import { api } from "../../api/client";
-import { useAppStore } from "../../stores/appStore";
+import type {
+  CatalogSkill, CatalogSource, InstalledSkill,
+} from "../../api/types";
 
-interface SkillInfo {
-  name: string;
-  template: string;
-  display_name: string;
-  config: Record<string, unknown>;
-}
-
-interface CatalogItem {
-  name: string;
-  description: string;
-  type: string;
-  category: string;
-  downloads: number;
-  rating_avg: number;
-  trust_level: string;
-  installed?: boolean;
-}
-
+type TabId = "installed" | string; // source_id or "installed"
 type ToastType = "success" | "error" | "info";
 
+const TRUST_COLORS: Record<string, string> = {
+  official: "var(--j-green)",
+  verified: "var(--j-cyan)",
+  community: "var(--j-amber, #f59e0b)",
+};
+
+const TRUST_LABELS: Record<string, string> = {
+  official: "Official",
+  verified: "Verified",
+  community: "Community",
+};
+
 export function AgentStore() {
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [activeTab, setActiveTab] = useState<TabId>("installed");
+  const [sources, setSources] = useState<CatalogSource[]>([]);
+  const [installed, setInstalled] = useState<InstalledSkill[]>([]);
+  const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [catalogResults, setCatalogResults] = useState<CatalogItem[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [installingName, setInstallingName] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
-  const setMode = useAppStore((s) => s.setMode);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Boot: load sources + installed skills + trigger first catalog fetch
+  useEffect(() => {
+    void bootstrap();
+  }, []);
+
+  const bootstrap = async () => {
+    try {
+      const [sourcesRes, installedRes] = await Promise.all([
+        api.skillsCatalogSources(),
+        api.skillsInstalled(),
+      ]);
+      setSources(sourcesRes.sources || []);
+      setInstalled(installedRes.results || []);
+    } catch (err) {
+      console.error("Failed to bootstrap Agent Store:", err);
+    }
+  };
+
+  // Reload catalog entries when tab or search changes
+  useEffect(() => {
+    if (activeTab === "installed") return;
+    void loadCatalogForTab(activeTab, searchQuery);
+  }, [activeTab]);
+
+  const loadCatalogForTab = async (source: string, q: string) => {
+    setLoading(true);
+    try {
+      const res = await api.skillsCatalogList(source, q);
+      setCatalogSkills(res.results || []);
+    } catch (err) {
+      setCatalogSkills([]);
+      showToast(`Failed to load catalog: ${(err as Error).message}`, "error");
+    }
+    setLoading(false);
+  };
+
+  const handleQueryChange = (value: string) => {
+    setSearchQuery(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (activeTab !== "installed") {
+      debounceRef.current = setTimeout(() => {
+        void loadCatalogForTab(activeTab, value);
+      }, 300);
+    }
+  };
+
+  const handleRefreshCatalog = async () => {
+    setRefreshing(true);
+    try {
+      const res = await api.skillsCatalogRefresh(true);
+      showToast(`Catalog refreshed: ${res.total_entries} skills indexed`, "success");
+      if (activeTab !== "installed") {
+        await loadCatalogForTab(activeTab, searchQuery);
+      }
+    } catch (err) {
+      showToast(`Refresh failed: ${(err as Error).message}`, "error");
+    }
+    setRefreshing(false);
+  };
+
+  const handleInstall = async (skill: CatalogSkill) => {
+    setInstallingName(skill.name);
+    try {
+      const res = await api.skillInstall(skill.source_id, skill.name);
+      if (res.status === "ok") {
+        showToast(`«${skill.name}» installed`, "success");
+        const inst = await api.skillsInstalled();
+        setInstalled(inst.results || []);
+      } else {
+        showToast(res.message || "Install failed", "error");
+      }
+    } catch (err) {
+      showToast(`Install error: ${(err as Error).message}`, "error");
+    }
+    setInstallingName(null);
+  };
+
+  const handleUninstall = async (skill: InstalledSkill) => {
+    if (!confirm(`Remove skill «${skill.name}»?`)) return;
+    try {
+      const res = await api.skillUninstall(skill.name);
+      if (res.removed) {
+        showToast(`«${skill.name}» removed`, "success");
+        const inst = await api.skillsInstalled();
+        setInstalled(inst.results || []);
+      } else {
+        showToast("Skill not found or cannot be removed", "error");
+      }
+    } catch (err) {
+      showToast(`Remove error: ${(err as Error).message}`, "error");
+    }
+  };
 
   const showToast = (msg: string, type: ToastType = "info") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 4000);
   };
 
-  const loadTrending = async () => {
-    try {
-      const data = await api.catalogTrending();
-      setCatalogResults(data.results || []);
-    } catch {
-      // catalog not configured
-    }
-  };
+  const installedNames = useMemo(
+    () => new Set(installed.map((s) => s.name)),
+    [installed],
+  );
 
-  const reloadSkills = async () => {
-    try {
-      const data = await api.skills();
-      setSkills(data);
-    } catch {
-      // ignore
-    }
-  };
+  const filteredInstalled = useMemo(() => {
+    if (!searchQuery.trim()) return installed;
+    const q = searchQuery.toLowerCase();
+    return installed.filter(
+      (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+    );
+  }, [installed, searchQuery]);
 
-  useEffect(() => {
-    reloadSkills();
-    loadTrending();
-  }, []);
-
-  // Live search with debounce (300ms)
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setIsSearching(false);
-      await loadTrending();
-      return;
-    }
-    setIsSearching(true);
-    setLoading(true);
-    try {
-      const data = await api.catalogSearch(q);
-      setCatalogResults(data.results || []);
-    } catch {
-      setCatalogResults([]);
-    }
-    setLoading(false);
-  }, []);
-
-  const handleQueryChange = (value: string) => {
-    setSearchQuery(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => doSearch(value), 300);
-  };
-
-  const handleInstall = async (item: CatalogItem) => {
-    setInstallingName(item.name);
-    try {
-      await api.catalogInstall(item.name);
-      showToast(`«${item.name}» установлен`, "success");
-      // Mark as installed in local state
-      setCatalogResults((prev) =>
-        prev.map((r) => (r.name === item.name ? { ...r, installed: true } : r))
-      );
-      await reloadSkills();
-    } catch (err) {
-      showToast(`Ошибка установки: ${(err as Error).message}`, "error");
-    }
-    setInstallingName(null);
-  };
+  const tabs: { id: TabId; label: string; count?: number }[] = [
+    { id: "installed", label: "Установленные", count: installed.length },
+    ...sources.map((s) => ({ id: s.id as TabId, label: s.label })),
+  ];
 
   const toastColor = toast?.type === "success"
     ? "var(--j-green)"
@@ -110,34 +159,42 @@ export function AgentStore() {
 
   return (
     <div className="w-full h-full p-8 overflow-auto">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="flex items-baseline gap-3 mb-6">
           <Package className="w-5 h-5 text-[var(--j-cyan)]" />
           <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>
-            Agent Store
+            Agent Skills
           </h2>
           <span
             className="mono text-[10px] tracking-widest uppercase ml-auto"
             style={{ color: "var(--j-text-muted)" }}
           >
-            {skills.length} installed
+            {installed.length} installed
           </span>
+          <button
+            onClick={handleRefreshCatalog}
+            disabled={refreshing}
+            className="text-white/40 hover:text-white/80 transition disabled:opacity-50"
+            title="Refresh catalog"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+          </button>
         </div>
 
-        {/* Search — live, no button needed */}
-        <div className="glass p-3 mb-6 flex gap-2 items-center">
+        {/* Search bar */}
+        <div className="glass p-3 mb-4 flex gap-2 items-center">
           <Search className="w-4 h-4 text-white/40 shrink-0" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="Поиск агентов и навыков..."
+            placeholder="Поиск: weather, notion, telegram…"
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/20"
           />
           {searchQuery && (
             <button
-              onClick={() => { setSearchQuery(""); doSearch(""); }}
+              onClick={() => handleQueryChange("")}
               className="text-white/30 hover:text-white/60"
             >
               <X className="w-3.5 h-3.5" />
@@ -146,95 +203,47 @@ export function AgentStore() {
           {loading && <Loader2 className="w-4 h-4 text-[var(--j-cyan)] animate-spin" />}
         </div>
 
-        {/* Installed Skills */}
-        <div className="mb-8">
-          <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-3">
-            Установленные
-          </h3>
-          <div className="grid gap-2 stagger">
-            {skills.length === 0 && (
-              <div className="glass p-4 text-sm text-white/30">
-                Навыки ещё не установлены
-              </div>
-            )}
-            {skills.map((skill) => (
-              <div key={skill.name} className="glass p-4 flex items-center gap-3">
-                <Sparkles className="w-4 h-4 text-[var(--j-green)]" />
-                <div className="flex-1">
-                  <div className="text-sm font-medium">
-                    {skill.display_name || skill.name}
-                  </div>
-                  <div className="text-xs text-white/40">
-                    {skill.template}
-                  </div>
-                </div>
-                <span className="text-xs px-2 py-0.5 rounded bg-[var(--j-green)]/10 text-[var(--j-green)]">
-                  Активен
-                </span>
-              </div>
-            ))}
-          </div>
+        {/* Tabs */}
+        <div className="flex gap-1 mb-6 border-b border-white/5">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-2 text-xs tracking-wider uppercase transition relative
+                ${activeTab === tab.id
+                  ? "text-[var(--j-cyan)]"
+                  : "text-white/40 hover:text-white/60"
+                }`}
+            >
+              {tab.label}
+              {tab.count !== undefined && (
+                <span className="ml-1.5 text-white/30">({tab.count})</span>
+              )}
+              {activeTab === tab.id && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--j-cyan)]" />
+              )}
+            </button>
+          ))}
         </div>
 
-        {/* Catalog Results */}
-        {catalogResults.length > 0 && (
-          <div>
-            <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-3">
-              {isSearching ? "Результаты поиска" : "Популярные"}
-            </h3>
-            <div className="grid gap-2 stagger">
-              {catalogResults.map((item) => (
-                <div key={item.name} className="glass p-4 flex items-center gap-3">
-                  <Zap className="w-4 h-4 text-[var(--j-cyan)]" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{item.name}</div>
-                    <div className="text-xs text-white/40 truncate">{item.description}</div>
-                    <div className="text-xs text-white/20 mt-1">
-                      {item.category} &middot; {item.downloads} &middot;{" "}
-                      &#9733; {item.rating_avg?.toFixed(1)}
-                    </div>
-                  </div>
-                  {item.installed ? (
-                    <button
-                      onClick={() => setMode("agents")}
-                      className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10
-                        text-[var(--j-green)] hover:bg-[var(--j-green)]/20
-                        transition flex items-center gap-1 shrink-0"
-                    >
-                      <Check className="w-3 h-3" />
-                      Настроить
-                    </button>
-                  ) : (
-                    <button
-                      disabled={installingName === item.name}
-                      onClick={() => handleInstall(item)}
-                      className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
-                        text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
-                        transition flex items-center gap-1 shrink-0
-                        disabled:opacity-50 disabled:cursor-wait"
-                    >
-                      {installingName === item.name ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Download className="w-3 h-3" />
-                      )}
-                      {installingName === item.name ? "Установка..." : "Установить"}
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
+        {/* Content */}
+        {activeTab === "installed" ? (
+          <InstalledList
+            skills={filteredInstalled}
+            onUninstall={handleUninstall}
+          />
+        ) : (
+          <CatalogList
+            skills={catalogSkills}
+            installedNames={installedNames}
+            installingName={installingName}
+            onInstall={handleInstall}
+            loading={loading}
+            activeSource={sources.find((s) => s.id === activeTab)}
+          />
         )}
 
-        {/* Empty state */}
-        {!loading && catalogResults.length === 0 && isSearching && (
-          <div className="text-center text-sm text-white/30 py-8">
-            Ничего не найдено
-          </div>
-        )}
-
-        {/* Toast notification */}
+        {/* Toast */}
         {toast && (
           <div
             className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50
@@ -249,5 +258,196 @@ export function AgentStore() {
         )}
       </div>
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+
+function InstalledList({
+  skills, onUninstall,
+}: {
+  skills: InstalledSkill[];
+  onUninstall: (skill: InstalledSkill) => void;
+}) {
+  if (skills.length === 0) {
+    return (
+      <div className="glass p-6 text-center text-sm text-white/30">
+        No skills installed. Browse tabs above to install from the catalog.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 stagger">
+      {skills.map((skill) => (
+        <div key={skill.name} className="glass p-4 flex items-center gap-3">
+          <Sparkles className="w-4 h-4 text-[var(--j-green)] shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium truncate">{skill.name}</span>
+              <SourceBadge source={skill.source} />
+            </div>
+            <div className="text-xs text-white/40 truncate mt-0.5">
+              {skill.description}
+            </div>
+            {skill.compatibility && (
+              <div className="text-[10px] text-white/30 mt-1 flex items-center gap-1">
+                <Shield className="w-3 h-3" />
+                {skill.compatibility}
+              </div>
+            )}
+          </div>
+          {skill.source !== "builtin" && (
+            <button
+              onClick={() => onUninstall(skill)}
+              className="text-white/30 hover:text-red-400 transition p-1"
+              title="Uninstall"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+          <span
+            className="text-xs px-2 py-0.5 rounded bg-[var(--j-green)]/10 text-[var(--j-green)] shrink-0"
+          >
+            Active
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+
+function CatalogList({
+  skills, installedNames, installingName, onInstall, loading, activeSource,
+}: {
+  skills: CatalogSkill[];
+  installedNames: Set<string>;
+  installingName: string | null;
+  onInstall: (skill: CatalogSkill) => void;
+  loading: boolean;
+  activeSource?: CatalogSource;
+}) {
+  if (loading && skills.length === 0) {
+    return (
+      <div className="glass p-8 text-center">
+        <Loader2 className="w-5 h-5 text-[var(--j-cyan)] animate-spin mx-auto mb-2" />
+        <div className="text-xs text-white/40">Loading catalog…</div>
+      </div>
+    );
+  }
+
+  if (skills.length === 0) {
+    return (
+      <div className="glass p-6 text-sm text-white/30 space-y-3">
+        <div>
+          No skills indexed yet from <strong>{activeSource?.label}</strong>.
+        </div>
+        <div className="text-xs">
+          Try <strong>Refresh</strong> (top right). First fetch may take a few seconds.
+        </div>
+        {activeSource && (
+          <a
+            href={activeSource.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-[var(--j-cyan)] hover:underline"
+          >
+            <ExternalLink className="w-3 h-3" />
+            {activeSource.url}
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 stagger">
+      {skills.map((skill) => {
+        const installed = installedNames.has(skill.name);
+        const isInstalling = installingName === skill.name;
+        return (
+          <div key={`${skill.source_id}/${skill.name}`} className="glass p-4 flex items-center gap-3">
+            <TrustBadge trust={skill.trust} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium truncate">{skill.name}</span>
+                <a
+                  href={skill.web_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-white/30 hover:text-white/60 shrink-0"
+                  title="View on GitHub"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <div className="text-xs text-white/40 truncate mt-0.5">
+                {skill.description}
+              </div>
+              {(skill.license || skill.compatibility) && (
+                <div className="text-[10px] text-white/30 mt-1 flex gap-3">
+                  {skill.license && <span>license: {skill.license}</span>}
+                  {skill.compatibility && <span>compat: {skill.compatibility}</span>}
+                </div>
+              )}
+            </div>
+            {installed ? (
+              <span className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10 text-[var(--j-green)] flex items-center gap-1 shrink-0">
+                <Check className="w-3 h-3" />
+                Installed
+              </span>
+            ) : (
+              <button
+                disabled={isInstalling}
+                onClick={() => onInstall(skill)}
+                className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
+                  text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
+                  transition flex items-center gap-1 shrink-0
+                  disabled:opacity-50 disabled:cursor-wait"
+              >
+                {isInstalling ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Download className="w-3 h-3" />
+                )}
+                {isInstalling ? "Installing…" : "Install"}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+
+function TrustBadge({ trust }: { trust: string }) {
+  const color = TRUST_COLORS[trust] ?? "var(--j-text-muted)";
+  return (
+    <span
+      className="text-[10px] tracking-widest uppercase px-1.5 py-0.5 rounded shrink-0"
+      style={{ color, backgroundColor: color + "15", borderColor: color + "30", borderWidth: 1 }}
+    >
+      {TRUST_LABELS[trust] ?? trust}
+    </span>
+  );
+}
+
+function SourceBadge({ source }: { source: string }) {
+  let label = source;
+  let color = "var(--j-text-muted)";
+  if (source === "builtin") { label = "built-in"; color = "var(--j-cyan)"; }
+  else if (source === "user") { label = "installed"; color = "var(--j-green)"; }
+  else if (source.startsWith("catalog:")) { label = source.slice(8); color = "var(--j-amber, #f59e0b)"; }
+  return (
+    <span
+      className="text-[9px] tracking-wider uppercase px-1 py-0.5 rounded shrink-0"
+      style={{ color, opacity: 0.7 }}
+    >
+      {label}
+    </span>
   );
 }

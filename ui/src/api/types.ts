@@ -48,3 +48,47 @@ export interface VoiceStatus {
   models_dir?: string;
   missing_models?: string[];
 }
+
+// --- Agent Skills (SKILL.md spec) ---
+export interface CatalogSource {
+  id: string;
+  label: string;
+  trust: "official" | "verified" | "community";
+  owner: string;
+  repo: string;
+  ref: string;
+  url: string;
+}
+
+export interface CatalogSkill {
+  name: string;
+  description: string;
+  source_id: string;
+  source_label: string;
+  trust: "official" | "verified" | "community";
+  repo_owner: string;
+  repo_name: string;
+  repo_ref: string;
+  skill_path: string;
+  license: string | null;
+  compatibility: string | null;
+  metadata: Record<string, unknown>;
+  raw_skill_md_url: string;
+  web_url: string;
+}
+
+export interface InstalledSkill {
+  name: string;
+  description: string;
+  body: string;
+  license: string | null;
+  compatibility: string | null;
+  metadata: Record<string, unknown>;
+  allowed_tools: string | null;
+  allowed_tools_list: string[];
+  skill_dir: string;
+  has_scripts: boolean;
+  has_references: boolean;
+  has_assets: boolean;
+  source: string;
+}

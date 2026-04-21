@@ -1403,6 +1403,132 @@ def create_app(
         local = await client.local_search("", resolved_agents_dir)
         return {"results": local}
 
+    # --- Agent Skills (SKILL.md spec) endpoints ---
+
+    def _get_skills_catalog():
+        """Lazy-init the remote SkillsCatalog singleton."""
+        from kernel.skills.catalog import SkillsCatalog
+        if not hasattr(app.state, "skills_catalog"):
+            app.state.skills_catalog = SkillsCatalog()
+        return app.state.skills_catalog
+
+    def _get_skills_registry():
+        """Lazy-init the local SkillsRegistry singleton (hybrid builtin + user)."""
+        from kernel.skills.registry import SkillsRegistry
+        if not hasattr(app.state, "skills_registry"):
+            reg = SkillsRegistry()
+            reg.discover()
+            app.state.skills_registry = reg
+        return app.state.skills_registry
+
+    @app.get("/skills/catalog/sources")
+    async def skills_catalog_sources() -> dict[str, Any]:
+        """List configured remote skill sources (for UI tabs)."""
+        catalog = _get_skills_catalog()
+        return {
+            "sources": [
+                {
+                    "id": s.id, "label": s.label, "trust": s.trust,
+                    "owner": s.owner, "repo": s.repo, "ref": s.ref,
+                    "url": s.display_url,
+                }
+                for s in catalog.sources
+            ]
+        }
+
+    @app.get("/skills/catalog")
+    async def skills_catalog_list(
+        source: str = "", q: str = "",
+    ) -> dict[str, Any]:
+        """List remote skills, optionally filtered by source_id and/or search query."""
+        catalog = _get_skills_catalog()
+        if source:
+            entries = catalog.list_by_source(source)
+            if q:
+                qlow = q.lower()
+                entries = [
+                    e for e in entries
+                    if qlow in e.name.lower() or qlow in e.description.lower()
+                ]
+        elif q:
+            entries = catalog.search(q)
+        else:
+            entries = catalog.list_all()
+        return {
+            "results": [e.to_dict() for e in entries],
+            "count": len(entries),
+        }
+
+    @app.post("/skills/catalog/refresh")
+    async def skills_catalog_refresh(request: Request) -> dict[str, Any]:
+        """Force-refresh the remote catalog index (fetches from GitHub)."""
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+        force = bool(body.get("force", True))
+        catalog = _get_skills_catalog()
+        total = catalog.refresh_all(force=force)
+        return {"status": "ok", "total_entries": total}
+
+    @app.post("/skills/install")
+    async def skills_install(request: Request) -> dict[str, Any]:
+        """Install a skill from the remote catalog.
+
+        Body: {"source_id": "anthropic", "name": "pdf-processing"}
+        """
+        from kernel.skills.installer import install_from_catalog
+        body = await request.json()
+        source_id = body.get("source_id", "")
+        name = body.get("name", "")
+        if not source_id or not name:
+            return {"status": "error", "message": "source_id and name are required"}
+
+        catalog = _get_skills_catalog()
+        entry = catalog.get(source_id, name)
+        if entry is None:
+            return {
+                "status": "error",
+                "message": f"Skill '{name}' not found in source '{source_id}'",
+            }
+
+        try:
+            result = install_from_catalog(
+                entry,
+                allow_overwrite=bool(body.get("overwrite", False)),
+            )
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+        if result.ok:
+            _get_skills_registry().reload()
+            return {
+                "status": "ok",
+                "skill_name": result.skill_name,
+                "install_path": str(result.install_path),
+                "warnings": result.warnings,
+            }
+        return {"status": "error", "message": result.error, "skill_name": result.skill_name}
+
+    @app.post("/skills/uninstall")
+    async def skills_uninstall(request: Request) -> dict[str, Any]:
+        """Remove a user-installed skill."""
+        from kernel.skills.installer import uninstall
+        body = await request.json()
+        name = body.get("name", "")
+        if not name:
+            return {"status": "error", "message": "name is required"}
+        ok = uninstall(name)
+        if ok:
+            _get_skills_registry().reload()
+        return {"status": "ok" if ok else "error", "removed": ok}
+
+    @app.get("/skills/installed")
+    async def skills_installed() -> dict[str, Any]:
+        """List all skills discovered locally (builtin + user)."""
+        reg = _get_skills_registry()
+        return {
+            "results": [m.to_dict() for m in reg.list_all()],
+            "count": len(reg.list_all()),
+        }
+
     @app.get("/settings")
     async def get_settings(request: Request) -> dict[str, Any]:
         """Get current settings."""
