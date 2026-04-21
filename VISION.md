@@ -570,43 +570,65 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [x] System tray + Ctrl+Space global hotkey
 - [x] Russian labels throughout UI
 
-### Phase 5: AI OS Layer 🟡 PARTIAL
-- [x] AgentBuilder (LLM code generation via Claude API)
-- [x] Code Safety Gate (true AST analysis, blocks dangerous imports)
-- [x] Skill template declarations (tracker, monitor, notifier, reminder, logger)
-- [x] Basic cron scheduler (croniter, 3 fixed events)
-- [~] Intent Classifier (regex-based, not LLM — stub)
+### Phase 5: AI OS Layer ✅ DONE
+- [x] AgentBuilder (LLM code generation — multi-provider: OpenAI/Anthropic/Google/DeepSeek)
+- [x] Code Safety Gate (true AST analysis, blocks dangerous imports at install time)
+- [x] Intent Classifier (LLM mode with regex fallback — 2026-04 upgrade)
+- [x] Skill templates (tracker, monitor, notifier, reminder, logger)
+- [x] Skill template declarations preserved as reference (superseded by SKILL.md in Phase 6)
+- [x] Permission Enforcer wired at dispatch (Phase 6)
+- [x] Rate Limiter wired at dispatch (120/min sliding window, Phase 6)
+- [x] SQLite audit log for all dispatches (Phase 6)
+- [x] SandboxBackend Protocol — pluggable for future Docker/CubeVM/E2B (Phase 6)
+- [x] Deployer with rollback on failure (Phase 5 migration)
 - [~] Voice Wizard (session tracking exists, multi-turn flow incomplete)
-- [~] Permission Enforcer (class exists, runtime enforcement partial)
-- [~] SkillExecutor (templates declared, execution engine incomplete)
-- [ ] Network Proxy (JSON-RPC domain whitelist — not implemented)
-- [ ] Rate Limiter (per-agent request limits — not implemented)
+- [ ] Network Proxy runtime patching (JSON-RPC handler ready, not plugged into scripts)
 - [ ] Agent-to-agent communication (v2.5)
 
-### Phase 6: Agent Skills Native Support 🔄 STRATEGIC PIVOT
-**2026-04: Отказ от собственного manifest-формата в пользу Agent Skills spec** ([agentskills.io](https://agentskills.io)).
+### Phase 6: Agent Skills Native Support ✅ DONE
+**2026-04: Полный переход на Agent Skills spec** ([agentskills.io](https://agentskills.io)) — 
+открытый стандарт Anthropic, совместимый с 30+ tools (Claude Code, Cursor, Copilot…).
 
-**Adoption layer:**
-- [ ] **SKILL.md loader** — парсер frontmatter + Markdown body (kernel/agent_runtime/skill_loader.py)
-- [ ] **Converter** — существующие agents/*/manifest.yaml → SKILL.md формат
-- [ ] **Validator** — import skills-ref from [agentskills/agentskills](https://github.com/agentskills/agentskills)
-- [ ] **Plugin registry update** — ищем SKILL.md вместо manifest.yaml
-- [ ] **Runtime** — скрипты в scripts/ директории, references/ для доп. инструкций
+**Adoption layer (6.1):**
+- [x] **SKILL.md loader** — parser frontmatter + Markdown (kernel/skills/loader.py)
+- [x] **Converter** — existing agents/*/manifest.yaml → SKILL.md (15 agents migrated)
+- [x] **Validator** — spec-compliant (name/description/license/compatibility/metadata/allowed-tools)
+- [x] **Dual plugin registry** — supports SKILL.md AND legacy manifest.yaml
+- [x] **Hybrid discovery** — builtin (installer) + user (AppData/KALI/skills/)
 
-**Catalog integration:**
-- [ ] **Multi-source registry** (`kernel/catalog/skills_registry.py`):
-  - [anthropics/skills](https://github.com/anthropics/skills) — 30+ official Anthropic skills
+**Catalog integration (6.2):**
+- [x] **Multi-source registry** (`kernel/skills/catalog.py`):
+  - [anthropics/skills](https://github.com/anthropics/skills) — official Anthropic
   - [microsoft/skills](https://github.com/microsoft/skills) — 128 Azure SDK skills
   - [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills) — 1100+ community
-  - `github.com/VasilyKolbenev/kali-skills` — наш кастом
-- [ ] **Install flow**: `git clone skill-repo → validate → safety gate → deploy to data/skills/`
-- [ ] **Search** по frontmatter description/keywords
-- [ ] **Auto-discovery** новых скиллов при indexing
+  - `github.com/VasilyKolbenev/kali-skills` — KALI-curated
+- [x] **GitHub tarball install** — no git dependency, AST safety gate on scripts
+- [x] **Caching** — 1h TTL on-disk in AppData/catalog-cache, GITHUB_TOKEN support
+- [x] **Atomic install** with rollback on failure
+- [x] **Trust levels** — official / verified / community
 
-**Publish flow (contributing back):**
-- [ ] `kali publish <skill>` CLI — валидация + GitHub PR в наш registry
-- [ ] Integration с `gh skill publish` (GitHub CLI 2.90+) для официальной публикации
-- [ ] Skill provenance metadata (source repo, ref, SHA) per spec
+**Publish flow (6.3):**
+- [x] `kali publish <skill>` CLI — validate + AST safety + .tar.gz bundle
+- [x] UI Upload button with PublishDialog (errors/warnings/next-steps)
+- [x] Auto-instructions for GitHub PR workflow
+- [x] Provenance metadata (source repo, ref, SHA) — spec compliant
+
+**Runtime enforcement (6.4):**
+- [x] **SandboxBackend Protocol** — pluggable interface
+  * InProcessSandbox (current default)
+  * Future: DockerSandbox, CubeVMSandbox, E2BSandbox (KALI Cloud Phase 10)
+- [x] **PermissionEnforcer** wired at dispatch (403 on denial)
+- [x] **RateLimiter** wired at dispatch (429 on exceed, 120/min default)
+- [x] **AuditLog** — SQLite append-only, 30-day retention
+- [x] **GET /sandbox/{health,audit,stats}** — inspection endpoints
+
+**UI (6.5):**
+- [x] Agent Store tabs (Installed / Anthropic / Microsoft / VoltAgent / KALI)
+- [x] Trust badges, live search, install/uninstall with feedback toasts
+- [x] Publish dialog with validation errors + next-step instructions
+- [x] Typed API client + TypeScript types
+
+**Tests:** 124 passing (skills + plugin_registry + sandbox).
 
 ### Phase 7: Integrations 🟡 PARTIAL
 - [x] JARVIS pre-recorded voice clips (greet, ok, reply — 17 clips)
@@ -704,6 +726,7 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 4. **Desktop + воздух** — полноценный Tauri-десктоп, не CLI
 5. **Кастомный JARVIS voice** — F5-TTS клон из Iron Man Sound Pack
 6. **Local-first, cloud-enhanced** — F5 на GPU локально, ElevenLabs в облаке
+7. **Sandbox transparency** — user видит audit log (что делал каждый скилл, какие отказы), а не "чёрный ящик"
 
 ### Strategic narrative (для инвесторов/PR)
 
@@ -772,5 +795,12 @@ config/kali.yaml          # Main configuration
 
 ---
 
-*Last updated: 2026-04-18*
-*Version: 0.4.0 — Agent Skills adoption*
+*Last updated: 2026-04-19*
+*Version: 0.5.0 — Agent Skills native + Sandbox hardening*
+
+**Stats:**
+- 124 passing unit tests
+- 15 built-in skills (all SKILL.md compliant)
+- 4 catalog sources wired (anthropic/microsoft/voltagent/kali)
+- 2 TTS engines (F5-TTS local GPU + ElevenLabs cloud)
+- 2 installer variants (Lite 104 MB / Premium 3.4 GB)
