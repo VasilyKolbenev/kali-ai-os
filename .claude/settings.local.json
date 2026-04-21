@@ -236,7 +236,13 @@
       "Bash(mkdir -p dist_premium)",
       "Bash(\"C:/Program Files/7-Zip/7z.exe\" a -t7z -m0=lzma2 -mx=3 -ms=on -mmt=on dist_premium/premium.7z premium_stage/*)",
       "WebFetch(domain:hub.neuraldeep.ru)",
-      "WebFetch(domain:github.blog)"
+      "WebFetch(domain:github.blog)",
+      "Bash(cp -r agents premium_stage/)",
+      "Bash(cp -r resources premium_stage/)",
+      "Bash(cp -r models/ffmpeg premium_stage/models/)",
+      "Bash(cp -r models/elevenlabs_ref premium_stage/models/)",
+      "Bash(rm -rf premium_stage dist_premium/premium.7z)",
+      "Bash(mv dist_lite/KALI-Lite-Setup-0.1.0.exe dist_lite/KALI-Lite-Setup-0.2.0-beta.exe)"
     ]
   }
 }
