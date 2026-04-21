@@ -72,6 +72,27 @@ export const api = {
     fetchJSON<{ results: import("./types").InstalledSkill[]; count: number }>(
       "/skills/installed",
     ),
+  skillValidate: (name: string) =>
+    fetchJSON<{ status: string; skill_name: string; valid: boolean; errors: string[]; warnings: string[] }>(
+      "/skills/validate",
+      { method: "POST", body: JSON.stringify({ name }) },
+    ),
+  skillPublish: (name: string, skipSafety = false) =>
+    fetchJSON<{
+      status: string;
+      skill_name: string;
+      ok: boolean;
+      errors: string[];
+      warnings: string[];
+      safety_issues: string[];
+      catalog_repo_url: string;
+      instructions: string[];
+      bundle_path?: string;
+      bundle_name?: string;
+    }>("/skills/publish", {
+      method: "POST",
+      body: JSON.stringify({ name, skip_safety: skipSafety }),
+    }),
   builderClassify: (text: string) =>
     fetchJSON<any>("/builder/classify", {
       method: "POST",

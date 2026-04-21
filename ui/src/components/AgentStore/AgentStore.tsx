@@ -1,12 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search, Download, Package, Sparkles, Check, Loader2, X,
-  RefreshCw, Shield, Trash2, ExternalLink,
+  RefreshCw, Shield, Trash2, ExternalLink, Upload, AlertCircle,
 } from "lucide-react";
 import { api } from "../../api/client";
 import type {
   CatalogSkill, CatalogSource, InstalledSkill,
 } from "../../api/types";
+
+interface PublishDialogState {
+  skillName: string;
+  phase: "validating" | "publishing" | "success" | "error";
+  errors: string[];
+  warnings: string[];
+  instructions: string[];
+  catalogRepoUrl: string;
+  bundlePath: string;
+}
 
 type TabId = "installed" | string; // source_id or "installed"
 type ToastType = "success" | "error" | "info";
@@ -33,6 +43,7 @@ export function AgentStore() {
   const [refreshing, setRefreshing] = useState(false);
   const [installingName, setInstallingName] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
+  const [publishState, setPublishState] = useState<PublishDialogState | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Boot: load sources + installed skills + trigger first catalog fetch
@@ -110,6 +121,46 @@ export function AgentStore() {
       showToast(`Install error: ${(err as Error).message}`, "error");
     }
     setInstallingName(null);
+  };
+
+  const handlePublish = async (skill: InstalledSkill) => {
+    setPublishState({
+      skillName: skill.name,
+      phase: "publishing",
+      errors: [], warnings: [], instructions: [],
+      catalogRepoUrl: "", bundlePath: "",
+    });
+    try {
+      const res = await api.skillPublish(skill.name);
+      if (res.ok) {
+        setPublishState({
+          skillName: res.skill_name,
+          phase: "success",
+          errors: res.errors || [],
+          warnings: res.warnings || [],
+          instructions: res.instructions || [],
+          catalogRepoUrl: res.catalog_repo_url || "",
+          bundlePath: res.bundle_path || "",
+        });
+      } else {
+        setPublishState({
+          skillName: res.skill_name || skill.name,
+          phase: "error",
+          errors: [...(res.errors || []), ...(res.safety_issues || [])],
+          warnings: res.warnings || [],
+          instructions: [],
+          catalogRepoUrl: "", bundlePath: "",
+        });
+      }
+    } catch (err) {
+      setPublishState({
+        skillName: skill.name,
+        phase: "error",
+        errors: [(err as Error).message],
+        warnings: [], instructions: [],
+        catalogRepoUrl: "", bundlePath: "",
+      });
+    }
   };
 
   const handleUninstall = async (skill: InstalledSkill) => {
@@ -231,6 +282,7 @@ export function AgentStore() {
           <InstalledList
             skills={filteredInstalled}
             onUninstall={handleUninstall}
+            onPublish={handlePublish}
           />
         ) : (
           <CatalogList
@@ -240,6 +292,14 @@ export function AgentStore() {
             onInstall={handleInstall}
             loading={loading}
             activeSource={sources.find((s) => s.id === activeTab)}
+          />
+        )}
+
+        {/* Publish dialog */}
+        {publishState && (
+          <PublishDialog
+            state={publishState}
+            onClose={() => setPublishState(null)}
           />
         )}
 
@@ -264,10 +324,11 @@ export function AgentStore() {
 // -----------------------------------------------------------------------------
 
 function InstalledList({
-  skills, onUninstall,
+  skills, onUninstall, onPublish,
 }: {
   skills: InstalledSkill[];
   onUninstall: (skill: InstalledSkill) => void;
+  onPublish: (skill: InstalledSkill) => void;
 }) {
   if (skills.length === 0) {
     return (
@@ -297,6 +358,13 @@ function InstalledList({
               </div>
             )}
           </div>
+          <button
+            onClick={() => onPublish(skill)}
+            className="text-white/30 hover:text-[var(--j-cyan)] transition p-1"
+            title="Publish to KALI catalog"
+          >
+            <Upload className="w-4 h-4" />
+          </button>
           {skill.source !== "builtin" && (
             <button
               onClick={() => onUninstall(skill)}
@@ -433,6 +501,137 @@ function TrustBadge({ trust }: { trust: string }) {
     >
       {TRUST_LABELS[trust] ?? trust}
     </span>
+  );
+}
+
+function PublishDialog({
+  state, onClose,
+}: {
+  state: PublishDialogState;
+  onClose: () => void;
+}) {
+  const copyBundlePath = () => {
+    if (state.bundlePath) {
+      navigator.clipboard.writeText(state.bundlePath);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm
+        flex items-center justify-center p-6"
+      onClick={onClose}
+    >
+      <div
+        className="glass p-6 max-w-lg w-full rounded-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <Upload className="w-5 h-5 text-[var(--j-cyan)]" />
+          <h3 className="text-sm font-medium">
+            Publish «{state.skillName}»
+          </h3>
+          <button
+            onClick={onClose}
+            className="ml-auto text-white/30 hover:text-white/60"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {state.phase === "publishing" && (
+          <div className="py-6 flex items-center gap-3 justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-[var(--j-cyan)]" />
+            <span className="text-sm text-white/60">
+              Validating + packaging skill…
+            </span>
+          </div>
+        )}
+
+        {state.phase === "error" && (
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 text-sm text-red-400">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>Publish failed — fix issues and try again</span>
+            </div>
+            {state.errors.length > 0 && (
+              <ul className="space-y-1.5 text-xs text-white/60 pl-5 list-disc">
+                {state.errors.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {state.phase === "success" && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-sm text-[var(--j-green)]">
+              <Check className="w-4 h-4" />
+              Bundle ready — follow the steps below
+            </div>
+
+            {state.warnings.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[10px] tracking-wider uppercase text-[var(--j-amber,#f59e0b)]">
+                  Warnings
+                </div>
+                <ul className="space-y-1 text-xs text-white/50 pl-4 list-disc">
+                  {state.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {state.bundlePath && (
+              <div className="space-y-1">
+                <div className="text-[10px] tracking-wider uppercase text-white/40">
+                  Bundle
+                </div>
+                <div className="flex gap-2 items-center">
+                  <code
+                    className="text-[11px] px-2 py-1.5 rounded bg-black/40 text-white/70 flex-1 truncate"
+                  >
+                    {state.bundlePath}
+                  </code>
+                  <button
+                    onClick={copyBundlePath}
+                    className="text-xs px-2 py-1.5 rounded bg-[var(--j-cyan)]/20
+                      text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <div className="text-[10px] tracking-wider uppercase text-white/40">
+                Next steps
+              </div>
+              <ol className="space-y-1 text-xs text-white/70 pl-5 list-decimal">
+                {state.instructions.map((step, i) => (
+                  <li key={i}>{step.replace(/^\d+\.\s*/, "")}</li>
+                ))}
+              </ol>
+            </div>
+
+            {state.catalogRepoUrl && (
+              <a
+                href={state.catalogRepoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs text-[var(--j-cyan)] hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Open catalog repo
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

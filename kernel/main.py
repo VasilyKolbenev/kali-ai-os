@@ -1529,6 +1529,74 @@ def create_app(
             "count": len(reg.list_all()),
         }
 
+    @app.post("/skills/validate")
+    async def skills_validate(request: Request) -> dict[str, Any]:
+        """Validate a local skill against the Agent Skills spec.
+
+        Body: {"name": "my-skill"}  — name of an installed skill.
+        """
+        from kernel.skills.publisher import validate_skill
+
+        body = await request.json()
+        name = body.get("name", "").strip()
+        if not name:
+            return {"status": "error", "message": "name is required"}
+
+        reg = _get_skills_registry()
+        skill = reg.get(name)
+        if skill is None:
+            return {"status": "error", "message": f"Skill '{name}' not found locally"}
+
+        manifest, errors, warnings = validate_skill(skill.skill_dir)
+        return {
+            "status": "ok" if not errors else "invalid",
+            "skill_name": name,
+            "valid": manifest is not None and not errors,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    @app.post("/skills/publish")
+    async def skills_publish(request: Request) -> dict[str, Any]:
+        """Prepare a skill bundle for community catalog submission.
+
+        Body: {"name": "my-skill", "skip_safety": false}
+
+        Returns bundle path + next-step instructions (does not push to GitHub).
+        """
+        from kernel.skills.publisher import publish_skill
+
+        body = await request.json()
+        name = body.get("name", "").strip()
+        if not name:
+            return {"status": "error", "message": "name is required"}
+
+        reg = _get_skills_registry()
+        skill = reg.get(name)
+        if skill is None:
+            return {"status": "error", "message": f"Skill '{name}' not found locally"}
+
+        result = publish_skill(
+            skill.skill_dir,
+            skip_safety=bool(body.get("skip_safety", False)),
+            include_scripts=bool(body.get("include_scripts", True)),
+        )
+
+        response: dict[str, Any] = {
+            "status": "ok" if result.ok else "error",
+            "skill_name": result.skill_name,
+            "ok": result.ok,
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "safety_issues": result.safety_issues,
+            "catalog_repo_url": result.catalog_repo_url,
+            "instructions": result.instructions,
+        }
+        if result.bundle_path:
+            response["bundle_path"] = str(result.bundle_path)
+            response["bundle_name"] = result.bundle_path.name
+        return response
+
     @app.get("/settings")
     async def get_settings(request: Request) -> dict[str, Any]:
         """Get current settings."""
