@@ -213,7 +213,30 @@
       "Bash(rm C:/Users/User/Desktop/Jarvis/dist/kali-backend.exe)",
       "Bash(rm -rf C:/Users/User/Desktop/Jarvis/build/pyinstaller)",
       "Bash(\"C:/Program Files \\(x86\\)/NSIS/makensis.exe\" installer_lite.nsi)",
-      "Bash(\"C:/Program Files \\(x86\\)/NSIS/makensis.exe\" installer_premium.nsi)"
+      "Bash(\"C:/Program Files \\(x86\\)/NSIS/makensis.exe\" installer_premium.nsi)",
+      "Bash(where 7z)",
+      "Read(//c/Program Files/7-Zip/**)",
+      "Read(//c/Program Files \\(x86\\)/7-Zip/**)",
+      "Bash(\"C:/Python314/python.exe\" -m pip install git-filter-repo --quiet)",
+      "Bash(\"C:/Python314/python.exe\" -m git_filter_repo --help)",
+      "Bash(\"C:/Python314/python.exe\" -m git_filter_repo --analyze)",
+      "Read(//c/Users/User/Desktop/**)",
+      "Bash(cp -r C:/Users/User/Desktop/Jarvis/.git C:/Users/User/Desktop/Jarvis.git.backup)",
+      "Bash(C:/Python314/python.exe -m git_filter_repo --path-glob '*.wav' --invert-paths --path-glob '*.mp3' --invert-paths --path-glob '*.pt' --invert-paths --path-glob '*.onnx' --invert-paths --path-glob '*.safetensors' --invert-paths --path-glob '*.index' --invert-paths --path-glob 'Jarvis Sound Pack*/*' --invert-paths --path-glob 'services/tts/.ref_cache/*' --invert-paths --force)",
+      "Bash(rm -rf premium_stage)",
+      "Bash(mkdir -p premium_stage)",
+      "Bash(cp -r dist_premium/kali-backend premium_stage/)",
+      "Bash(cp src-tauri/target/release/kali-desktop.exe premium_stage/)",
+      "Bash(cp -r config premium_stage/)",
+      "Bash(mkdir -p premium_stage/models)",
+      "Bash(cp models/f5_russian_v4_winter.safetensors premium_stage/models/)",
+      "Bash(cp models/f5_russian_vocab.txt premium_stage/models/)",
+      "Bash(cp models/jarvis_ref_combined.wav premium_stage/models/)",
+      "Bash(cp models/jarvis_reference.wav premium_stage/models/)",
+      "Bash(mkdir -p dist_premium)",
+      "Bash(\"C:/Program Files/7-Zip/7z.exe\" a -t7z -m0=lzma2 -mx=3 -ms=on -mmt=on dist_premium/premium.7z premium_stage/*)",
+      "WebFetch(domain:hub.neuraldeep.ru)",
+      "WebFetch(domain:github.blog)"
     ]
   }
 }

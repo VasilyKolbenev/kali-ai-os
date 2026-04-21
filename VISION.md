@@ -1,23 +1,76 @@
-# KALI — Personal AI Operating System
+# KALI — Voice-First Agent Skills OS
 
 > Your personal AI in your pocket. Manages your life, learns your habits, builds what you need — by voice.
+> **Natively compatible with Agent Skills ecosystem (Anthropic open standard).**
 
 ---
 
 ## Mission
 
-Дать каждому человеку персонального AI-ассистента, который учится, адаптируется и расширяется голосовыми командами. Пользователь говорит что хочет — система создаёт, тестирует и запускает. Лучшие решения попадают в маркетплейс и помогают другим.
+Дать каждому человеку персонального AI-ассистента, который учится, адаптируется и расширяется голосовыми командами. Пользователь говорит что хочет — система находит или создаёт скилл, тестирует и запускает.
 
-**KALI — это не просто ассистент. Это операционная система для жизни.** Как iOS дала людям App Store для приложений, KALI даёт Agent Store для AI-агентов. Только здесь не нужно быть программистом — достаточно голоса.
+**KALI — voice-first desktop OS for Agent Skills.** Как iOS дала App Store, KALI даёт **голосовой интерфейс к Agent Skills экосистеме** — открытому стандарту, принятому Claude, Cursor, GitHub Copilot, VS Code, Gemini CLI и 30+ другими инструментами.
+
+**Ключевая ставка:** не изобретаем свой формат. Мы **лучший voice-первый клиент** для универсальных Agent Skills.
 
 ## Core Principles
 
 1. **Voice-first** — всё управляется голосом, UI вторичен
-2. **No-code by default** — любой человек без опыта может создать агента
-3. **Agent-first architecture** — всё есть агент или skill
-4. **Local-first, cloud-enhanced** — работает офлайн, облако усиливает
-5. **Open ecosystem** — маркетплейс, community, open-source ядро
-6. **Safe by design** — песочница, permissions, code review
+2. **Production-grade, always** — не прототип. Каждый релиз — rock-solid. Миллионы пользователей — требования dayone: скорость, надёжность, отсутствие багов
+3. **Standard-compliant** — нативная поддержка Agent Skills spec ([agentskills.io](https://agentskills.io))
+4. **No-code by default** — любой человек без опыта может создать скилл голосом
+5. **Local-first, cloud-enhanced** — работает офлайн, облако усиливает
+6. **Ecosystem interop** — наши скиллы работают везде, чужие работают у нас
+7. **Safe by design** — песочница, permissions, AST code review
+
+## Business Model
+
+**Phase 1 (now → Q3 2026):** Software subscription
+- **Free tier** — KALI Core: local voice, 5 built-in agents, basic skills
+- **Pro $9.99/мес** — ElevenLabs JARVIS cloud voice, priority LLM routing, cloud skills sync
+- **Team $29/мес** — shared workspaces, admin console, on-prem option
+
+**Phase 2 (Q4 2026 → 2027):** Hardware + subscription
+- **KALI Device** (aka "CLIK") — custom hardware with built-in mic array, speaker, offline AI chip
+- **$399 one-time + $9.99/мес** — железка unlocks full features, подписка покрывает cloud LLM
+- Target: satellite connectivity (Starlink integration), always-connected
+
+**Technical requirements for monetization readiness:**
+- [ ] Auth layer (user accounts, OAuth via Google/GitHub/Apple)
+- [ ] License server (JWT tokens, feature flags per tier)
+- [ ] Billing integration (Stripe for Web, In-App Purchase for mobile)
+- [ ] Telemetry (opt-in) — usage metrics для product decisions
+- [ ] Team admin console (enterprise feature)
+
+Эти фичи — **архитектурно** закладываем сейчас (feature flags, auth middleware), **реализация** после validation MVP.
+
+## Production Quality Standards
+
+KALI — **не dev-прототип, а продукт для миллионов**. Каждая строка кода подчиняется:
+
+**Performance:**
+- App startup ≤ 2s (cold), ≤ 500ms (warm)
+- Voice response latency ≤ 1.5s (end-to-end: wake word → ответ с TTS)
+- Memory footprint ≤ 500 MB idle, ≤ 2 GB under load
+- Никаких fork-bomb, memory leaks, UI freeze
+
+**Reliability:**
+- Zero crashes on main workflow (voice command → response)
+- Graceful fallbacks: GPU fail → cloud, network fail → offline mode
+- Auto-recovery: backend crash → auto-restart с сохранением state
+- Comprehensive logging + telemetry (opt-in)
+
+**Distribution:**
+- Code-signed installers (Windows SmartScreen, macOS notarization)
+- Auto-update mechanism (Sparkle/Squirrel-style)
+- Installer ≤ 200 MB для Lite, ≤ 4 GB для Premium
+- Works on 5-year-old hardware (4GB RAM, CPU-only fallback)
+
+**UX:**
+- Every action has loading state + error handling
+- No "it works on dev machine" — тест на clean Windows VM перед каждым релизом
+- Localization ready (RU/EN, growth to 10+ languages)
+- Accessibility compliant (keyboard navigation, screen reader support)
 
 ---
 
@@ -170,54 +223,72 @@ KALI запоминает предпочтения и адаптируется:
 
 ---
 
-## Dual Model: Skills & Agents
+## Architecture: Agent Skills Native
 
-### Skills — лёгкие, декларативные, безопасные
+KALI принял **Agent Skills спецификацию** ([agentskills.io](https://agentskills.io)) как родной формат. Каждая "способность" — это **SKILL.md** файл в папке (YAML frontmatter + Markdown инструкции).
 
-Skills описываются YAML-конфигом без пользовательского кода. Работают через встроенные шаблоны. Sandbox не нужен — нет исполняемого кода, только параметры.
+### SKILL.md — единый формат
 
-**Встроенные шаблоны:**
-- **tracker** — отслеживание значений (вода, калории, расходы, привычки)
-- **monitor** — периодическая проверка URL/API с алертами
-- **notifier** — уведомления по условиям/расписанию
-- **reminder** — напоминания с повторами
-- **logger** — запись событий с аналитикой
-
-**Пример skill.yaml:**
-```yaml
+```markdown
+---
 name: water-tracker
-template: tracker
-display_name: "Трекер воды"
-config:
-  unit: "мл"
-  daily_goal: 2000
-  reminders:
-    interval_hours: 2
-    message: "Время выпить воды!"
-  tracking:
-    daily_summary: true
-    weekly_chart: true
+description: Tracks daily water intake with reminders every 2 hours.
+  Use when user mentions hydration, water, drinking habits.
+license: MIT
+metadata:
+  author: kali-team
+  version: "1.0"
+allowed-tools: Read Write
+---
+
+# Water Tracker
+
+Instructions for the agent...
+
+## Script
+Run `scripts/log-intake.py` to record an entry.
 ```
 
-### Agents — полноценные, с кодом, в песочнице
-
-Agents содержат Python-код, сгенерированный LLM. Запускаются в subprocess-песочнице с permission-моделью. Могут использовать API, файлы, другие агенты.
-
-**Жизненный цикл агента:**
-```
-Идея → Voice Wizard → LLM Generation → Safety Gate → Permission Approval → Deploy → Run
-```
-
-### Voice Wizard решает что создавать
-
-Jarvis анализирует запрос и автоматически определяет: это Skill (простой, шаблонный) или Agent (сложный, нужен код). Пользователь не знает разницу — для него это одна команда.
+### Структура папки скилла
 
 ```
-"Напоминай пить воду каждые 2 часа"     → Skill (reminder template)
-"Отслеживай мой сон и строй графики"    → Skill (tracker template)
-"Парси Aviasales и ищи дешёвые билеты"  → Agent (нужен код + network)
-"Интегрируй мой Home Assistant"         → Agent (нужен код + network + devices)
+water-tracker/
+├── SKILL.md          ← обязательный: metadata + инструкции
+├── scripts/          ← опциональный: Python/Bash код
+│   └── log-intake.py
+├── references/       ← опциональный: детальные документы
+└── assets/           ← опциональный: шаблоны/данные
 ```
+
+### Двухуровневая модель сложности
+
+| Тип | Когда | Пример |
+|---|---|---|
+| **Instruction-only skill** | Не нужен код, только инструкции для LLM | "Напоминай пить воду каждые 2 часа" |
+| **Skill with scripts** | Нужны API-вызовы, парсинг, интеграции | "Отслеживай курс биткоина и уведомляй" |
+
+Agent Skills spec поддерживает оба варианта — один формат для всех случаев.
+
+### Voice Wizard — поиск или создание
+
+Jarvis сначала **ищет готовый скилл** в каталоге Agent Skills экосистемы (1100+ скиллов), потом — **создаёт новый** если не найден:
+
+```
+"Напоминай пить воду каждые 2 часа"     → Ищем existing skill → found "water-reminder" → install
+"Интегрируй Home Assistant"             → Ищем → found "home-assistant-bridge" → install
+"Мониторь цену биткоина на Binance"     → Ищем → found "crypto-monitor" → configure
+"Сделай что-то очень специфичное"        → Не найдено → LLM generates new SKILL.md → publish
+```
+
+### Почему Agent Skills вместо своего формата
+
+| | Свой формат (manifest.yaml) | Agent Skills (SKILL.md) |
+|---|---|---|
+| Контент на старте | 0 скиллов | **1100+ готовых** |
+| Экосистема | Только KALI | **30+ инструментов** (Claude, Cursor, VS Code...) |
+| Portability | Lock-in | Пишем 1 раз — работает везде |
+| Standards | Никаких | Открытый стандарт Anthropic |
+| Discoverability | Свой каталог | GitHub CLI `gh skill search` + наш UI |
 
 ---
 
@@ -512,17 +583,30 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [ ] Rate Limiter (per-agent request limits — not implemented)
 - [ ] Agent-to-agent communication (v2.5)
 
-### Phase 6: Cloud Catalog ❌ NOT STARTED (local stubs only)
-- [x] CatalogClient (read-only: search, trending, get_package)
-- [x] Local agent discovery (scans agents/*/manifest.yaml)
-- [~] Package format (.kali-agent concept defined, pack/unpack basic)
-- [ ] Supabase cloud deployment (schema, auth, storage)
-- [ ] Publish flow (package → upload to Supabase Storage)
-- [ ] Install from cloud (download → safety gate → deploy)
-- [ ] Ratings & reviews (tables + UI)
-- [ ] Trust levels (official/verified/community)
-- [ ] Author profiles
-- [ ] Content moderation
+### Phase 6: Agent Skills Native Support 🔄 STRATEGIC PIVOT
+**2026-04: Отказ от собственного manifest-формата в пользу Agent Skills spec** ([agentskills.io](https://agentskills.io)).
+
+**Adoption layer:**
+- [ ] **SKILL.md loader** — парсер frontmatter + Markdown body (kernel/agent_runtime/skill_loader.py)
+- [ ] **Converter** — существующие agents/*/manifest.yaml → SKILL.md формат
+- [ ] **Validator** — import skills-ref from [agentskills/agentskills](https://github.com/agentskills/agentskills)
+- [ ] **Plugin registry update** — ищем SKILL.md вместо manifest.yaml
+- [ ] **Runtime** — скрипты в scripts/ директории, references/ для доп. инструкций
+
+**Catalog integration:**
+- [ ] **Multi-source registry** (`kernel/catalog/skills_registry.py`):
+  - [anthropics/skills](https://github.com/anthropics/skills) — 30+ official Anthropic skills
+  - [microsoft/skills](https://github.com/microsoft/skills) — 128 Azure SDK skills
+  - [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills) — 1100+ community
+  - `github.com/VasilyKolbenev/kali-skills` — наш кастом
+- [ ] **Install flow**: `git clone skill-repo → validate → safety gate → deploy to data/skills/`
+- [ ] **Search** по frontmatter description/keywords
+- [ ] **Auto-discovery** новых скиллов при indexing
+
+**Publish flow (contributing back):**
+- [ ] `kali publish <skill>` CLI — валидация + GitHub PR в наш registry
+- [ ] Integration с `gh skill publish` (GitHub CLI 2.90+) для официальной публикации
+- [ ] Skill provenance metadata (source repo, ref, SHA) per spec
 
 ### Phase 7: Integrations 🟡 PARTIAL
 - [x] JARVIS pre-recorded voice clips (greet, ok, reply — 17 clips)
@@ -560,15 +644,25 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [ ] Voice quality A/B testing (pitch shift, speaker variants)
 - [ ] Streaming TTS (play while generating next sentence)
 
-### Phase 9: Agent Marketplace MVP 📋 NEXT
-- [ ] Supabase schema: packages, authors, reviews tables
-- [ ] Publish API: pack agent → upload to Supabase Storage
-- [ ] Install API: download → safety gate → deploy locally
-- [ ] Store UI: install with progress, toast feedback, ratings
-- [ ] Author registration + profile page
-- [ ] Star ratings (1-5) + text reviews
-- [ ] Trust badges (official / verified / community)
-- [ ] Marketplace search (full-text, categories, sorting)
+### Phase 9: Voice-First Agent Skills UX 📋 NEXT
+**Core value-add: голосовой интерфейс к Agent Skills экосистеме.**
+
+- [ ] **Agent Store UI tabs**:
+  - 🏛 Official (Anthropic) — 30+ curated skills
+  - 🏢 Microsoft — 128 Azure SDK skills
+  - 🌟 Community (VoltAgent) — 1100+ verified
+  - ⚡ KALI Skills — наш кастом с JARVIS-integration
+  - 📦 Installed — локальные
+- [ ] **Voice-first discovery**: "Jarvis, найди скилл для Notion" → поиск по frontmatter
+- [ ] **Install with one voice command**: "Установи это" → clone + safety gate + deploy
+- [ ] **Permission voice approval**: Jarvis читает `allowed-tools`, спрашивает подтверждение
+- [ ] **Author profiles** via GitHub (username + avatar + repo stars)
+- [ ] **Trust badges** based on source:
+  - 🟢 **Official** — from anthropics/, microsoft/, google/, stripe/
+  - 🔵 **Verified** — KALI-team reviewed + test suite passing
+  - ⚪ **Community** — just passed our Safety Gate
+- [ ] **Star ratings** via GitHub Issues (community feedback)
+- [ ] **Analytics** — install counts via GitHub API
 
 ### Phase 10: Mobile 📋 PLANNED
 - [x] Server consolidation (one process, one port)
@@ -588,24 +682,38 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 
 ## Competitive Positioning
 
-### Our Moat: AI OS + Agent Marketplace
+### Our Moat: Voice-First Client for Agent Skills Ecosystem
 
-| | KALI | AI New World | Siri/Alexa | Open Interpreter |
-|--|------|-------------|------------|-----------------|
-| Voice-first | ✅ | ✅ | ✅ | ❌ |
-| Custom agents | ✅ Voice-built | ❌ | ❌ | ❌ |
-| Marketplace | ✅ Cloud catalog | ❌ | App Store (closed) | ❌ |
-| Open source | ✅ Core open | ❌ | ❌ | ✅ |
-| Local-first | ✅ Offline capable | ❓ | ❌ Cloud-only | ✅ |
-| Desktop app | ✅ Tauri | ❓ | ❌ | ✅ Terminal |
-| Custom voice | ✅ JARVIS RVC | ❌ | ❌ | ❌ |
+**KALI не конкурирует со Skills экосистемой — мы её лучший voice-first клиент.** Claude Code, Cursor, Copilot работают со SKILL.md в режиме coding-assistant. KALI даёт эти же скиллы **обычным людям через голос**.
+
+| | KALI | Claude Code | Cursor | Siri/Alexa | AI New World |
+|--|------|-------------|--------|------------|--------------|
+| Voice-first UX | ✅ Wake word + JARVIS | ❌ CLI | ❌ Editor | ✅ | ✅ |
+| Agent Skills compatible | ✅ Native | ✅ Native | ✅ | ❌ | ❌ |
+| Custom voice (JARVIS) | ✅ F5/ElevenLabs clone | ❌ | ❌ | ❌ | ❌ |
+| Standard interop | ✅ Open spec | ✅ | ✅ | ❌ Walled garden | ❌ |
+| For non-developers | ✅ No-code UI | ❌ Developer tool | ❌ Developer tool | ✅ | ✅ |
+| Marketplace | ✅ 1100+ skills | ✅ | ✅ | Closed App Store | ❌ |
+| Local-first | ✅ Offline ready | ✅ | 🟡 Cloud default | ❌ | ❓ |
+| Open source core | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 **Key differentiators:**
-1. Любой пользователь создаёт агентов голосом — без кода
-2. Маркетплейс — экосистема растёт силами community
-3. Кастомный голос — не generic TTS, а обученный JARVIS
-4. Local-first — работает без интернета, облако усиливает
-5. Open-source ядро — доверие и вклад сообщества
+1. **Voice as primary input** — Claude Code и Cursor текстовые, Siri/Alexa закрытые. KALI = голос + открытая экосистема.
+2. **Agent Skills native** — 1100+ готовых скиллов с первого дня работают в KALI
+3. **Interoperability** — скиллы созданные в KALI работают в Claude Code, Cursor, VS Code
+4. **Desktop + воздух** — полноценный Tauri-десктоп, не CLI
+5. **Кастомный JARVIS voice** — F5-TTS клон из Iron Man Sound Pack
+6. **Local-first, cloud-enhanced** — F5 на GPU локально, ElevenLabs в облаке
+
+### Strategic narrative (для инвесторов/PR)
+
+> "KALI — это voice-first desktop OS для Agent Skills экосистемы.
+> 
+> Если Claude Code — это skills для разработчиков в CLI,
+> а Cursor — это skills для разработчиков в IDE,
+> то KALI — это skills для всех в голосовом интерфейсе.
+> 
+> Мы строим не новый walled garden, а лучший клиент к открытому стандарту Anthropic."
 
 ---
 
@@ -664,5 +772,5 @@ config/kali.yaml          # Main configuration
 
 ---
 
-*Last updated: 2026-04-17*
-*Version: 0.3.0*
+*Last updated: 2026-04-18*
+*Version: 0.4.0 — Agent Skills adoption*
