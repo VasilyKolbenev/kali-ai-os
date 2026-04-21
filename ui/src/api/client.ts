@@ -93,6 +93,29 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, skip_safety: skipSafety }),
     }),
+
+  // Sandbox / Audit (Phase 6)
+  sandboxHealth: () =>
+    fetchJSON<import("./types").SandboxHealth>("/sandbox/health"),
+  sandboxAudit: (opts: { agent?: string; status?: string; hours?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.agent) params.set("agent", opts.agent);
+    if (opts.status) params.set("status", opts.status);
+    if (opts.hours !== undefined) params.set("hours", String(opts.hours));
+    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return fetchJSON<{
+      results: import("./types").AuditRecord[];
+      count: number;
+      since_hours: number;
+    }>(`/sandbox/audit${qs ? "?" + qs : ""}`);
+  },
+  sandboxStats: (hours = 24) =>
+    fetchJSON<{
+      results: import("./types").AuditAgentStats[];
+      count: number;
+      since_hours: number;
+    }>(`/sandbox/stats?hours=${hours}`),
   builderClassify: (text: string) =>
     fetchJSON<any>("/builder/classify", {
       method: "POST",

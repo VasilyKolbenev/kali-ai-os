@@ -6,6 +6,7 @@ const modes: { id: AppMode; label: string; icon: string }[] = [
   { id: "agents", label: "Agents", icon: "\u2B21" },
   { id: "nightstand", label: "Night", icon: "\u263E" },
   { id: "store", label: "Store", icon: "\u25A6" },
+  { id: "activity", label: "Activity", icon: "\u25F0" },
   { id: "settings", label: "Settings", icon: "\u2699" },
 ];
 

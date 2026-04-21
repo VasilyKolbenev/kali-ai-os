@@ -92,3 +92,38 @@ export interface InstalledSkill {
   has_assets: boolean;
   source: string;
 }
+
+// --- Sandbox audit / activity ---
+export type AuditStatus = "ok" | "denied" | "error";
+export type DeniedReason = "rate_limit" | "permission" | "safety" | null;
+
+export interface AuditRecord {
+  id: number;
+  timestamp: number;
+  backend: string;
+  agent: string;
+  action: string;
+  caller: string;
+  status: AuditStatus;
+  denied_reason: DeniedReason;
+  duration_ms: number;
+  request_id: string;
+  error: string | null;
+  extra: string | null;
+}
+
+export interface AuditAgentStats {
+  agent: string;
+  total: number;
+  ok_count: number;
+  denied_count: number;
+  error_count: number;
+  avg_ms: number | null;
+}
+
+export interface SandboxHealth {
+  backend: string;
+  enforcer_enabled: boolean;
+  rate_limiter_enabled: boolean;
+  audit_sink_enabled: boolean;
+}
