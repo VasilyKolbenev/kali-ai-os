@@ -2,8 +2,9 @@
 
 Setup:
 - Russian fine-tune: Misha24-10/F5-TTS_RUSSIAN (v4_winter checkpoint)
-- Reference: jarvis_ref_combined.wav (11.38s, 2 combined clips)
-- Tuned params: speed=1.07, cfg_strength=2.5, nfe_step=48
+- Reference: jarvis_ref_v2.wav (9.62s, 4 clips from Sound Pack)
+- Tuned params: speed=1.0, cfg_strength=3.5, nfe_step=64, remove_silence=False
+  (winner of A/B test "04_v2ref_aggressive" on 2026-04-22)
 - Requires: CUDA GPU + FFmpeg shared DLLs (models/ffmpeg/)
 """
 
@@ -55,13 +56,17 @@ def _models_dir() -> Path:
 
 
 MODELS_DIR = _models_dir()
-REFERENCE_AUDIO = MODELS_DIR / "jarvis_ref_combined.wav"
-REFERENCE_TEXT = "Поздравляю сэр. Начинаю диагностику системы."
+REFERENCE_AUDIO = MODELS_DIR / "jarvis_ref_v2.wav"
+REFERENCE_TEXT = (
+    "Вы создали новый элемент. Запрос выполнен, сэр. "
+    "Загружаю, сэр. Импортирую установки, начинаю калибровку виртуальной среды."
+)
 
-# Tuned inference parameters (match reference voice, butler-like pace)
-SPEED = 1.07          # slightly faster than natural (user-tested)
-CFG_STRENGTH = 2.5    # stronger reference adherence
-NFE_STEP = 48         # quality over speed (default 32)
+# Tuned inference parameters — A/B winner "04_v2ref_aggressive" (2026-04-22)
+SPEED = 1.0           # natural pacing
+CFG_STRENGTH = 3.5    # aggressive adherence — matches JARVIS voice closely
+NFE_STEP = 64         # high quality (default 32, previous 48)
+REMOVE_SILENCE = False  # preserve natural butler pauses
 
 # Global state
 _f5_instance: Any = None
@@ -171,7 +176,7 @@ def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, 
                 ref_file=str(REFERENCE_AUDIO),
                 ref_text=REFERENCE_TEXT,
                 gen_text=sentence,
-                remove_silence=True,
+                remove_silence=REMOVE_SILENCE,
                 speed=SPEED,
                 cfg_strength=CFG_STRENGTH,
                 nfe_step=NFE_STEP,

@@ -1,17 +1,33 @@
-# KALI — Voice-First Agent Skills OS
+# KALI — Voice-First AI Agent Creator для обычных людей
 
-> Your personal AI in your pocket. Manages your life, learns your habits, builds what you need — by voice.
-> **Natively compatible with Agent Skills ecosystem (Anthropic open standard).**
+> Скажи идею — получи работающего AI-агента за 60 секунд. Запиши reel → покажи друзьям → они ставят KALI и делают своих. **Прорыв, а не решение сбоку индустрии.**
 
 ---
 
-## Mission
+## Mission (обновлено 2026-04-22)
 
-Дать каждому человеку персонального AI-ассистента, который учится, адаптируется и расширяется голосовыми командами. Пользователь говорит что хочет — система находит или создаёт скилл, тестирует и запускает.
+**KALI — это когда офисный работник, строитель или врач говорит "хочу агента, который считает кирпичи по фото и напоминает про смену" — и через минуту он у него в кармане работает.** Без кодинга, без разработчиков, без настроек.
 
-**KALI — voice-first desktop OS for Agent Skills.** Как iOS дала App Store, KALI даёт **голосовой интерфейс к Agent Skills экосистеме** — открытому стандарту, принятому Claude, Cursor, GitHub Copilot, VS Code, Gemini CLI и 30+ другими инструментами.
+**Target persona = НЕ разработчики.** Это строитель 35 лет, медсестра, офисный менеджер — люди далёкие от IT, которые берут жизнь под контроль через голосовые AI-агенты, делятся результатом в TikTok/Reels и растят сообщество.
 
-**Ключевая ставка:** не изобретаем свой формат. Мы **лучший voice-первый клиент** для универсальных Agent Skills.
+**Distribution thesis = UGC viral loop:**
+```
+создал агента голосом → записал reel → друзья видят → ставят KALI → создают своих → повтор
+```
+Цель: **K-factor ≥ 1** (каждый пользователь приводит ≥1 нового за 30 дней).
+
+**Platform roadmap:**
+- **Desktop (now)** — "Studio" для создания агентов (pro-users, early adopters)
+- **Mobile (next)** — "Consumer" для запуска+простого создания агентов на ходу
+- **Hardware (future)** — KALI Device + Starlink для всегда-на-связи работы
+
+**Техническая база — Agent Skills native (Anthropic standard):** мы совместимы с открытой экосистемой, но наш **unique angle = voice-first creation flow для нормисов**, а не "ещё один клиент для разработчиков".
+
+**Что KALI НЕ является (anti-positioning):**
+- ❌ Cursor / Copilot для голоса — это для разработчиков
+- ❌ Raycast / Alfred с AI — это для power-users
+- ❌ Siri / Alexa — это voice assistant, а не agent creator
+- ✅ **Мы — первая платформа где non-tech человек создаёт своего AI-агента голосом и делится им как TikTok-видео.**
 
 ## Core Principles
 
