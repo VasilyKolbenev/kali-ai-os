@@ -1,0 +1,19 @@
+@startuml voice-builder-state-machine
+
+title Voice Builder — Session State Machine
+
+[*] --> Asking : start()
+
+Asking --> Asking : answer() — more questions
+Asking --> Previewing : answer() — last, spec built
+Asking --> [*] : cancel()
+
+Previewing --> Deploying : deploy()
+Previewing --> [*] : cancel()
+
+Deploying --> Done : skill deployed + cron registered
+Deploying --> Failed : load or cron failed
+Failed --> [*] : deployer auto-rollback (skill dir removed)
+Done --> [*] : session cleaned up
+
+@enduml

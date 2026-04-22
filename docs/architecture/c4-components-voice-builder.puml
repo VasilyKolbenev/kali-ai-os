@@ -1,0 +1,44 @@
+@startuml c4-components-voice-builder
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Voice Builder Flow — Components
+
+Container_Ext(shell, "Tauri Shell", "React BuilderPanel", "Renders progress + preview")
+Container_Ext(voice, "Voice Pipeline", "voice/pipeline.py", "STT + TTS plumbing")
+System_Ext(llm, "LLM (Claude/OpenAI)", "Intent classification + agent code gen")
+
+Container_Boundary(builder, "kernel/builder/") {
+    Component(flow, "BuilderFlow (new)", "flow.py", "Single entrypoint per phase: start / answer / deploy / cancel.")
+    Component(sessions, "SessionStore (new)", "session_store.py", "In-memory multi-turn wizard state. 30-min TTL.")
+
+    Component(intent, "IntentClassifier", "intent_classifier.py", "LLM-first + regex fallback. Decides skill vs agent + template.")
+    Component(wizard, "Wizard", "wizard.py", "Template-driven questions. Records answers per step.")
+    Component(skillGen, "SkillGenerator", "skill_generator.py", "Writes manifest.yaml + skill.yaml for templated skill.")
+    Component(agentGen, "AgentGenerator", "agent_generator.py", "LLM generates Python agent.py. DISABLED in pilot (skill path only).")
+    Component(safety, "SafetyGate", "safety_gate.py", "AST check: blocked imports + builtins. Used only when agentGen runs.")
+    Component(deployer, "Deployer", "deployer.py", "Loads skill into runtime + registers cron. Auto-rollback on failure.")
+}
+
+Container_Ext(executor, "SkillExecutor", "skill_executor.py", "Runs deployed YAML skills")
+Container_Ext(scheduler, "Scheduler", "scheduler.py", "Cron triggers")
+
+Rel(shell, flow, "POST /builder/{start,answer,deploy,cancel}", "HTTP/JSON")
+Rel(voice, flow, "Same API as shell — multi-turn voice loop", "In-process")
+
+Rel(flow, sessions, "CRUD session by ID")
+Rel(flow, intent, "Classify on start")
+Rel(flow, wizard, "Create questions per template")
+Rel(flow, skillGen, "Materialise YAMLs (pilot)")
+Rel(flow, agentGen, "Generate Python agent (post-pilot)")
+Rel(flow, deployer, "Load + register + rollback")
+
+Rel(intent, llm, "Classify prompt", "HTTPS")
+Rel(agentGen, llm, "Generate code", "HTTPS")
+Rel(agentGen, safety, "Validate generated code")
+
+Rel(deployer, executor, "Load skill into runtime")
+Rel(deployer, scheduler, "Register cron if schedule.cron set")
+
+SHOW_LEGEND()
+
+@enduml

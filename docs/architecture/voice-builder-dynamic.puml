@@ -1,0 +1,32 @@
+@startuml voice-builder-dynamic
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Dynamic.puml
+
+title Dynamic Diagram — Voice Builder Happy Path
+
+Person(user, "User", "Non-tech speaker")
+Container(voice, "Voice Pipeline", "pipeline.py", "STT + TTS plumbing")
+Component(flow, "BuilderFlow", "flow.py", "Orchestrator")
+Component(intent, "IntentClassifier", "intent_classifier.py", "")
+Component(wizard, "Wizard", "wizard.py", "")
+Component(skillGen, "SkillGenerator", "skill_generator.py", "")
+Component(deployer, "Deployer", "deployer.py", "")
+
+Rel(user, voice, "1. Скажи: Создай агента пить воду", "microphone")
+Rel(voice, flow, "2. start('Создай агента...')", "call")
+Rel(flow, intent, "3. classify_intent()")
+Rel(intent, flow, "4. {type:skill, template:reminder}")
+Rel(flow, wizard, "5. create_wizard()")
+Rel(flow, voice, "6. first question via TTS")
+Rel(voice, user, "7. JARVIS: Как часто напоминать?")
+Rel(user, voice, "8. Каждые 2 часа")
+Rel(voice, flow, "9. answer(sid, 'каждые 2 часа')")
+Rel(flow, voice, "10. next question or preview")
+Rel(voice, user, "11. JARVIS: Запускать?")
+Rel(user, voice, "12. Да")
+Rel(voice, flow, "13. deploy(sid)")
+Rel(flow, skillGen, "14. generate_skill()")
+Rel(flow, deployer, "15. deploy_skill()")
+Rel(flow, voice, "16. success")
+Rel(voice, user, "17. JARVIS: Готово!", "TTS")
+
+@enduml

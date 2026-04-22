@@ -9,17 +9,21 @@
 
 ## Component Diagram
 
-```mermaid
-C4Component
-  title Voice Builder Flow — Components
+> **Render:** [c4-components-voice-builder.puml](c4-components-voice-builder.puml) — paste at [plantuml.com/plantuml](https://www.plantuml.com/plantuml).
 
-  Container_Ext(shell, "Tauri Shell", "React BuilderPanel", "Renders progress + preview")
-  Container_Ext(voice, "Voice Pipeline", "voice/pipeline.py", "STT + TTS plumbing")
-  System_Ext(llm, "LLM (Claude/OpenAI)", "Intent classification + agent code gen")
+```plantuml
+@startuml c4-components-voice-builder
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
 
-  Container_Boundary(builder, "kernel/builder/") {
-    Component(flow, "BuilderFlow ★", "flow.py", "Single entrypoint per phase: start / answer / deploy / cancel.")
-    Component(sessions, "SessionStore ★", "session_store.py", "In-memory multi-turn wizard state. 30-min TTL.")
+title Voice Builder Flow — Components
+
+Container_Ext(shell, "Tauri Shell", "React BuilderPanel", "Renders progress + preview")
+Container_Ext(voice, "Voice Pipeline", "voice/pipeline.py", "STT + TTS plumbing")
+System_Ext(llm, "LLM (Claude/OpenAI)", "Intent classification + agent code gen")
+
+Container_Boundary(builder, "kernel/builder/") {
+    Component(flow, "BuilderFlow (new)", "flow.py", "Single entrypoint per phase: start / answer / deploy / cancel.")
+    Component(sessions, "SessionStore (new)", "session_store.py", "In-memory multi-turn wizard state. 30-min TTL.")
 
     Component(intent, "IntentClassifier", "intent_classifier.py", "LLM-first + regex fallback. Decides skill vs agent + template.")
     Component(wizard, "Wizard", "wizard.py", "Template-driven questions. Records answers per step.")
@@ -27,32 +31,34 @@ C4Component
     Component(agentGen, "AgentGenerator", "agent_generator.py", "LLM generates Python agent.py. DISABLED in pilot (skill path only).")
     Component(safety, "SafetyGate", "safety_gate.py", "AST check: blocked imports + builtins. Used only when agentGen runs.")
     Component(deployer, "Deployer", "deployer.py", "Loads skill into runtime + registers cron. Auto-rollback on failure.")
-  }
+}
 
-  Container_Ext(executor, "SkillExecutor", "skill_executor.py", "Runs deployed YAML skills")
-  Container_Ext(scheduler, "Scheduler", "scheduler.py", "Cron triggers")
+Container_Ext(executor, "SkillExecutor", "skill_executor.py", "Runs deployed YAML skills")
+Container_Ext(scheduler, "Scheduler", "scheduler.py", "Cron triggers")
 
-  Rel(shell, flow, "POST /builder/{start,answer,deploy,cancel}", "HTTP/JSON")
-  Rel(voice, flow, "Same API as shell — multi-turn voice loop", "In-process")
+Rel(shell, flow, "POST /builder/{start,answer,deploy,cancel}", "HTTP/JSON")
+Rel(voice, flow, "Same API as shell — multi-turn voice loop", "In-process")
 
-  Rel(flow, sessions, "CRUD session by ID")
-  Rel(flow, intent, "Classify on start")
-  Rel(flow, wizard, "Create questions per template")
-  Rel(flow, skillGen, "Materialise YAMLs (pilot)")
-  Rel(flow, agentGen, "Generate Python agent (post-pilot)")
-  Rel(flow, deployer, "Load + register + rollback")
+Rel(flow, sessions, "CRUD session by ID")
+Rel(flow, intent, "Classify on start")
+Rel(flow, wizard, "Create questions per template")
+Rel(flow, skillGen, "Materialise YAMLs (pilot)")
+Rel(flow, agentGen, "Generate Python agent (post-pilot)")
+Rel(flow, deployer, "Load + register + rollback")
 
-  Rel(intent, llm, "Classify prompt", "HTTPS")
-  Rel(agentGen, llm, "Generate code", "HTTPS")
-  Rel(agentGen, safety, "Validate generated code")
+Rel(intent, llm, "Classify prompt", "HTTPS")
+Rel(agentGen, llm, "Generate code", "HTTPS")
+Rel(agentGen, safety, "Validate generated code")
 
-  Rel(deployer, executor, "Load skill into runtime")
-  Rel(deployer, scheduler, "Register cron if schedule.cron set")
+Rel(deployer, executor, "Load skill into runtime")
+Rel(deployer, scheduler, "Register cron if schedule.cron set")
 
-  UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+SHOW_LEGEND()
+
+@enduml
 ```
 
-★ = new components introduced by the pilot. Others already exist.
+"BuilderFlow (new)" and "SessionStore (new)" = new components introduced by the pilot. Others already exist.
 
 ## Why BuilderFlow Exists (the "new orchestrator")
 
@@ -68,58 +74,67 @@ After pilot: `BuilderFlow` is the one orchestrator. HTTP endpoints thin. Voice p
 
 ## Session State Machine
 
-```mermaid
-stateDiagram-v2
-    [*] --> Asking: start()
+> **Render:** [voice-builder-state-machine.puml](voice-builder-state-machine.puml)
 
-    Asking --> Asking: answer() — more questions
-    Asking --> Previewing: answer() — last one, spec built
-    Asking --> [*]: cancel()
+```plantuml
+@startuml voice-builder-state-machine
 
-    Previewing --> Deploying: deploy()
-    Previewing --> [*]: cancel()
+title Voice Builder — Session State Machine
 
-    Deploying --> Done: skill deployed + cron registered
-    Deploying --> Failed: load or cron failed
-    Failed --> [*]: deployer auto-rollback (skill dir removed)
-    Done --> [*]: session cleaned up
+[*] --> Asking : start()
+
+Asking --> Asking : answer() — more questions
+Asking --> Previewing : answer() — last, spec built
+Asking --> [*] : cancel()
+
+Previewing --> Deploying : deploy()
+Previewing --> [*] : cancel()
+
+Deploying --> Done : skill deployed + cron registered
+Deploying --> Failed : load or cron failed
+Failed --> [*] : deployer auto-rollback (skill dir removed)
+Done --> [*] : session cleaned up
+
+@enduml
 ```
 
 ## Dynamic View — Voice Happy Path (<60s budget)
 
-```mermaid
-C4Dynamic
-  title Dynamic — Voice Builder Flow (Happy Path)
+> **Render:** [voice-builder-dynamic.puml](voice-builder-dynamic.puml)
 
-  Person(user, "User")
-  Container(voice, "Voice Pipeline")
-  Component(flow, "BuilderFlow")
-  Component(intent, "IntentClassifier")
-  Component(wizard, "Wizard")
-  Component(skillGen, "SkillGenerator")
-  Component(deployer, "Deployer")
+```plantuml
+@startuml voice-builder-dynamic
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Dynamic.puml
 
-  Rel(user, voice, "1. Скажи: Создай агента пить воду", "microphone")
-  Rel(voice, flow, "2. start('Создай агента...')", "call")
-  Rel(flow, intent, "3. classify_intent()")
-  Rel(intent, flow, "4. {type:skill, template:reminder}")
-  Rel(flow, wizard, "5. create_wizard()")
-  Rel(flow, voice, "6. first question via TTS")
-  Rel(voice, user, "7. JARVIS: Как часто напоминать?")
-  Rel(user, voice, "8. Каждые 2 часа")
-  Rel(voice, flow, "9. answer(sid, 'каждые 2 часа')")
-  Rel(flow, voice, "10. question or preview")
-  Rel(voice, user, "11. JARVIS: Запускать?")
-  Rel(user, voice, "12. Да")
-  Rel(voice, flow, "13. deploy(sid)")
-  Rel(flow, skillGen, "14. generate_skill()")
-  Rel(flow, deployer, "15. deploy_skill()")
-  Rel(flow, voice, "16. success")
-  Rel(voice, user, "17. JARVIS: Готово!", "TTS")
+title Dynamic Diagram — Voice Builder Happy Path
 
-  UpdateRelStyle(user, voice, $textColor="blue")
-  UpdateRelStyle(flow, intent, $textColor="green")
-  UpdateRelStyle(flow, deployer, $textColor="red")
+Person(user, "User", "Non-tech speaker")
+Container(voice, "Voice Pipeline", "pipeline.py", "STT + TTS plumbing")
+Component(flow, "BuilderFlow", "flow.py", "Orchestrator")
+Component(intent, "IntentClassifier", "intent_classifier.py", "")
+Component(wizard, "Wizard", "wizard.py", "")
+Component(skillGen, "SkillGenerator", "skill_generator.py", "")
+Component(deployer, "Deployer", "deployer.py", "")
+
+Rel(user, voice, "1. Скажи: Создай агента пить воду", "microphone")
+Rel(voice, flow, "2. start('Создай агента...')", "call")
+Rel(flow, intent, "3. classify_intent()")
+Rel(intent, flow, "4. {type:skill, template:reminder}")
+Rel(flow, wizard, "5. create_wizard()")
+Rel(flow, voice, "6. first question via TTS")
+Rel(voice, user, "7. JARVIS: Как часто напоминать?")
+Rel(user, voice, "8. Каждые 2 часа")
+Rel(voice, flow, "9. answer(sid, 'каждые 2 часа')")
+Rel(flow, voice, "10. next question or preview")
+Rel(voice, user, "11. JARVIS: Запускать?")
+Rel(user, voice, "12. Да")
+Rel(voice, flow, "13. deploy(sid)")
+Rel(flow, skillGen, "14. generate_skill()")
+Rel(flow, deployer, "15. deploy_skill()")
+Rel(flow, voice, "16. success")
+Rel(voice, user, "17. JARVIS: Готово!", "TTS")
+
+@enduml
 ```
 
 ## Latency Budget Breakdown

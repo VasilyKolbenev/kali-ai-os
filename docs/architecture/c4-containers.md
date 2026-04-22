@@ -5,13 +5,17 @@
 
 ## Diagram
 
-```mermaid
-C4Container
-  title Container Diagram — KALI Desktop
+> **Render:** [c4-containers.puml](c4-containers.puml) — paste at [plantuml.com/plantuml](https://www.plantuml.com/plantuml).
 
-  Person(user, "User", "Speaks or types ideas, listens to JARVIS voice.")
+```plantuml
+@startuml c4-containers
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
-  System_Boundary(kali, "KALI Desktop") {
+title Container Diagram — KALI Desktop
+
+Person(user, "User", "Speaks or types ideas, listens to JARVIS voice.")
+
+System_Boundary(kali, "KALI Desktop") {
     Container(shell, "Tauri Shell", "Rust + React 19 + WebView2", "Desktop window. Renders chat, Agent Store, Activity, Builder panels.")
     Container(backend, "FastAPI Backend", "Python 3.12 + uvicorn (port 3005)", "Kernel: voice pipeline, agent runtime, skills, sandbox, builder.")
     ContainerDb(db, "Local State DB", "SQLite (aiosqlite)", "User config, audit log, conversation history, agent deployments.")
@@ -20,35 +24,37 @@ C4Container
     Container(sounds, "JARVIS Sound Pack", "MP3 clips", "Pre-recorded short phrases (greetings, confirms). Fast-path, no TTS round-trip.")
     ContainerDb(agents, "Agents Directory", "Filesystem", "Skill/agent YAMLs + Python. Installed from catalog or generated.")
     ContainerDb(models, "Models Directory", "Filesystem + gitignored", "F5 checkpoint 1.3 GB, vocab, reference WAVs, FFmpeg DLLs.")
-  }
+}
 
-  System_Ext(claude, "Claude API", "Anthropic")
-  System_Ext(openai, "OpenAI API", "GPT-4o")
-  System_Ext(elevenlabs, "ElevenLabs", "Cloud TTS")
-  System_Ext(github, "GitHub", "SKILL.md registries")
-  System_Ext(neuraldeep, "NeuralDeep", "RU aggregator")
-  System_Ext(google, "Google APIs", "Calendar / Gmail")
-  System_Ext(telegram, "Telegram Bot", "Notifications")
+System_Ext(claude, "Claude API", "Anthropic")
+System_Ext(openai, "OpenAI API", "GPT-4o")
+System_Ext(elevenlabs, "ElevenLabs", "Cloud TTS")
+System_Ext(github, "GitHub", "SKILL.md registries")
+System_Ext(neuraldeep, "NeuralDeep", "RU aggregator")
+System_Ext(google, "Google APIs", "Calendar / Gmail")
+System_Ext(telegram, "Telegram Bot", "Notifications")
 
-  Rel(user, shell, "Clicks, types, speaks into mic")
-  Rel(shell, backend, "API calls + WebSocket events", "HTTP/JSON, WS (port 3005)")
+Rel(user, shell, "Clicks, types, speaks into mic")
+Rel(shell, backend, "API calls + WebSocket events", "HTTP/JSON, WS (port 3005)")
 
-  Rel(backend, db, "CRUD state", "aiosqlite")
-  Rel(backend, f5, "Synthesise speech (GPU path)", "In-process call")
-  Rel(backend, stt, "Transcribe mic audio", "In-process call")
-  Rel(backend, sounds, "Play pre-recorded clip", "File read + sounddevice")
-  Rel(backend, agents, "Load skill YAMLs + agent.py", "File read/write")
-  Rel(backend, models, "Read voice model weights", "File read")
+Rel(backend, db, "CRUD state", "aiosqlite")
+Rel(backend, f5, "Synthesise speech (GPU path)", "In-process call")
+Rel(backend, stt, "Transcribe mic audio", "In-process call")
+Rel(backend, sounds, "Play pre-recorded clip", "File read + sounddevice")
+Rel(backend, agents, "Load skill YAMLs + agent.py", "File read/write")
+Rel(backend, models, "Read voice model weights", "File read")
 
-  Rel(backend, claude, "LLM requests (intent, generation, chat)", "HTTPS / anthropic SDK")
-  Rel(backend, openai, "LLM requests (alternative)", "HTTPS / openai SDK")
-  Rel(backend, elevenlabs, "Cloud TTS (fallback)", "HTTPS / elevenlabs SDK")
-  Rel(backend, github, "Fetch SKILL.md + trees", "HTTPS / GitHub REST")
-  Rel(backend, neuraldeep, "Fetch aggregated RU catalog", "HTTPS / JSON")
-  Rel(backend, google, "Calendar/Gmail per user", "HTTPS / OAuth2")
-  Rel(backend, telegram, "Send notifications", "HTTPS / Bot API")
+Rel(backend, claude, "LLM requests (intent, generation, chat)", "HTTPS / anthropic SDK")
+Rel(backend, openai, "LLM requests (alternative)", "HTTPS / openai SDK")
+Rel(backend, elevenlabs, "Cloud TTS (fallback)", "HTTPS / elevenlabs SDK")
+Rel(backend, github, "Fetch SKILL.md + trees", "HTTPS / GitHub REST")
+Rel(backend, neuraldeep, "Fetch aggregated RU catalog", "HTTPS / JSON")
+Rel(backend, google, "Calendar/Gmail per user", "HTTPS / OAuth2")
+Rel(backend, telegram, "Send notifications", "HTTPS / Bot API")
 
-  UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+SHOW_LEGEND()
+
+@enduml
 ```
 
 ## Container Purposes

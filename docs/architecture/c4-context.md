@@ -5,39 +5,45 @@
 
 ## Diagram
 
-```mermaid
-C4Context
-  title System Context — KALI Personal AI OS
+> **Render:** [c4-context.puml](c4-context.puml) — paste at [plantuml.com/plantuml](https://www.plantuml.com/plantuml) or use VSCode PlantUML extension.
 
-  Person(normie, "Non-tech User", "Builder, doctor, office worker. Primary persona — creates agents by voice, shares via reels.")
-  Person(dev, "Developer", "Secondary — publishes KALI-compatible skills to GitHub catalogs.")
+```plantuml
+@startuml c4-context
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
-  System(kali, "KALI", "Voice-first Personal AI OS. Desktop (now) → Mobile → Hardware device.")
+title System Context — KALI Personal AI OS
 
-  System_Ext(claude, "Claude API", "Anthropic LLM — intent classification, agent code generation, conversation.")
-  System_Ext(openai, "OpenAI API", "Alternative LLM (GPT-4o). User picks provider.")
-  System_Ext(elevenlabs, "ElevenLabs", "Cloud TTS with JARVIS voice clone. Fallback when no local GPU.")
-  System_Ext(github, "GitHub", "Hosts open Agent Skills catalogs — anthropics/skills, kali-skills, user repos.")
-  System_Ext(neuraldeep, "NeuralDeep Hub", "RU-focused skills catalog — Яндекс, 1С, Битрикс, GigaChat. Aggregator JSON API.")
-  System_Ext(google, "Google APIs", "Calendar, Gmail, Tasks — accessed via user OAuth.")
-  System_Ext(telegram, "Telegram Bot API", "User notifications + RU distribution channel for Lite installer.")
-  System_Ext(ha, "Home Assistant", "IoT hub for smart home agents (optional, user's own instance).")
-  System_Ext(tiktok, "TikTok / Reels", "UGC distribution channel (planned): user publishes agent-creation reels.")
+Person(normie, "Non-tech User", "Builder, doctor, office worker. Primary persona — creates agents by voice, shares via reels.")
+Person(dev, "Developer", "Secondary — publishes KALI-compatible skills to GitHub catalogs.")
 
-  Rel(normie, kali, "Speaks ideas, uses agents, shares reels", "Voice + UI")
-  Rel(dev, github, "Publishes skills as SKILL.md")
+System(kali, "KALI", "Voice-first Personal AI OS. Desktop (now) → Mobile → Hardware device.")
 
-  Rel(kali, claude, "Intent classification, agent generation", "HTTPS / JSON")
-  Rel(kali, openai, "Alternative LLM provider", "HTTPS / JSON")
-  Rel(kali, elevenlabs, "Cloud TTS when no GPU", "HTTPS / audio")
-  Rel(kali, github, "Fetches SKILL.md from public repos", "HTTPS / Git tree API")
-  Rel(kali, neuraldeep, "Aggregates RU skills catalog", "HTTPS / JSON")
-  Rel(kali, google, "User calendar + email (OAuth)", "HTTPS / OAuth2")
-  Rel(kali, telegram, "Send notifications to user's bot", "HTTPS / Bot API")
-  Rel(kali, ha, "Home automation commands", "HTTPS / WebSocket")
-  Rel(normie, tiktok, "Shares agent-creation reels (planned)")
+System_Ext(claude, "Claude API", "Anthropic LLM — intent classification, agent code generation, conversation.")
+System_Ext(openai, "OpenAI API", "Alternative LLM (GPT-4o). User picks provider.")
+System_Ext(elevenlabs, "ElevenLabs", "Cloud TTS with JARVIS voice clone. Fallback when no local GPU.")
+System_Ext(github, "GitHub", "Hosts open Agent Skills catalogs — anthropics/skills, kali-skills, user repos.")
+System_Ext(neuraldeep, "NeuralDeep Hub", "RU-focused skills catalog — Яндекс, 1С, Битрикс, GigaChat. Aggregator JSON API.")
+System_Ext(google, "Google APIs", "Calendar, Gmail, Tasks — accessed via user OAuth.")
+System_Ext(telegram, "Telegram Bot API", "User notifications + RU distribution channel for Lite installer.")
+System_Ext(ha, "Home Assistant", "IoT hub for smart home agents (optional, user's own instance).")
+System_Ext(tiktok, "TikTok / Reels", "UGC distribution channel (planned): user publishes agent-creation reels.")
 
-  UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+Rel(normie, kali, "Speaks ideas, uses agents, shares reels", "Voice + UI")
+Rel(dev, github, "Publishes skills as SKILL.md")
+
+Rel(kali, claude, "Intent classification, agent generation", "HTTPS / JSON")
+Rel(kali, openai, "Alternative LLM provider", "HTTPS / JSON")
+Rel(kali, elevenlabs, "Cloud TTS when no GPU", "HTTPS / audio")
+Rel(kali, github, "Fetches SKILL.md from public repos", "HTTPS / Git tree API")
+Rel(kali, neuraldeep, "Aggregates RU skills catalog", "HTTPS / JSON")
+Rel(kali, google, "User calendar + email (OAuth)", "HTTPS / OAuth2")
+Rel(kali, telegram, "Send notifications to user's bot", "HTTPS / Bot API")
+Rel(kali, ha, "Home automation commands", "HTTPS / WebSocket")
+Rel(normie, tiktok, "Shares agent-creation reels (planned)")
+
+SHOW_LEGEND()
+
+@enduml
 ```
 
 ## What This Shows
