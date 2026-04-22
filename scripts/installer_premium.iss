@@ -21,9 +21,16 @@ UninstallDisplayName={#AppName} {#AppVersion}
 OutputDir=..\dist_premium
 OutputBaseFilename=KALI-Premium-Setup-{#AppVersion}
 Compression=lzma2/ultra64
-SolidCompression=yes
+; SolidCompression=no — required for DiskSpanning (solid stream can't be split)
+SolidCompression=no
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
+
+; Payload > 4.2 GB limit for single setup.exe — split into slices.
+; Output: KALI-Premium-Setup-0.2.0-beta.exe + -2.bin + -3.bin (all in same folder).
+; User just runs the .exe, it pulls the .bin files from alongside.
+DiskSpanning=yes
+DiskSliceSize=2100000000
 
 ; x64 only — we ship CUDA torch which needs 64-bit
 ArchitecturesAllowed=x64compatible
@@ -40,9 +47,6 @@ DisableDirPage=no
 DisableReadyPage=no
 AllowCancelDuringInstall=yes
 ShowLanguageDialog=no
-SetupIconFile=..\src-tauri\icons\icon.ico
-WizardImageFile=compiler:WizModernImage-IS.bmp
-WizardSmallImageFile=compiler:WizModernSmallImage-IS.bmp
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -65,9 +69,10 @@ Name: "{group}\Удалить KALI"; Filename: "{uninstallexe}"; Tasks: startmen
 Name: "{autodesktop}\KALI"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-; Install WebView2 runtime if missing (Tauri shell needs it)
+; Install WebView2 runtime if missing (Tauri shell needs it).
+; Wrapped in a bootstrapper .ps1 file to avoid Inno's {...} constant parsing.
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -Command ""if (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BEB-E15CD01B5714}')) {{ Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $env:TEMP\WebView2Setup.exe; Start-Process -Wait $env:TEMP\WebView2Setup.exe -ArgumentList '/silent /install'; Remove-Item $env:TEMP\WebView2Setup.exe }}"""; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-webview2.ps1"""; \
     StatusMsg: "Проверяем WebView2 Runtime..."; \
     Flags: runhidden waituntilterminated
 
