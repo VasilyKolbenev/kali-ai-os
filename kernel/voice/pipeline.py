@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from enum import Enum
 from typing import Any
@@ -18,6 +19,27 @@ from kernel.voice.vad import VoiceActivityDetector
 from kernel.voice.wake_word import WakeWordDetector
 
 logger = logging.getLogger(__name__)
+
+_BUILDER_TRIGGER_PATTERNS = [
+    r"созда[йи].*агент",
+    r"сделай.*агент",
+    r"созда[йи].*скилл",
+    r"сделай.*скилл",
+    r"построй.*агент",
+]
+
+
+def _detect_builder_trigger(text: str) -> bool:
+    """Return True if transcribed text should start a builder flow.
+
+    Matches Russian patterns: "создай агента", "сделай скилл", "построй агента".
+    Case-insensitive.
+    """
+    if not text:
+        return False
+    lowered = text.lower().strip()
+    return any(re.search(p, lowered) for p in _BUILDER_TRIGGER_PATTERNS)
+
 
 # Timeout: reset LISTENING → IDLE if no speech after wake word
 _LISTEN_TIMEOUT_S = 3.0
@@ -60,10 +82,12 @@ class VoicePipeline:
         voice_config: VoiceConfig,
         llm_config: LLMConfig,
         tools: list[dict[str, Any]],
+        app_state: Any = None,
     ) -> None:
         self._bus = event_bus
         self._voice_config = voice_config
         self._tools = tools
+        self._app_state = app_state
         self._state = PipelineState.IDLE
         self._context: list[dict[str, Any]] = []
         self._started = False
@@ -262,6 +286,28 @@ class VoicePipeline:
             )
         )
 
+        if _detect_builder_trigger(stt_result.text):
+            logger.info("Builder trigger detected: %r", stt_result.text)
+            flow = getattr(self._app_state, "builder_flow", None) if self._app_state else None
+            if flow:
+                try:
+                    result = flow.start(stt_result.text)
+                    await self._speak(result["question"])
+                    await self._bus.publish(
+                        Event(
+                            topic="builder.started",
+                            source="voice-pipeline",
+                            payload={
+                                "session_id": result["session_id"],
+                                "question": result["question"],
+                            },
+                        )
+                    )
+                    await self._set_state(PipelineState.IDLE)
+                    return
+                except Exception:
+                    logger.exception("Builder flow start failed — falling back to normal LLM")
+
         request = LLMRequest(
             text=stt_result.text,
             context=self._context[-10:],
@@ -311,3 +357,12 @@ class VoicePipeline:
                 self._vad.reset()
 
         await self._set_state(PipelineState.IDLE)
+
+    async def _speak(self, text: str) -> None:
+        """Synthesize and play text through the active TTS provider."""
+        try:
+            audio, sr = await asyncio.to_thread(tts_router.generate_audio, text)
+            if len(audio) > 0:
+                await asyncio.to_thread(_play_audio, audio, sr)
+        except Exception:
+            logger.exception("TTS speak failed")

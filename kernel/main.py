@@ -348,6 +348,7 @@ def create_app(
                 voice_config=config_manager.config.voice,
                 llm_config=config_manager.config.llm,
                 tools=plugin_registry.get_all_tools(),
+                app_state=app.state,
             )
             app.state.voice_pipeline = voice_pipeline
             logger.info("Voice pipeline initialized")
