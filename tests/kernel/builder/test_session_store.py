@@ -36,3 +36,9 @@ def test_ttl_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     now[0] = 1061.0  # advance past TTL
     with pytest.raises(SessionNotFound):
         store.get(sid)
+
+
+def test_delete_nonexistent_is_noop() -> None:
+    """delete() on unknown session_id must not raise."""
+    store = SessionStore()
+    store.delete("ghost-session-id")  # must not raise
