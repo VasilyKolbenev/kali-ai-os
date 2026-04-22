@@ -99,6 +99,9 @@ class VoicePipeline:
         self._stt = SpeechToText(model_size=voice_config.stt_model)
         self._llm = LLMRouter(llm_config)
 
+        self._active_builder_session: str | None = None
+        self._awaiting_deploy_confirm: bool = False
+
         # Audio buffer for collecting speech
         self._audio_buffer: list[np.ndarray] = []
         self._speech_active = False
@@ -273,25 +276,59 @@ class VoicePipeline:
 
     async def _handle_transcription(self, stt_result: STTResult) -> None:
         """Handle a completed transcription: publish event, call LLM, and speak response."""
-        await self._bus.publish(
-            Event(
-                topic="voice.transcribed",
-                source="voice-pipeline",
-                payload={
-                    "text": stt_result.text,
-                    "language": stt_result.language,
-                    "confidence": stt_result.confidence,
-                    "duration_ms": stt_result.duration_ms,
-                },
-            )
-        )
+        text = stt_result.text
+        flow = getattr(self._app_state, "builder_flow", None) if self._app_state else None
 
-        if _detect_builder_trigger(stt_result.text):
-            logger.info("Builder trigger detected: %r", stt_result.text)
-            flow = getattr(self._app_state, "builder_flow", None) if self._app_state else None
+        # 1. Deploy confirmation — highest priority
+        if self._awaiting_deploy_confirm and flow and self._active_builder_session:
+            positive = any(w in text.lower() for w in ("да", "запускай", "давай", "ок", "поехали"))
+            negative = any(w in text.lower() for w in ("нет", "отмени", "переделай"))
+            try:
+                if positive:
+                    result = await flow.deploy(self._active_builder_session)
+                    await self._speak(f"Готово! Агент {result.get('name', '')} запущен.")
+                elif negative:
+                    flow.cancel(self._active_builder_session)
+                    await self._speak("Отменил. Попробуем ещё раз?")
+                else:
+                    await self._speak("Не понял. Запускать? Скажи да или нет.")
+                    return
+            except Exception:
+                logger.exception("Builder deploy/cancel failed")
+            finally:
+                self._awaiting_deploy_confirm = False
+                self._active_builder_session = None
+            await self._set_state(PipelineState.IDLE)
+            return
+
+        # 2. Active wizard — continue answering
+        if self._active_builder_session and flow:
+            try:
+                result = flow.answer(self._active_builder_session, text)
+                if result.get("done"):
+                    preview = result["preview"]
+                    confirm_text = (
+                        f"Я создам {preview['name']}. "
+                        f"{preview.get('description', '')}. Запускать?"
+                    )
+                    await self._speak(confirm_text)
+                    self._awaiting_deploy_confirm = True
+                else:
+                    await self._speak(result["question"])
+                await self._set_state(PipelineState.IDLE)
+                return
+            except Exception:
+                logger.exception("Builder answer failed — resetting session")
+                self._active_builder_session = None
+                # fall through to normal LLM
+
+        # 3. New builder flow trigger
+        if _detect_builder_trigger(text):
+            logger.info("Builder trigger detected: %r", text)
             if flow:
                 try:
-                    result = flow.start(stt_result.text)
+                    result = flow.start(text)
+                    self._active_builder_session = result["session_id"]
                     await self._speak(result["question"])
                     await self._bus.publish(
                         Event(
@@ -307,6 +344,19 @@ class VoicePipeline:
                     return
                 except Exception:
                     logger.exception("Builder flow start failed — falling back to normal LLM")
+
+        await self._bus.publish(
+            Event(
+                topic="voice.transcribed",
+                source="voice-pipeline",
+                payload={
+                    "text": stt_result.text,
+                    "language": stt_result.language,
+                    "confidence": stt_result.confidence,
+                    "duration_ms": stt_result.duration_ms,
+                },
+            )
+        )
 
         request = LLMRequest(
             text=stt_result.text,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from kernel.voice.pipeline import _detect_builder_trigger
 
@@ -18,3 +19,58 @@ from kernel.voice.pipeline import _detect_builder_trigger
 ])
 def test_detect_builder_trigger(text: str, expected: bool) -> None:
     assert _detect_builder_trigger(text) == expected
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_flow_reaches_deploy(monkeypatch):
+    """Turn 1: trigger → start. Turn 2: answer → preview. Turn 3: 'да' → deploy."""
+    from kernel.voice.pipeline import VoicePipeline
+    from kernel.models import VoiceConfig, LLMConfig
+    from kernel.event_bus import EventBus
+    from kernel.voice.stt import STTResult
+
+    flow = MagicMock()
+    flow.start = MagicMock(return_value={
+        "session_id": "sid1",
+        "question": "Как часто напоминать?",
+        "total_steps": 1,
+    })
+    flow.answer = MagicMock(return_value={
+        "done": True,
+        "preview": {"name": "water-reminder", "description": "Напоминалка"},
+    })
+    flow.deploy = AsyncMock(return_value={"status": "deployed", "name": "water-reminder"})
+    flow.cancel = MagicMock()
+
+    app_state = MagicMock()
+    app_state.builder_flow = flow
+
+    pipe = VoicePipeline(
+        event_bus=EventBus(),
+        voice_config=VoiceConfig(),
+        llm_config=LLMConfig(),
+        tools=[],
+        app_state=app_state,
+    )
+    # Stub TTS playback
+    pipe._speak = AsyncMock()
+
+    # Turn 1 — trigger
+    await pipe._handle_transcription(STTResult(
+        text="Создай агента для напоминаний", language="ru", confidence=1.0, duration_ms=100,
+    ))
+    assert pipe._active_builder_session == "sid1"
+
+    # Turn 2 — answer (result.done=True → preview)
+    await pipe._handle_transcription(STTResult(
+        text="каждые 2 часа", language="ru", confidence=1.0, duration_ms=100,
+    ))
+    assert pipe._awaiting_deploy_confirm is True
+
+    # Turn 3 — "да" → deploy
+    await pipe._handle_transcription(STTResult(
+        text="да", language="ru", confidence=1.0, duration_ms=100,
+    ))
+    flow.deploy.assert_awaited_once_with("sid1")
+    assert pipe._active_builder_session is None
+    assert pipe._awaiting_deploy_confirm is False
