@@ -67,10 +67,19 @@ class Config:
     cfg_strength: float = 2.5
     nfe_step: int = 48
     remove_silence: bool = True
+    accents: bool = False  # Apply ruaccent stress marks + punctuation normalization
+
+
+# Default A/B test text containing numbers + em-dash to exercise preprocessing
+DEFAULT_TEST_TEXT_FULL = (
+    "Приветствую сэр — я собрал для вас нового агента. "
+    "Он будет следить за курсом валют каждое утро в 8 часов. "
+    "В запасе 25 минут на проверку. Готов приступить."
+)
 
 
 CONFIGS: list[Config] = [
-    # Baseline — current prod settings from tts_engine_f5.py
+    # Baseline — current prod settings from tts_engine_f5.py (pre-preprocessor)
     Config("01_baseline_v1ref", REF_V1, REF_V1_TEXT,
            speed=1.07, cfg_strength=2.5, nfe_step=48, remove_silence=True),
     # V2 reference, prod-like params
@@ -79,12 +88,20 @@ CONFIGS: list[Config] = [
     # V2 ref + tuned (stronger adherence, more steps, natural pauses)
     Config("03_v2ref_tuned", REF_V2, REF_V2_TEXT,
            speed=1.0, cfg_strength=3.0, nfe_step=64, remove_silence=False),
-    # V2 ref + aggressive (higher cfg — risk: artifacts)
+    # V2 ref + aggressive (higher cfg — current prod winner)
     Config("04_v2ref_aggressive", REF_V2, REF_V2_TEXT,
            speed=1.0, cfg_strength=3.5, nfe_step=64, remove_silence=False),
-    # V2 ref + butler-slow (slower for gravitas)
+    # V2 ref + butler-slow
     Config("05_v2ref_butler_slow", REF_V2, REF_V2_TEXT,
            speed=0.95, cfg_strength=3.0, nfe_step=64, remove_silence=False),
+    # NEW: accents ON — winner params with ruaccent + punctuation + numbers preprocessing
+    Config("06_aggressive_accents", REF_V2, REF_V2_TEXT,
+           speed=1.0, cfg_strength=3.5, nfe_step=64, remove_silence=False,
+           accents=True),
+    # NEW: accents ON + butler-slow
+    Config("07_butler_slow_accents", REF_V2, REF_V2_TEXT,
+           speed=0.95, cfg_strength=3.0, nfe_step=64, remove_silence=False,
+           accents=True),
 ]
 
 
@@ -104,10 +121,17 @@ def load_f5() -> object:
 
 
 def run_config(f5: object, cfg: Config, text: str, out_path: Path) -> float:
+    if cfg.accents:
+        # Apply same preprocessing as production (ruaccent + punct + numbers)
+        from kernel.voice.text_preprocessor import preprocess
+        text = preprocess(text)
+        ref_text = preprocess(cfg.ref_text)
+    else:
+        ref_text = cfg.ref_text
     t0 = time.perf_counter()
     wav, sr, _ = f5.infer(  # type: ignore[attr-defined]
         ref_file=str(cfg.ref_path),
-        ref_text=cfg.ref_text,
+        ref_text=ref_text,
         gen_text=text,
         remove_silence=cfg.remove_silence,
         speed=cfg.speed,

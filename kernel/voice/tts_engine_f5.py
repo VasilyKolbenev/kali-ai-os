@@ -157,9 +157,23 @@ def is_loaded() -> bool:
 
 
 def _fix_text(text: str) -> str:
-    """Minimal preprocessing."""
+    """Strip markdown bold + apply Russian preprocessing (stress, punctuation, numbers)."""
+    from kernel.voice.text_preprocessor import preprocess
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    return text.strip()
+    return preprocess(text.strip())
+
+
+_reference_text_processed: str | None = None
+
+
+def _get_processed_reference_text() -> str:
+    """Apply the same preprocessing to the reference text so stress marks match gen_text."""
+    global _reference_text_processed
+    if _reference_text_processed is None:
+        from kernel.voice.text_preprocessor import preprocess
+        _reference_text_processed = preprocess(REFERENCE_TEXT)
+        logger.debug("Processed reference text: %s", _reference_text_processed)
+    return _reference_text_processed
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -193,7 +207,7 @@ def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, 
         try:
             wav, sr, _ = f5.infer(
                 ref_file=str(REFERENCE_AUDIO),
-                ref_text=REFERENCE_TEXT,
+                ref_text=_get_processed_reference_text(),
                 gen_text=sentence,
                 remove_silence=REMOVE_SILENCE,
                 speed=SPEED,

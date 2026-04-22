@@ -28,6 +28,7 @@ HIDDEN = [
     "kernel.voice.tts_router",
     "kernel.voice.tts_engine_f5",
     "kernel.voice.tts_engine_elevenlabs",
+    "kernel.voice.text_preprocessor",
     "kernel.voice.jarvis_sounds",
     "kernel.voice.pipeline",
     "kernel.voice.vad",
@@ -92,6 +93,7 @@ HIDDEN = [
     "faster_whisper",
     "elevenlabs",
     "elevenlabs.client",
+    "ruaccent",
 ]
 
 
