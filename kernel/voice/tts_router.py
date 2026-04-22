@@ -3,8 +3,6 @@
 Strategy:
 - GPU users → F5-TTS Russian (our voice clone, offline)
 - CPU/no-GPU → ElevenLabs cloud (temp; later: our own GPU inference server)
-
-No Silero+RVC anymore — F5 replaces it entirely.
 """
 
 import logging

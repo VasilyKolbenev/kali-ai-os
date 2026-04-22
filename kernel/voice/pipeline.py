@@ -11,9 +11,9 @@ import numpy as np
 from kernel.event_bus import EventBus
 from kernel.llm_router import LLMRequest, LLMRouter
 from kernel.models import Event, LLMConfig, VoiceConfig
+from kernel.voice import tts_router
 from kernel.voice.recorder import AudioChunk, AudioRecorder
 from kernel.voice.stt import SpeechToText, STTResult
-from kernel.voice.tts import TextToSpeech
 from kernel.voice.vad import VoiceActivityDetector
 from kernel.voice.wake_word import WakeWordDetector
 
@@ -23,6 +23,17 @@ logger = logging.getLogger(__name__)
 _LISTEN_TIMEOUT_S = 3.0
 # Minimum speech chunks before we try STT (avoid noise triggers)
 _MIN_SPEECH_CHUNKS = 5
+
+
+def _play_audio(audio: np.ndarray, sr: int) -> None:
+    """Play audio through system speakers via sounddevice."""
+    try:
+        import sounddevice as sd
+
+        sd.play(audio, sr)
+        sd.wait()
+    except Exception:
+        logger.exception("Failed to play audio")
 
 
 class PipelineState(Enum):
@@ -62,7 +73,6 @@ class VoicePipeline:
         self._vad = VoiceActivityDetector(threshold=voice_config.vad_threshold)
         self._wake_word = WakeWordDetector(wake_word=voice_config.wake_word)
         self._stt = SpeechToText(model_size=voice_config.stt_model)
-        self._tts = TextToSpeech(voice=voice_config.tts_voice)
         self._llm = LLMRouter(llm_config)
 
         # Audio buffer for collecting speech
@@ -106,7 +116,7 @@ class VoicePipeline:
         self._vad.load()
         self._wake_word.load()
         self._stt.load()
-        self._tts.load()
+        tts_router.load_models()
         logger.info("Voice models loaded")
 
     async def start(self) -> None:
@@ -285,9 +295,13 @@ class VoicePipeline:
             # Anti-echo: stop mic while speaking to avoid self-recording
             await self._recorder.stop()
             try:
-                tts_result = self._tts.synthesize(response.text)
-                if not tts_result.is_empty:
-                    self._tts.play(tts_result)
+                audio, sr = await asyncio.to_thread(
+                    tts_router.generate_audio, response.text
+                )
+                if len(audio) > 0:
+                    await asyncio.to_thread(_play_audio, audio, sr)
+            except Exception:
+                logger.exception("TTS playback failed")
             finally:
                 # 500ms buffer — lets speaker audio fully drain before mic resumes.
                 # Without this, STT picks up room echo of JARVIS's own voice.

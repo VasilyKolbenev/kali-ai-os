@@ -819,7 +819,7 @@ def create_app(
         """Speak text through system speakers (fire-and-forget).
 
         Uses pre-recorded JARVIS clips for common phrases (greetings, ok, thanks).
-        Falls back to Silero + RVC TTS for custom responses.
+        Falls back to F5-TTS / ElevenLabs for custom responses.
         Anti-echo: mutes voice pipeline microphone during playback.
         """
         import asyncio
@@ -1195,7 +1195,7 @@ def create_app(
 
     @app.post("/tts")
     async def text_to_speech(request: Request) -> Any:
-        """Convert text to speech — Silero TTS + RVC ONNX JARVIS voice."""
+        """Convert text to speech — F5-TTS (local GPU) or ElevenLabs (cloud)."""
         from fastapi.responses import JSONResponse, Response
         import asyncio
 
@@ -1266,13 +1266,15 @@ def create_app(
     async def tts_health() -> dict[str, Any]:
         """TTS engine health check."""
         try:
-            from kernel.voice.tts_router import is_loaded
+            from kernel.voice.tts_router import get_provider, is_loaded
             from kernel.model_downloader import get_models_status
 
             loaded = is_loaded()
+            engine = get_provider()
             model_status = get_models_status()
         except Exception:
             loaded = False
+            engine = "unknown"
             model_status = {
                 "ready": False,
                 "missing_downloadable": [],
@@ -1281,7 +1283,7 @@ def create_app(
             }
         return {
             "status": "ok" if loaded else "not loaded",
-            "engine": "silero-v4 + onnx-rvc-v2",
+            "engine": engine,
             "models_ready": model_status.get("ready", False),
             "models_dir": model_status.get("models_dir", ""),
             "missing_models": [
@@ -1701,9 +1703,9 @@ def create_app(
                 "deepseek_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2"),
             },
             "tts": {
-                "enabled": os.environ.get("RVC_ENABLED", "1") == "1",
-                "pitch_shift": int(os.environ.get("RVC_PITCH_SHIFT", "5")),
-                "speaker": os.environ.get("SILERO_SPEAKER", "eugene"),
+                "provider": os.environ.get("KALI_TTS_PROVIDER", "auto"),
+                "elevenlabs_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+                "elevenlabs_key": _mask_key(os.environ.get("ELEVENLABS_API_KEY", "")),
             },
             "voice": {
                 "wake_word": getattr(getattr(getattr(request.app.state, "config_manager", None), "config", None), "voice", None) and request.app.state.config_manager.config.voice.wake_word or os.environ.get("WAKE_WORD", "jarvis"),

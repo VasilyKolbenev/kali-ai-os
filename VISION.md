@@ -150,7 +150,7 @@ KALI не только отвечает — система учится и пр�
 KALI запоминает предпочтения и адаптируется:
 
 - **Стиль общения** — формальный/дружеский, краткий/подробный
-- **Голос** — JARVIS по умолчанию, кастомные голоса через RVC
+- **Голос** — JARVIS по умолчанию, кастомные голоса через клонирование (F5-TTS / ElevenLabs)
 - **Расписание** — знает когда вы просыпаетесь, работаете, отдыхаете
 - **Привычки** — отслеживает паттерны и предлагает улучшения
 - **Контекст** — помнит предыдущие разговоры и решения
@@ -202,8 +202,8 @@ KALI запоминает предпочтения и адаптируется:
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              Voice Pipeline                           │   │
-│  │  Mic → VAD → Wake Word → STT → LLM Router → TTS     │   │
-│  │       (Silero VAD)  (Whisper) (Claude)  (Silero+RVC) │   │
+│  │  Mic → VAD → Wake Word → STT → LLM Router → TTS          │   │
+│  │       (Silero VAD)  (Whisper) (Claude) (F5-TTS/ElevenLabs) │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -432,22 +432,17 @@ Claude генерирует полный `agent.py` наследующий `Base
 
 ## Voice Pipeline
 
-### JARVIS Voice (Production, 2026-04-13)
+### JARVIS Voice (Production, 2026-04-20)
 
-```
-Text → Silero TTS v4 (CPU, ~60ms)
-     → ONNX RVC jarvis_v2 (DirectML GPU, ~570ms)
-     → EQ Post-Processing (matched to JARVIS Sound Pack)
-     → Audio Output (40kHz)
-```
+**Two-tier TTS strategy:**
 
-**Настройки голоса (FINAL2, 2026-04-15):**
-- Model: `jarvis_v2.onnx` (400 epochs, 52-file Sound Pack)
-- FAISS index: `jarvis_v2.index`, influence=0.8
-- Pitch shift: +5 semitones
-- EQ: spectral-matched to reference WAV "Вы создали новый элемент.wav"
-  - Sub-bass boost 0.85 (warmth), low-mid cut 0.55, mid cut 0.65
-  - Presence boost 0.70 (sparkle), brilliance 0.60 (air)
+| Provider | Когда используется | Latency (typical) |
+|---|---|---|
+| **F5-TTS Russian v4_winter** (local GPU, RTX 5070+) | NVIDIA CUDA доступна | ~800ms |
+| **ElevenLabs** (cloud, voice clone `LuMAgLODaXoM7gaV55sV`) | CPU-only / нет GPU / fallback | ~400ms (network) |
+
+Выбор провайдера — автоматический через [kernel/voice/tts_router.py](kernel/voice/tts_router.py).
+Короткие фразы (приветствия, "ок", "готово") — из pre-recorded JARVIS Sound Pack.
 
 ### Full Voice Loop
 
@@ -456,7 +451,7 @@ Mic → Silero VAD → Wake Word ("Jarvis")
     → faster-whisper STT (~200ms)
     → LLM Router (Claude / Ollama)
     → Agent Dispatch → Response
-    → Silero + RVC TTS (~650ms)
+    → F5-TTS or ElevenLabs (~500ms)
     → Speaker
 ```
 
@@ -500,7 +495,6 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - **FastAPI** — HTTP/WebSocket API
 - **SQLite (aiosqlite)** — локальная БД
 - **Pydantic** — модели данных
-- **ONNX Runtime (DirectML)** — GPU inference для голоса
 
 ### Frontend (Shell)
 - **Tauri 2.x** — desktop wrapper (Rust)
@@ -511,10 +505,10 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - **Tailwind CSS** — стили
 
 ### Voice
-- **Silero TTS v4** — синтез речи (CPU)
-- **RVC ONNX (jarvis_v2)** — голосовая конверсия (GPU)
+- **F5-TTS Russian v4_winter** — синтез речи с voice clone (GPU via torch+cu128)
+- **ElevenLabs** — cloud TTS fallback (voice clone `LuMAgLODaXoM7gaV55sV`)
 - **faster-whisper** — распознавание речи
-- **Silero VAD** — детекция голоса
+- **Silero VAD** — детекция голоса (voice activity detection)
 - **OpenWakeWord** — wake word detection
 
 ### Cloud
@@ -532,12 +526,12 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 ## Implementation Roadmap
 
 ### Phase 1: Voice Foundation ✅ DONE
-- [x] Silero TTS + ONNX RVC pipeline
-- [x] SSML markup (abbreviations, stress, prosody)
-- [x] RVC jarvis_v2 training + ONNX export
-- [x] EQ post-processing matched to Sound Pack
-- [x] DirectML GPU acceleration
-- [x] Single-process TTS server (no WSL dependency)
+- [x] F5-TTS Russian voice clone (local GPU)
+- [x] ElevenLabs cloud fallback (voice clone from JARVIS Sound Pack)
+- [x] TTS router with auto-provider selection (CUDA → F5, else ElevenLabs)
+- [x] faster-whisper STT + Silero VAD + OpenWakeWord
+- [x] Pre-recorded clips for common phrases (no TTS round-trip)
+- [x] ~~Legacy Silero+RVC+DirectML pipeline~~ (removed 2026-04-22)
 
 ### Phase 2: Core Kernel ✅ DONE
 - [x] FastAPI async server
@@ -660,8 +654,7 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [x] Thread-safe audio queue (queue.Queue, not asyncio.Queue)
 - [x] Anti-echo (mic stops during TTS playback)
 - [x] LISTENING timeout (3s, prevents infinite hang)
-- [x] TTS sentence splitting (Silero 500-char limit)
-- [x] EQ matched to JARVIS Sound Pack via spectral analysis
+- [x] TTS sentence splitting for long LLM responses
 - [x] Silero VAD cache fix (PermissionError on Windows)
 - [ ] Voice quality A/B testing (pitch shift, speaker variants)
 - [ ] Streaming TTS (play while generating next sentence)
@@ -759,12 +752,11 @@ kernel/
 └── voice/
     ├── pipeline.py       # Voice orchestration
     ├── stt.py            # Speech-to-text
-    ├── tts.py            # Text-to-speech routing
+    ├── tts_router.py     # TTS provider router (F5-TTS / ElevenLabs)
+    ├── tts_engine_f5.py  # F5-TTS Russian voice clone (local GPU)
+    ├── tts_engine_elevenlabs.py  # ElevenLabs cloud engine
+    ├── jarvis_sounds.py  # Pre-recorded JARVIS clips
     └── vad.py            # Voice activity detection
-
-services/tts/
-├── server.py             # Silero + ONNX RVC server (port 3002)
-└── rvc_onnx.py           # ONNX RVC inference engine
 
 agents/
 ├── _base/agent_base.py   # Shared base class
@@ -784,11 +776,10 @@ ui/src/
 ├── api/                  # client.ts, websocket.ts
 └── stores/               # Zustand state
 
-models/                   # ONNX voice models
-├── jarvis_v2.onnx        # RVC voice model
-├── jarvis_v2.index       # FAISS index
-├── vec-768-layer-12.onnx # HuBERT features
-└── rmvpe.onnx            # Pitch estimator
+models/                   # Voice models (gitignored, downloaded on install)
+├── f5_tts/               # F5-TTS Russian checkpoints
+├── faster_whisper/       # STT models (base.en / large-v3)
+└── openwakeword/         # Wake word ONNX models
 
 config/kali.yaml          # Main configuration
 ```

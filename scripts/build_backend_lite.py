@@ -82,8 +82,6 @@ EXCLUDES = [
     "transformers",
     "huggingface_hub",
     "onnxruntime",
-    "onnxruntime_directml",
-    "faiss",
     "faster_whisper",  # STT also heavy — users can enable later
     "scipy",
     "numba",

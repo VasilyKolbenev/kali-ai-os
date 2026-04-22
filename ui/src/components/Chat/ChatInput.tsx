@@ -70,7 +70,7 @@ export function ChatInput() {
   }, [pendingMessage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Speak response with JARVIS voice — full synthesis (best quality)
-  // Silero + RVC ONNX pipeline, in-process on port 3005
+  // F5-TTS (local GPU) or ElevenLabs (cloud), in-process on port 3005
   const speakJarvis = async (text: string) => {
     if (!text || text.length < 5) return;
     setVoiceState("speaking");
