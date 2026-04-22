@@ -1377,6 +1377,93 @@ def create_app(
             request.app.state.agent_runtime,
         )
 
+    @app.post("/builder/start")
+    async def builder_start(request: Request) -> Any:
+        """Start a builder flow from a natural-language request.
+
+        Expects JSON body with ``request`` (str). Returns session metadata
+        including the first clarifying question and total wizard steps.
+        """
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        text = (body.get("request") or "").strip()
+        if not text:
+            return JSONResponse({"error": "request must be non-empty"}, status_code=400)
+
+        try:
+            return request.app.state.builder_flow.start(text)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            logger.exception("builder/start failed")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.post("/builder/answer")
+    async def builder_answer(request: Request) -> Any:
+        """Record an answer in the active builder wizard.
+
+        Expects JSON body with ``session_id`` (str) and ``answer`` (str).
+        Returns next question dict while wizard is in progress, or a preview
+        dict once all questions are answered.
+        """
+        from fastapi.responses import JSONResponse
+        from kernel.builder.session_store import SessionNotFound
+
+        body = await request.json()
+        sid = body.get("session_id", "")
+        text = (body.get("answer") or "").strip()
+        if not sid or not text:
+            return JSONResponse(
+                {"error": "session_id and answer required"}, status_code=400
+            )
+
+        try:
+            return request.app.state.builder_flow.answer(sid, text)
+        except SessionNotFound:
+            return JSONResponse(
+                {"error": "session not found or expired"}, status_code=404
+            )
+
+    @app.post("/builder/deploy")
+    async def builder_deploy(request: Request) -> Any:
+        """Materialise and deploy the skill built in this session.
+
+        Expects JSON body with ``session_id`` (str). The wizard must be
+        complete (all answers provided) before deploying.
+        """
+        from fastapi.responses import JSONResponse
+        from kernel.builder.session_store import SessionNotFound
+
+        body = await request.json()
+        sid = body.get("session_id", "")
+        if not sid:
+            return JSONResponse({"error": "session_id required"}, status_code=400)
+
+        try:
+            return await request.app.state.builder_flow.deploy(sid)
+        except SessionNotFound:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @app.post("/builder/cancel")
+    async def builder_cancel(request: Request) -> Any:
+        """Abort an in-flight builder session.
+
+        Expects JSON body with ``session_id`` (str). No-op if the session is
+        already gone; always returns ``{"status": "cancelled"}``.
+        """
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        sid = body.get("session_id", "")
+        if not sid:
+            return JSONResponse({"error": "session_id required"}, status_code=400)
+
+        request.app.state.builder_flow.cancel(sid)
+        return {"status": "cancelled"}
+
     @app.get("/catalog/search")
     async def catalog_search(request: Request, q: str = "", category: str = "") -> dict[str, Any]:
         """Search catalog — local agents first, then cloud."""
