@@ -45,13 +45,32 @@ _register_ffmpeg_dll_path()
 
 
 def _models_dir() -> Path:
+    """Resolve the directory that holds F5 weights + reference WAVs.
+
+    PyInstaller onedir layout after InnoSetup install is:
+        {app}/kali-backend/kali-backend.exe   (sys.executable)
+        {app}/kali-backend/_internal/
+        {app}/models/                          ← models sit ONE LEVEL UP
+
+    We search in priority order and return the first that exists.
+    """
     if hasattr(sys, "_MEIPASS"):
         exe_dir = Path(sys.executable).parent
         appdata = Path(os.environ.get("APPDATA", "")) / "KALI"
-        for c in [exe_dir / "models", appdata / "models"]:
+        candidates = [
+            exe_dir / "models",           # legacy: models next to exe
+            exe_dir.parent / "models",    # InnoSetup layout: one level up
+            appdata / "models",           # user override in %APPDATA%
+        ]
+        for c in candidates:
             if c.exists():
+                logger.info("F5 models dir resolved: %s", c)
                 return c
-        return exe_dir / "models"
+        logger.warning(
+            "F5 models dir not found in any candidate: %s",
+            [str(c) for c in candidates],
+        )
+        return exe_dir.parent / "models"  # best-guess default for the frozen layout
     return Path(__file__).parent.parent.parent / "models"
 
 
