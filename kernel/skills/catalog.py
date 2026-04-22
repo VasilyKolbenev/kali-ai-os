@@ -40,18 +40,28 @@ DEFAULT_SOURCES: list["CatalogSource"] = []  # populated after class def below
 
 @dataclass
 class CatalogSource:
-    """Configuration for a remote skills registry."""
+    """Configuration for a remote skills registry.
+
+    Two shapes supported:
+    - ``source_type="github"`` (default): fetch SKILL.md from a GitHub repo tree.
+    - ``source_type="aggregator_json"``: fetch pre-indexed JSON list from ``api_url``.
+      Each item must carry ``owner``, ``repo``, ``name``, ``description`` at minimum.
+    """
 
     id: str                       # stable identifier (e.g. "anthropic")
     label: str                    # human-readable (e.g. "Anthropic Official")
-    owner: str                    # GitHub org/user
-    repo: str                     # repo name
+    owner: str = ""               # GitHub org/user (github sources only)
+    repo: str = ""                # repo name (github sources only)
     ref: str = "main"             # branch/tag/SHA
     skills_path: str = "skills"   # subdirectory inside repo containing skill folders
     trust: str = "community"      # "official" | "verified" | "community"
+    source_type: str = "github"   # "github" | "aggregator_json"
+    api_url: str | None = None    # endpoint for aggregator_json sources
 
     @property
     def display_url(self) -> str:
+        if self.source_type == "aggregator_json" and self.api_url:
+            return self.api_url
         return f"https://github.com/{self.owner}/{self.repo}"
 
 
@@ -121,6 +131,13 @@ DEFAULT_SOURCES = [
         label="KALI Skills",
         owner="VasilyKolbenev", repo="kali-skills",
         trust="verified",
+    ),
+    CatalogSource(
+        id="neuraldeep",
+        label="NeuralDeep (RU)",
+        trust="community",
+        source_type="aggregator_json",
+        api_url="https://neuraldeep.ru/api/skills",
     ),
 ]
 
@@ -253,8 +270,74 @@ class SkillsCatalog:
             pass
         return None
 
+    def _fetch_aggregator_json(self, source: CatalogSource) -> list[CatalogEntry]:
+        """Fetch pre-indexed catalog from a JSON API endpoint.
+
+        Expected response: list of dicts with at least ``owner``, ``repo``, ``name``, ``description``.
+        Optional: ``contentPath``, ``category``, ``tags``, ``installs``, ``githubStars``, ``featured``.
+        """
+        if not source.api_url:
+            raise CatalogFetchError(f"Aggregator source {source.id} missing api_url")
+
+        try:
+            resp = requests.get(source.api_url, timeout=self._http_timeout)
+        except requests.RequestException as exc:
+            raise CatalogFetchError(f"Network error for {source.id}: {exc}") from exc
+
+        if resp.status_code != 200:
+            raise CatalogFetchError(
+                f"Aggregator API error {resp.status_code} for {source.id}: {resp.text[:200]}"
+            )
+
+        try:
+            items = resp.json()
+        except ValueError as exc:
+            raise CatalogFetchError(f"Invalid JSON from {source.id}: {exc}") from exc
+
+        if not isinstance(items, list):
+            raise CatalogFetchError(f"Expected JSON list from {source.id}, got {type(items).__name__}")
+
+        entries: list[CatalogEntry] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            owner = str(item.get("owner") or "").strip()
+            repo = str(item.get("repo") or "").strip()
+            name = str(item.get("name") or "").strip()
+            description = str(item.get("description") or "").strip()
+            if not (owner and repo and name and description):
+                continue
+
+            # contentPath — optional subdir inside repo (None/empty means repo root)
+            content_path = (item.get("contentPath") or "").strip("/")
+            skill_path = content_path if content_path else ""
+
+            metadata: dict[str, Any] = {}
+            for key in ("category", "tags", "installs", "githubStars", "featured", "trending24h"):
+                if key in item and item[key] is not None:
+                    metadata[key] = item[key]
+
+            entries.append(CatalogEntry(
+                name=name,
+                description=description,
+                source_id=source.id,
+                source_label=source.label,
+                trust=source.trust,
+                repo_owner=owner,
+                repo_name=repo,
+                repo_ref=source.ref,
+                skill_path=skill_path,
+                metadata=metadata,
+            ))
+
+        logger.info("Indexed %d skills from %s (aggregator)", len(entries), source.id)
+        return entries
+
     def _fetch_source(self, source: CatalogSource) -> list[CatalogEntry]:
         """Fetch and index all SKILL.md files in a source repo."""
+        if source.source_type == "aggregator_json":
+            return self._fetch_aggregator_json(source)
+
         logger.info("Fetching catalog from %s...", source.display_url)
         paths = self._github_tree(source)
 

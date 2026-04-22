@@ -78,6 +78,113 @@ class TestDefaultSources:
         k = next(s for s in DEFAULT_SOURCES if s.id == "kali")
         assert k.trust == "verified"
 
+    def test_neuraldeep_is_aggregator(self):
+        nd = next(s for s in DEFAULT_SOURCES if s.id == "neuraldeep")
+        assert nd.source_type == "aggregator_json"
+        assert nd.api_url == "https://neuraldeep.ru/api/skills"
+        assert nd.trust == "community"
+
+
+class TestAggregatorSource:
+    """Tests for aggregator_json source type (e.g. NeuralDeep)."""
+
+    _SAMPLE_API = [
+        {
+            "id": "uuid-1",
+            "name": "yandex-wordstat",
+            "owner": "artwist-polyakov",
+            "repo": "polyakov-claude-skills",
+            "description": "Яндекс Wordstat — поиск и анализ ключевых слов.",
+            "contentPath": "yandex-wordstat",
+            "category": "маркетинг",
+            "tags": ["яндекс", "маркетинг", "российские сервисы"],
+            "installs": 42,
+            "githubStars": 12,
+            "featured": True,
+        },
+        {
+            "id": "uuid-2",
+            "name": "1c-enterprise-skills",
+            "owner": "Nikolay-Shirokov",
+            "repo": "cc-1c-skills",
+            "description": "Разработка на 1С:Предприятие 8.3.",
+            "contentPath": None,
+            "category": "утилиты",
+            "tags": ["1с", "1c"],
+            "installs": 122,
+        },
+        # Malformed entry — missing owner — should be skipped
+        {
+            "name": "broken",
+            "description": "no owner or repo",
+        },
+    ]
+
+    def test_fetches_and_normalizes(self, tmp_path):
+        source = CatalogSource(
+            id="nd",
+            label="NeuralDeep",
+            source_type="aggregator_json",
+            api_url="https://neuraldeep.ru/api/skills",
+            trust="community",
+        )
+        responses = {
+            "https://neuraldeep.ru/api/skills": {"json": self._SAMPLE_API},
+        }
+        catalog = SkillsCatalog(sources=[source], cache_dir=tmp_path)
+        with patch(
+            "kernel.skills.catalog.requests.get",
+            side_effect=_mock_requests_get(responses),
+        ):
+            entries = catalog.refresh_source("nd", force=True)
+
+        # Two valid entries, one malformed skipped
+        assert len(entries) == 2
+        by_name = {e.name: e for e in entries}
+
+        wordstat = by_name["yandex-wordstat"]
+        assert wordstat.repo_owner == "artwist-polyakov"
+        assert wordstat.repo_name == "polyakov-claude-skills"
+        assert wordstat.skill_path == "yandex-wordstat"
+        assert wordstat.metadata["category"] == "маркетинг"
+        assert "яндекс" in wordstat.metadata["tags"]
+        assert wordstat.metadata["featured"] is True
+
+        # contentPath=None → skill_path empty (repo root)
+        onec = by_name["1c-enterprise-skills"]
+        assert onec.skill_path == ""
+        assert onec.metadata["installs"] == 122
+
+    def test_missing_api_url_raises(self, tmp_path):
+        source = CatalogSource(
+            id="bad",
+            label="Broken",
+            source_type="aggregator_json",
+            api_url=None,
+        )
+        catalog = SkillsCatalog(sources=[source], cache_dir=tmp_path)
+        entries = catalog.refresh_source("bad", force=True)
+        # refresh_source swallows CatalogFetchError and returns empty
+        assert entries == []
+
+    def test_non_list_response_rejected(self, tmp_path):
+        source = CatalogSource(
+            id="nd",
+            label="NeuralDeep",
+            source_type="aggregator_json",
+            api_url="https://example.com/skills",
+        )
+        responses = {
+            "https://example.com/skills": {"json": {"error": "not a list"}},
+        }
+        catalog = SkillsCatalog(sources=[source], cache_dir=tmp_path)
+        with patch(
+            "kernel.skills.catalog.requests.get",
+            side_effect=_mock_requests_get(responses),
+        ):
+            entries = catalog.refresh_source("nd", force=True)
+        assert entries == []
+
 
 class TestCatalogEntry:
     def test_raw_url_constructed(self):
