@@ -46,6 +46,14 @@ echo.
 echo ============================================
 echo   Build complete!
 echo ============================================
-dir dist_premium\KALI-Premium-Setup-0.2.0-beta.exe
 echo.
-echo Share this file with friends via Google Drive / Yandex.Disk.
+echo InnoSetup produced a multi-file installer (DiskSpanning):
+echo   .exe   - installer stub with wizard UI
+echo   .bin   - content slices (must sit next to the .exe)
+echo.
+dir dist_premium\KALI-Premium-Setup-0.2.0-beta*
+echo.
+echo Share ALL of these files together. Easiest:
+echo   1) Put them into a ZIP or a single Google Drive folder
+echo   2) Friend downloads all files to the same folder
+echo   3) Friend runs only the .exe — it pulls .bin slices automatically.
