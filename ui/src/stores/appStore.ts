@@ -7,6 +7,7 @@ export type AppMode =
   | "nightstand"
   | "store"
   | "activity"
+  | "builder"
   | "settings";
 
 interface AppState {
