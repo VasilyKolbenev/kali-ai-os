@@ -94,6 +94,7 @@ HIDDEN = [
     "elevenlabs",
     "elevenlabs.client",
     "ruaccent",
+    "onnxruntime",
 ]
 
 

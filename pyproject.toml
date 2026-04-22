@@ -34,6 +34,7 @@ dependencies = [
     "torchaudio>=2.6.0",
     "f5-tts>=1.1.17",
     "ruaccent>=1.5",
+    "onnxruntime>=1.19",
 ]
 
 [project.optional-dependencies]
