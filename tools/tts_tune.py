@@ -26,6 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "models"
 OUT_DIR = ROOT / "out" / "tts_tune"
 
+# Make `kernel.*` imports work under `uv run --with` isolated envs
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def _register_ffmpeg_dlls() -> None:
     """Add bundled FFmpeg shared DLLs to search path (torchcodec needs them).
