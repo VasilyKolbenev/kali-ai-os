@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,10 @@ class BuilderFlow:
         session = self._store.get(sid)
         session.questions = wizard.questions
 
-        logger.info("BuilderFlow started: sid=%s template=%s steps=%d", sid, intent.template, len(wizard.questions))
+        logger.info(
+            "BuilderFlow started: sid=%s template=%s steps=%d",
+            sid, intent.template, len(wizard.questions),
+        )
         return {
             "session_id": sid,
             "question": session.current_question,
@@ -154,13 +158,18 @@ class BuilderFlow:
             agents_dir=self._agents_dir,
         )
 
-        result = await deploy_skill(
-            skill_dir=skill_dir,
-            skill_executor=self._executor,
-            scheduler=self._scheduler,
+        try:
+            result = await deploy_skill(
+                skill_dir=skill_dir,
+                skill_executor=self._executor,
+                scheduler=self._scheduler,
+            )
+        finally:
+            self._store.delete(session_id)
+        logger.info(
+            "BuilderFlow deployed: sid=%s skill=%s status=%s",
+            session_id, skill_dir.name, result.get("status"),
         )
-        self._store.delete(session_id)
-        logger.info("BuilderFlow deployed: sid=%s skill=%s status=%s", session_id, skill_dir.name, result.get("status"))
         return result
 
     def cancel(self, session_id: str) -> None:
@@ -174,10 +183,12 @@ class BuilderFlow:
 
     def _build_spec(self, session: BuilderSession) -> dict[str, Any]:
         """Materialise a skill spec from session answers (mirrors WizardSession.build_spec)."""
-        import re
-
         name = re.sub(r"[^\w\s-]", "", session.request.lower()).strip()
         name = re.sub(r"[\s_]+", "-", name)[:40].strip("-")
+        if not name:
+            raise ValueError(
+                f"Cannot derive a valid skill name from request: {session.request!r}"
+            )
         config: dict[str, Any] = {}
         for i, (q, a) in enumerate(zip(session.questions, session.answers)):
             if "часто" in q or "interval" in q.lower():

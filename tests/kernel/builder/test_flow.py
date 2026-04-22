@@ -67,3 +67,28 @@ async def test_cancel_removes_session(flow: BuilderFlow) -> None:
     flow.cancel(sid)
     with pytest.raises(Exception):
         flow.answer(sid, "x")
+
+
+async def test_start_raises_for_agent_intent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pilot scope: agent generation path is blocked."""
+    monkeypatch.setattr(
+        "kernel.builder.flow.classify_intent",
+        lambda req: IntentResult(type="agent", template=None, confidence=0.9, reason="mocked"),
+    )
+    executor = MagicMock()
+    flow = BuilderFlow(
+        session_store=SessionStore(),
+        agents_dir=tmp_path / "agents",
+        skill_executor=executor,
+    )
+    with pytest.raises(ValueError, match="Agent generation out of pilot scope"):
+        flow.start("сделай агента для парсинга криптобирж")
+
+
+async def test_deploy_without_complete_wizard_raises(flow: BuilderFlow) -> None:
+    """Deploy before wizard is done must fail clearly."""
+    start = flow.start("Напомни")
+    sid = start["session_id"]
+    # Don't feed any answers — spec stays None
+    with pytest.raises(ValueError, match="wizard not complete"):
+        await flow.deploy(sid)
