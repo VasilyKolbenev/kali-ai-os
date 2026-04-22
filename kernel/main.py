@@ -38,6 +38,8 @@ from kernel.builder.agent_generator import generate_agent
 from kernel.builder.safety_gate import check_code
 from kernel.builder.deployer import deploy_skill, deploy_agent
 from kernel.builder.wizard import create_wizard
+from kernel.builder.flow import BuilderFlow
+from kernel.builder.session_store import SessionStore
 from kernel.catalog.package import pack as pack_agent, get_package_info
 from kernel.catalog.client import CatalogClient
 from kernel.catalog.installer import install_package
@@ -433,6 +435,13 @@ def create_app(
 
         catalog_client = CatalogClient()
         app.state.catalog_client = catalog_client
+
+        app.state.builder_flow = BuilderFlow(
+            session_store=SessionStore(),
+            agents_dir=resolved_agents_dir,
+            skill_executor=app.state.skill_executor,
+            scheduler=app.state.scheduler,
+        )
 
         # Load TTS models in background — only if voice auto_start is enabled.
         # Otherwise load on-demand via /tts/speak or /voice/start (avoids unused RAM).
