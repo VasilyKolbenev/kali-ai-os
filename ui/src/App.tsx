@@ -1,5 +1,6 @@
 import { useAppStore } from "./stores/appStore";
 import { useWebSocket } from "./api/websocket";
+import { useOnboardingGate } from "./hooks/useOnboardingGate";
 import { Avatar } from "./components/Avatar/Avatar";
 import { Dashboard } from "./components/Dashboard/Dashboard";
 import { AgentPanel } from "./components/AgentPanel/AgentPanel";
@@ -9,6 +10,7 @@ import { SandboxActivity } from "./components/SandboxActivity/SandboxActivity";
 import { Settings } from "./components/Settings/Settings";
 import { BuilderPanel } from "./components/Builder/BuilderPanel";
 import { Showcase } from "./components/Showcase/Showcase";
+import { OnboardingRoot } from "./components/Onboarding/OnboardingRoot";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
@@ -16,6 +18,21 @@ import { ChatInput } from "./components/Chat/ChatInput";
 export default function App() {
   const mode = useAppStore((s) => s.mode);
   useWebSocket();
+  const { loading: onboardingLoading, gated: onboardingGated } = useOnboardingGate();
+
+  if (onboardingLoading) {
+    return (
+      <div
+        className="w-full h-screen flex items-center justify-center"
+        style={{ background: "var(--j-bg)", color: "var(--j-text-dim)" }}
+      >
+        Loading…
+      </div>
+    );
+  }
+  if (onboardingGated) {
+    return <OnboardingRoot />;
+  }
 
   return (
     <div className="flex h-screen w-screen" style={{ background: "var(--j-bg)" }}>
