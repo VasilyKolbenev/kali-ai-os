@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useOnboardingStore } from "../../stores/onboardingStore";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { ApiKeyStep } from "./steps/ApiKeyStep";
@@ -7,6 +8,18 @@ import { LandingStep } from "./steps/LandingStep";
 
 export function OnboardingRoot() {
   const step = useOnboardingStore((s) => s.currentStep);
+  const skip = useOnboardingStore((s) => s.skip);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        skip();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [skip]);
+
   return (
     <div
       data-onboarding="root"
