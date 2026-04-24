@@ -23,7 +23,7 @@ from kernel.database import Database
 from kernel.event_bus import EventBus
 from kernel.focus import FocusTimer
 from kernel.memory import ConversationMemory
-from kernel.models import Event, WSMessage
+from kernel.models import ConfigSchema, Event, WSMessage
 from kernel.notifications import NotificationManager
 from kernel.plugin_registry import PluginRegistry
 from kernel.routines import RoutineManager
@@ -504,6 +504,74 @@ def create_app(
     @app.get("/config")
     async def get_config(request: Request) -> dict[str, Any]:
         return request.app.state.config_manager.config.model_dump()
+
+    @app.patch("/config")
+    async def patch_config(request: Request):
+        """Apply an RFC 7396 JSON Merge Patch to the YAML config.
+
+        Semantics:
+          - Body is merged into the current config via merge_patch().
+          - A `null` value at a known top-level section (voice, llm, schedule,
+            server) is rejected with 422 — this path exists only to guard
+            against accidental wipes; use an explicit reset endpoint if that
+            becomes a real need.
+          - The merged result is validated against ConfigSchema. On failure the
+            client receives 422 and the on-disk file is NOT modified.
+          - On success the file is saved atomically (tempfile + os.replace)
+            with a `.bak` sibling containing the prior contents.
+          - After write the config is reloaded and `config.changed` is
+            published on the event bus so live subscribers can react.
+        """
+        from fastapi.responses import JSONResponse
+        from pydantic import ValidationError
+
+        from kernel.config_manager import merge_patch
+
+        try:
+            body = await request.json()
+        except Exception as exc:
+            return JSONResponse({"error": f"invalid JSON: {exc}"}, status_code=400)
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "request body must be a JSON object"},
+                status_code=400,
+            )
+
+        _GUARDED_SECTIONS = {"voice", "llm", "schedule", "server"}
+        nulled = [k for k in _GUARDED_SECTIONS if k in body and body[k] is None]
+        if nulled:
+            return JSONResponse(
+                {
+                    "error": "cannot null a top-level section via PATCH",
+                    "sections": nulled,
+                },
+                status_code=422,
+            )
+
+        cm: ConfigManager = request.app.state.config_manager
+        current = cm.config.model_dump()
+        merged = merge_patch(current, body)
+
+        try:
+            validated = ConfigSchema.model_validate(merged)
+        except ValidationError as exc:
+            return JSONResponse(
+                {"error": "invalid config", "detail": exc.errors()},
+                status_code=422,
+            )
+
+        saved = cm.save(validated)
+
+        await request.app.state.event_bus.publish(
+            Event(
+                topic="config.changed",
+                source="kernel",
+                payload={"sections": sorted(body.keys())},
+            )
+        )
+
+        return saved.model_dump()
 
     @app.post("/llm/test")
     async def llm_test(request: Request) -> dict[str, Any]:

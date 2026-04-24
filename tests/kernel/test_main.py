@@ -93,6 +93,58 @@ class TestConfigEndpoint:
         assert data["server"]["port"] == 3005
 
 
+class TestConfigPatchEndpoint:
+    async def test_patch_voice_wake_word_only_updates_that_field(
+        self, client: AsyncClient
+    ) -> None:
+        resp = await client.patch("/config", json={"voice": {"wake_word": "kali"}})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["voice"]["wake_word"] == "kali"
+        assert data["voice"]["mode"] == "wake_word"
+        assert data["llm"]["cloud_provider"]
+
+    async def test_patch_persists_across_get(self, client: AsyncClient) -> None:
+        before = (await client.get("/config")).json()
+        assert before["voice"]["auto_start"] is False
+        await client.patch("/config", json={"voice": {"auto_start": True}})
+        after = (await client.get("/config")).json()
+        assert after["voice"]["auto_start"] is True
+
+    async def test_patch_rejects_invalid_type(self, client: AsyncClient) -> None:
+        resp = await client.patch(
+            "/config", json={"voice": {"vad_threshold": "not-a-number"}}
+        )
+        assert resp.status_code == 422
+
+    async def test_patch_rejects_null_top_level_section(
+        self, client: AsyncClient
+    ) -> None:
+        resp = await client.patch("/config", json={"voice": None})
+        assert resp.status_code == 422
+        assert "sections" in resp.json()
+
+    async def test_patch_rejects_non_object_body(self, client: AsyncClient) -> None:
+        resp = await client.patch("/config", json=[1, 2, 3])
+        assert resp.status_code == 400
+
+    async def test_patch_emits_config_changed_event(
+        self, app, client: AsyncClient
+    ) -> None:
+        received: list = []
+
+        async def capture(event) -> None:  # type: ignore[type-arg]
+            received.append(event)
+
+        app.state.event_bus.subscribe("config.changed", capture)
+
+        resp = await client.patch("/config", json={"voice": {"wake_word": "kali"}})
+        assert resp.status_code == 200
+
+        assert len(received) == 1
+        assert received[0].payload["sections"] == ["voice"]
+
+
 class TestNotificationsEndpoint:
     async def test_send_notification(self, client: AsyncClient) -> None:
         resp = await client.post(
