@@ -4,7 +4,7 @@ import { useAgentStore } from "../stores/agentStore";
 import { useDashboardStore } from "../stores/dashboardStore";
 import { useAppStore } from "../stores/appStore";
 import { api } from "./client";
-import { wsUrl } from "./runtime";
+import { rustWsUrl } from "./runtime";
 import type { WSMessage } from "./types";
 
 export function useWebSocket() {
@@ -29,7 +29,7 @@ export function useWebSocket() {
       });
 
     const connect = () => {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(rustWsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

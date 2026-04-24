@@ -4,6 +4,7 @@ declare global {
       apiBaseUrl?: string;
       rustApiBaseUrl?: string;
       wsUrl?: string;
+      rustWsUrl?: string;
     };
   }
 }
@@ -38,10 +39,25 @@ export const rustApiBaseUrl = trimTrailingSlash(
     "http://127.0.0.1:3006",
 );
 
+/**
+ * Legacy WebSocket URL (Python backend on :3005). Kept as a named export so
+ * runtime overrides can flip back in the field if Phase 2 needs to be
+ * rolled back without reinstalling — set
+ * `window.__KALI_CONFIG__.rustWsUrl = wsUrl` in the Tauri bootstrap.
+ */
 export const wsUrl =
   env.VITE_KALI_WS_URL ||
   runtimeConfig?.wsUrl ||
   `${httpToWebSocket(apiBaseUrl)}/ws`;
+
+/**
+ * Primary WebSocket URL after Phase 2 — points at the Rust backend on
+ * :3006. Python's /ws stays alive until Phase 8 as a rollback path.
+ */
+export const rustWsUrl =
+  env.VITE_KALI_RUST_WS_URL ||
+  runtimeConfig?.rustWsUrl ||
+  `${httpToWebSocket(rustApiBaseUrl)}/ws`;
 
 export function apiUrl(path: string): string {
   return `${apiBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
