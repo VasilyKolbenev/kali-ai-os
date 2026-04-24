@@ -16,6 +16,126 @@
 
 ---
 
+## Chunk 0: Test Infrastructure
+
+**What:** Install and configure Vitest + React Testing Library + jsdom. The UI project ships zero tests today and no test framework in `devDependencies` — Chunks 1-4 can't run their `npx vitest run` steps without this. One-time setup, then every subsequent chunk's test step works.
+
+### Files
+
+- Modify: `ui/package.json` — add devDeps + `test` / `test:watch` scripts
+- Create: `ui/vitest.config.ts`
+- Create: `ui/src/test/setup.ts`
+- Create: `ui/src/__tests__/smoke.test.ts`
+- Modify: `ui/tsconfig.json` — include vitest globals type
+
+### Tasks
+
+- [ ] **Step 1: Install dev dependencies**
+
+Run from project root:
+```bash
+cd ui && npm install -D vitest @vitest/ui @testing-library/react @testing-library/jest-dom @testing-library/user-event jsdom
+```
+
+Expected: packages installed, `ui/package.json` updated. `ui/package-lock.json` or `ui/pnpm-lock.yaml` regenerated — whichever exists.
+
+- [ ] **Step 2: Create `ui/vitest.config.ts`**
+
+```typescript
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.ts"],
+    css: true,
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+  },
+});
+```
+
+- [ ] **Step 3: Create `ui/src/test/setup.ts`**
+
+```typescript
+import "@testing-library/jest-dom/vitest";
+import { afterEach } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+// Unmount React trees between tests so DOM state doesn't leak.
+afterEach(() => {
+  cleanup();
+});
+```
+
+- [ ] **Step 4: Add test scripts to `ui/package.json`**
+
+In the `"scripts"` object, after `"preview"`, add:
+```json
+"test": "vitest run",
+"test:watch": "vitest",
+"test:ui": "vitest --ui"
+```
+
+- [ ] **Step 5: Update `ui/tsconfig.json` to include vitest types**
+
+In `compilerOptions.types` (create the array if absent), add `"vitest/globals"` and `"@testing-library/jest-dom"`. Example:
+```json
+{
+  "compilerOptions": {
+    "types": ["vitest/globals", "@testing-library/jest-dom"]
+  }
+}
+```
+
+Keep all other `tsconfig.json` settings untouched.
+
+- [ ] **Step 6: Create `ui/src/__tests__/smoke.test.ts`**
+
+```typescript
+import { describe, it, expect } from "vitest";
+
+describe("test infrastructure", () => {
+  it("runs vitest + jsdom", () => {
+    const div = document.createElement("div");
+    div.textContent = "hello";
+    expect(div.textContent).toBe("hello");
+  });
+
+  it("exposes matchers from jest-dom", () => {
+    document.body.innerHTML = '<button disabled>x</button>';
+    const btn = document.querySelector("button")!;
+    expect(btn).toBeDisabled();
+  });
+});
+```
+
+- [ ] **Step 7: Run the smoke test**
+
+Run: `cd ui && npm test -- src/__tests__/smoke.test.ts`
+Expected: 2 tests PASS.
+
+- [ ] **Step 8: Run tsc to confirm no type regressions**
+
+Run: `cd ui && npx tsc --noEmit`
+Expected: exit 0.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add ui/package.json ui/package-lock.json ui/pnpm-lock.yaml ui/vitest.config.ts ui/src/test/ ui/src/__tests__/ ui/tsconfig.json
+git commit -m "chore(ui): add vitest + testing-library + jsdom infrastructure
+
+Prerequisite for all UI unit tests. Smoke test verifies jsdom + jest-dom
+matchers work end-to-end. npm test / test:watch / test:ui scripts added."
+```
+
+(Only stage the lock file that actually exists — ignore the other.)
+
+---
+
 ## Chunk 1: Token System Expansion
 
 **What:** Extract the existing `--j-*` CSS vars from `ui/src/index.css` into a focused `ui/src/tokens/` directory with one file per concern (colours, typography, spacing, elevation, motion). Add missing tokens. Provide a TypeScript re-export for compile-time autocomplete. Ensure zero visual regressions — existing consumers continue to work via the same `var(--j-*)` names.
