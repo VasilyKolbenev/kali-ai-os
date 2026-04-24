@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save, Globe } from "lucide-react";
+import { Settings as SettingsIcon, Save } from "lucide-react";
 import { api } from "../../api/client";
 import { LlmSettings, type LlmSettingsValue } from "./sections/LlmSettings";
 import { AdvancedSettings } from "./sections/AdvancedSettings";
+import { HexFrame, HudDivider } from "../hud";
 
 interface SettingsData {
   llm: LlmSettingsValue;
@@ -79,37 +80,94 @@ export function Settings() {
     setSaving(false);
   };
 
-  if (error) return <div className="p-8 text-[var(--j-red)]">{error}</div>;
-  if (!settings) return <div className="p-8 text-white/30">Loading settings...</div>;
+  if (error) {
+    return (
+      <div style={{ padding: "var(--j-space-6)", color: "var(--j-danger)" }}>{error}</div>
+    );
+  }
+  if (!settings) {
+    return (
+      <div style={{ padding: "var(--j-space-6)", color: "var(--j-text-muted)" }}>
+        Loading settings...
+      </div>
+    );
+  }
+
+  const saveLabel = saving ? "Сохраняю..." : saved ? "Сохранено" : "Сохранить";
+  const saveColor = saved ? "var(--j-success)" : "var(--j-cyan)";
 
   return (
-    <div className="w-full h-full p-8 overflow-auto">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center gap-3 mb-6">
-          <SettingsIcon className="w-5 h-5 text-[var(--j-cyan)]" />
-          <h2 className="text-lg font-medium">Settings</h2>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        padding: "var(--j-space-6)",
+        overflow: "auto",
+      }}
+    >
+      <div style={{ maxWidth: "42rem", margin: "0 auto" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--j-space-3)",
+            marginBottom: "var(--j-space-5)",
+          }}
+        >
+          <SettingsIcon style={{ width: 18, height: 18, color: "var(--j-cyan)" }} />
+          <h2
+            style={{
+              fontFamily: "var(--j-font-mono)",
+              fontSize: "var(--j-text-lg)",
+              letterSpacing: "var(--j-tracking-hud)",
+              textTransform: "uppercase",
+              color: "var(--j-text)",
+            }}
+          >
+            Settings
+          </h2>
         </div>
 
-        <div className="glass p-4 mb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Globe className="w-4 h-4 text-[var(--j-cyan)]" />
-            <span className="text-sm font-medium">Language / Язык</span>
-          </div>
-          <div className="flex gap-2">
-            {LANGUAGES.map((l) => (
-              <button
-                key={l.id}
-                onClick={() => setSettings({ ...settings, language: l.id })}
-                className={`px-4 py-2 rounded text-xs transition ${
-                  (settings.language || "ru") === l.id
-                    ? "bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] border border-[var(--j-cyan)]/30"
-                    : "bg-white/5 text-white/40 border border-white/10"
-                }`}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
+        <div style={{ marginBottom: "var(--j-space-5)" }}>
+          <HudDivider label="ЯЗЫК" />
+          <div style={{ height: "var(--j-space-3)" }} />
+          <HexFrame>
+            <div
+              style={{
+                padding: "var(--j-space-4)",
+                display: "flex",
+                gap: "var(--j-space-2)",
+                flexWrap: "wrap",
+              }}
+            >
+              {LANGUAGES.map((l) => {
+                const selected = (settings.language || "ru") === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => setSettings({ ...settings, language: l.id })}
+                    style={{
+                      padding: "var(--j-space-2) var(--j-space-4)",
+                      borderRadius: "var(--j-radius-md)",
+                      background: selected
+                        ? "color-mix(in srgb, var(--j-cyan) 15%, transparent)"
+                        : "var(--j-surface)",
+                      border: `1px solid ${selected ? "var(--j-border-glow)" : "var(--j-border)"}`,
+                      color: selected ? "var(--j-cyan)" : "var(--j-text-dim)",
+                      fontFamily: "var(--j-font-mono)",
+                      fontSize: "var(--j-text-xs)",
+                      letterSpacing: "var(--j-tracking-wide)",
+                      textTransform: "uppercase",
+                      cursor: "pointer",
+                      transition: "all var(--j-duration-base) var(--j-ease-in-out)",
+                    }}
+                  >
+                    {l.label}
+                  </button>
+                );
+              })}
+            </div>
+          </HexFrame>
         </div>
 
         <LlmSettings
@@ -122,11 +180,30 @@ export function Settings() {
         <button
           onClick={save}
           disabled={saving}
-          className="w-full glass p-3 flex items-center justify-center gap-2 text-sm transition hover:bg-white/5"
-          style={{ color: saved ? "var(--j-green)" : "var(--j-cyan)" }}
+          style={{
+            width: "100%",
+            padding: "var(--j-space-3) var(--j-space-5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "var(--j-space-2)",
+            background: saved
+              ? "color-mix(in srgb, var(--j-success) 12%, transparent)"
+              : "color-mix(in srgb, var(--j-cyan) 12%, transparent)",
+            border: `1px solid ${saved ? "var(--j-success-glow)" : "var(--j-border-glow)"}`,
+            borderRadius: "var(--j-radius-md)",
+            color: saveColor,
+            fontFamily: "var(--j-font-mono)",
+            fontSize: "var(--j-text-sm)",
+            letterSpacing: "var(--j-tracking-wide)",
+            textTransform: "uppercase",
+            cursor: saving ? "wait" : "pointer",
+            opacity: saving ? 0.6 : 1,
+            transition: "all var(--j-duration-base) var(--j-ease-in-out)",
+          }}
         >
-          <Save className="w-4 h-4" />
-          {saving ? "Saving..." : saved ? "Saved!" : "Save Settings"}
+          <Save style={{ width: 16, height: 16 }} />
+          {saveLabel}
         </button>
       </div>
     </div>
