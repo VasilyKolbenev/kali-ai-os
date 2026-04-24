@@ -1,16 +1,18 @@
 import { useVoiceStore } from "../../stores/voiceStore";
 
 const STATE_COLORS: Record<string, { core: string; glow: string; speed: number }> = {
-  idle: { core: "#00d4ff", glow: "rgba(0, 212, 255, 0.3)", speed: 1 },
-  listening: { core: "#00d4ff", glow: "rgba(0, 212, 255, 0.5)", speed: 2.5 },
-  thinking: { core: "#ffb800", glow: "rgba(255, 184, 0, 0.4)", speed: 4 },
-  speaking: { core: "#00e676", glow: "rgba(0, 230, 118, 0.4)", speed: 1.5 },
-  // Pipeline on, idle: Jarvis is listening for wake-word in the background.
-  // Brighter glow + faster pulse than plain idle makes the "I'm awake" state visible.
-  idle_active: { core: "#00d4ff", glow: "rgba(0, 212, 255, 0.45)", speed: 1.6 },
-  // Pipeline off: Jarvis silent, mic closed. Subdued to signal "not listening".
-  offline: { core: "#4a5568", glow: "rgba(74, 85, 104, 0.2)", speed: 0.3 },
+  idle: { core: "var(--j-cyan)", glow: "var(--j-cyan-glow)", speed: 1 },
+  listening: { core: "var(--j-cyan)", glow: "var(--j-cyan-soft)", speed: 2.5 },
+  thinking: { core: "var(--j-amber)", glow: "var(--j-warning-glow)", speed: 4 },
+  speaking: { core: "var(--j-green)", glow: "var(--j-success-glow)", speed: 1.5 },
+  idle_active: { core: "var(--j-cyan)", glow: "var(--j-cyan-soft)", speed: 1.6 },
+  offline: { core: "var(--j-offline)", glow: "var(--j-offline-glow)", speed: 0.3 },
 };
+
+// Alpha composites. `${hex}22` pattern doesn't work with var(--j-cyan);
+// color-mix lets us keep all colours driven by tokens.
+const alpha = (token: string, percent: number): string =>
+  `color-mix(in srgb, ${token} ${percent}%, transparent)`;
 
 export function ArcReactor() {
   const voiceState = useVoiceStore((s) => s.state);
@@ -99,9 +101,9 @@ export function ArcReactor() {
       <div
         className="relative w-20 h-20 rounded-full flex items-center justify-center"
         style={{
-          background: `radial-gradient(circle, ${config.core}22 0%, transparent 70%)`,
+          background: `radial-gradient(circle, ${alpha(config.core, 13)} 0%, transparent 70%)`,
           boxShadow: `0 0 30px ${config.glow}, 0 0 60px ${config.glow}, inset 0 0 20px ${config.glow}`,
-          border: `2px solid ${config.core}55`,
+          border: `2px solid ${alpha(config.core, 33)}`,
           transition: "all 0.8s ease",
         }}
       >
@@ -109,7 +111,7 @@ export function ArcReactor() {
         <div
           className="w-8 h-8 rounded-full"
           style={{
-            background: `radial-gradient(circle, ${config.core} 0%, ${config.core}44 60%, transparent 100%)`,
+            background: `radial-gradient(circle, ${config.core} 0%, ${alpha(config.core, 27)} 60%, transparent 100%)`,
             boxShadow: `0 0 15px ${config.core}, 0 0 30px ${config.glow}`,
             transition: "all 0.5s ease",
             animation: isIdleActive
