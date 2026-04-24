@@ -1,7 +1,7 @@
-import { apiUrl } from "./runtime";
+import { resolveApiUrl } from "./endpoints";
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(path), {
+  const res = await fetch(resolveApiUrl(path), {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });

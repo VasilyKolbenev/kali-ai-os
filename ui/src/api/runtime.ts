@@ -2,6 +2,7 @@ declare global {
   interface Window {
     __KALI_CONFIG__?: {
       apiBaseUrl?: string;
+      rustApiBaseUrl?: string;
       wsUrl?: string;
     };
   }
@@ -30,6 +31,13 @@ export const apiBaseUrl = trimTrailingSlash(
     "http://127.0.0.1:3005",
 );
 
+export const rustApiBaseUrl = trimTrailingSlash(
+  env.VITE_KALI_RUST_API_BASE_URL ||
+    runtimeConfig?.rustApiBaseUrl ||
+    apiBaseUrl.replace(/:3005$/, ":3006") ||
+    "http://127.0.0.1:3006",
+);
+
 export const wsUrl =
   env.VITE_KALI_WS_URL ||
   runtimeConfig?.wsUrl ||
@@ -37,4 +45,8 @@ export const wsUrl =
 
 export function apiUrl(path: string): string {
   return `${apiBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+export function rustApiUrl(path: string): string {
+  return `${rustApiBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 }
