@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save, Globe } from "lucide-react";
 import { api } from "../../api/client";
 import { LlmSettings, type LlmSettingsValue } from "./sections/LlmSettings";
+import { AdvancedSettings } from "./sections/AdvancedSettings";
 
 interface SettingsData {
   llm: LlmSettingsValue;
@@ -115,6 +116,8 @@ export function Settings() {
           value={settings.llm}
           onChange={(next) => setSettings({ ...settings, llm: next })}
         />
+
+        <AdvancedSettings />
 
         <button
           onClick={save}

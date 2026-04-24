@@ -29,6 +29,7 @@ interface OnboardingState {
   advance: () => void;
   back: () => void;
   skip: () => void;
+  reset: () => void;
   setApiProvider: (provider: ApiProvider) => void;
   setApiKeyValid: (valid: boolean) => void;
   setMicPermission: (p: MicPermission) => void;
@@ -58,6 +59,15 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     if (idx > 0) set({ currentStep: STEP_ORDER[idx - 1] });
   },
   skip: () => set({ completed: true }),
+  reset: () =>
+    set({
+      currentStep: "welcome",
+      completed: false,
+      apiProvider: null,
+      apiKeyValid: false,
+      micPermission: "unknown",
+      firstAgentSession: null,
+    }),
   setApiProvider: (p) => set({ apiProvider: p }),
   setApiKeyValid: (v) => set({ apiKeyValid: v }),
   setMicPermission: (p) => set({ micPermission: p }),
