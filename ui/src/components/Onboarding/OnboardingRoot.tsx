@@ -3,6 +3,7 @@ import { WelcomeStep } from "./steps/WelcomeStep";
 import { ApiKeyStep } from "./steps/ApiKeyStep";
 import { MicTestStep } from "./steps/MicTestStep";
 import { FirstAgentStep } from "./steps/FirstAgentStep";
+import { LandingStep } from "./steps/LandingStep";
 
 export function OnboardingRoot() {
   const step = useOnboardingStore((s) => s.currentStep);
@@ -17,7 +18,7 @@ export function OnboardingRoot() {
       {step === "api-key" && <ApiKeyStep />}
       {step === "mic-test" && <MicTestStep />}
       {step === "first-agent" && <FirstAgentStep />}
-      {/* Chunk 6 adds landing */}
+      {step === "landing" && <LandingStep />}
     </div>
   );
 }
