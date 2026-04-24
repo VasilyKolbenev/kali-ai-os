@@ -241,11 +241,11 @@ export function ChatInput() {
                 style={{
                   background:
                     msg.role === "user"
-                      ? "rgba(0, 212, 255, 0.1)"
+                      ? "color-mix(in srgb, var(--j-cyan) 10%, transparent)"
                       : "var(--j-surface)",
                   border: `1px solid ${
                     msg.role === "user"
-                      ? "rgba(0, 212, 255, 0.2)"
+                      ? "color-mix(in srgb, var(--j-cyan) 20%, transparent)"
                       : "var(--j-border)"
                   }`,
                   color: "var(--j-text)",
@@ -275,13 +275,13 @@ export function ChatInput() {
           className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all flex-shrink-0"
           style={{
             background: listening
-              ? "rgba(255, 61, 87, 0.15)"
-              : "rgba(0, 212, 255, 0.08)",
+              ? "color-mix(in srgb, var(--j-red) 15%, transparent)"
+              : "color-mix(in srgb, var(--j-cyan) 8%, transparent)",
             color: listening ? "var(--j-red)" : "var(--j-cyan)",
             border: `1px solid ${
               listening
-                ? "rgba(255, 61, 87, 0.2)"
-                : "rgba(0, 212, 255, 0.15)"
+                ? "color-mix(in srgb, var(--j-red) 20%, transparent)"
+                : "var(--j-border-glow)"
             }`,
           }}
           title={listening ? "Stop listening" : "Start voice input"}
@@ -325,11 +325,11 @@ export function ChatInput() {
           className="w-9 h-9 rounded-xl flex items-center justify-center transition-all flex-shrink-0"
           style={{
             background: text.trim()
-              ? "rgba(0, 212, 255, 0.15)"
+              ? "var(--j-border-glow)"
               : "transparent",
             color: text.trim() ? "var(--j-cyan)" : "var(--j-text-muted)",
             border: `1px solid ${
-              text.trim() ? "rgba(0, 212, 255, 0.2)" : "transparent"
+              text.trim() ? "color-mix(in srgb, var(--j-cyan) 20%, transparent)" : "transparent"
             }`,
           }}
         >
