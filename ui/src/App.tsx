@@ -8,6 +8,7 @@ import { AgentStore } from "./components/AgentStore/AgentStore";
 import { SandboxActivity } from "./components/SandboxActivity/SandboxActivity";
 import { Settings } from "./components/Settings/Settings";
 import { BuilderPanel } from "./components/Builder/BuilderPanel";
+import { Showcase } from "./components/Showcase/Showcase";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
@@ -53,6 +54,7 @@ export default function App() {
           {mode === "activity" && <SandboxActivity />}
           {mode === "builder" && <BuilderPanel />}
           {mode === "settings" && <Settings />}
+          {mode === "showcase" && <Showcase />}
         </div>
       </main>
     </div>

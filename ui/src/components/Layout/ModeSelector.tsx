@@ -1,6 +1,6 @@
 import { useAppStore, type AppMode } from "../../stores/appStore";
 
-const modes: { id: AppMode; label: string; icon: string }[] = [
+const modes: { id: AppMode; label: string; icon: string; devOnly?: boolean }[] = [
   { id: "focus", label: "Focus", icon: "\u29BF" },
   { id: "dashboard", label: "Dash", icon: "\u25EB" },
   { id: "agents", label: "Agents", icon: "\u2B21" },
@@ -9,15 +9,17 @@ const modes: { id: AppMode; label: string; icon: string }[] = [
   { id: "activity", label: "Activity", icon: "\u25F0" },
   { id: "builder", label: "Builder", icon: "\u2756" },
   { id: "settings", label: "Settings", icon: "\u2699" },
+  { id: "showcase", label: "Showcase", icon: "\u25C8", devOnly: true },
 ];
 
 export function ModeSelector() {
   const current = useAppStore((s) => s.mode);
   const setMode = useAppStore((s) => s.setMode);
+  const visibleModes = modes.filter((m) => !m.devOnly || import.meta.env.DEV);
 
   return (
     <div className="flex flex-col gap-1.5">
-      {modes.map((m) => {
+      {visibleModes.map((m) => {
         const active = current === m.id;
         return (
           <button

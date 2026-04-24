@@ -8,7 +8,8 @@ export type AppMode =
   | "store"
   | "activity"
   | "builder"
-  | "settings";
+  | "settings"
+  | "showcase";
 
 interface AppState {
   mode: AppMode;
