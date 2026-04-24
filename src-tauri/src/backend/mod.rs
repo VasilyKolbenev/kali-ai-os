@@ -1,9 +1,13 @@
 pub mod config;
 pub mod error;
+pub mod event_bus;
 pub mod http;
+pub mod models;
 pub mod proxy;
+pub mod ws;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
@@ -15,7 +19,8 @@ use tracing::info;
 pub const RUST_BIND_ADDR: &str = "127.0.0.1:3006";
 
 pub async fn serve() -> anyhow::Result<()> {
-    let app = http::router()
+    let bus = Arc::new(event_bus::EventBus::new());
+    let app = http::router_with_bus(bus)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 

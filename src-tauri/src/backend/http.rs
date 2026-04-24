@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::Json as ExtractJson,
     http::StatusCode,
@@ -10,7 +12,9 @@ use serde_json::json;
 
 use crate::backend::config;
 use crate::backend::error::AppResult;
+use crate::backend::event_bus::EventBus;
 use crate::backend::proxy;
+use crate::backend::ws;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -76,10 +80,22 @@ pub async fn voice_status() -> AppResult<Json<serde_json::Value>> {
     Ok(Json(body))
 }
 
-pub fn router() -> Router {
+/// Build the router with a caller-supplied event bus. Phase 2 introduces
+/// `/ws`, which needs a handle to the bus for fan-out; it is mounted as
+/// stateful so the WS handler can `State<Arc<EventBus>>`.
+pub fn router_with_bus(bus: Arc<EventBus>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/version", get(version))
         .route("/config", get(get_config).patch(patch_config))
         .route("/voice/status", get(voice_status))
+        .route("/ws", get(ws::handler))
+        .with_state(bus)
+}
+
+/// Legacy constructor kept for tests that pre-date the event bus. Creates a
+/// fresh, unconnected bus per call — fine for contract tests that do not
+/// exercise `/ws`.
+pub fn router() -> Router {
+    router_with_bus(Arc::new(EventBus::new()))
 }
