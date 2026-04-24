@@ -1,6 +1,7 @@
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
 
+use crate::backend::config;
 use crate::backend::error::AppResult;
 
 #[derive(Serialize)]
@@ -33,8 +34,14 @@ pub async fn version() -> AppResult<Json<VersionResponse>> {
     }))
 }
 
+pub async fn get_config() -> AppResult<Json<config::AppConfig>> {
+    let cfg = config::load()?;
+    Ok(Json(cfg))
+}
+
 pub fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/version", get(version))
+        .route("/config", get(get_config))
 }
