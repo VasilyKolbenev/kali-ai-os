@@ -23,6 +23,11 @@ export const api = {
   }),
   config: () => fetchJSON<Record<string, unknown>>("/config"),
   voiceStatus: () => fetchJSON<import("./types").VoiceStatus>("/voice/status"),
+  testApiKey: (provider: string, apiKey: string) =>
+    fetchJSON<{ ok: boolean; error?: string }>("/llm/test", {
+      method: "POST",
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    }),
   voiceStart: () => fetchJSON<{ status: string }>("/voice/start", { method: "POST" }),
   voiceStop: () => fetchJSON<{ status: string }>("/voice/stop", { method: "POST" }),
 

@@ -505,6 +505,70 @@ def create_app(
     async def get_config(request: Request) -> dict[str, Any]:
         return request.app.state.config_manager.config.model_dump()
 
+    @app.post("/llm/test")
+    async def llm_test(request: Request) -> dict[str, Any]:
+        """Live validation of an API key for a provider.
+
+        Makes one minimal request to the provider's chat endpoint. Returns
+        {ok: True} on success, {ok: False, error: str} on failure.
+        Used by the onboarding flow to validate keys before persisting.
+        """
+        body = await request.json()
+        provider = (body.get("provider") or "").lower()
+        api_key = body.get("api_key")
+        if not provider or not api_key:
+            return {"ok": False, "error": "provider and api_key are required"}
+
+        try:
+            if provider == "openai":
+                import openai
+                client = openai.AsyncOpenAI(api_key=api_key)
+                resp = await client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                )
+                return {"ok": bool(resp.choices)}
+            if provider == "anthropic":
+                import anthropic
+                client = anthropic.AsyncAnthropic(api_key=api_key)
+                resp = await client.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                )
+                return {"ok": bool(resp.content)}
+            if provider == "google":
+                import httpx
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models"
+                    f"?key={api_key}"
+                )
+                async with httpx.AsyncClient(timeout=10.0) as http:
+                    r = await http.get(url)
+                    if r.status_code == 200:
+                        return {"ok": True}
+                    return {"ok": False, "error": f"HTTP {r.status_code}"}
+            if provider == "deepseek":
+                import httpx
+                async with httpx.AsyncClient(timeout=15.0) as http:
+                    r = await http.post(
+                        "https://api.deepseek.com/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={
+                            "model": "deepseek-chat",
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "max_tokens": 1,
+                        },
+                    )
+                    if r.status_code == 200:
+                        return {"ok": True}
+                    return {"ok": False, "error": f"HTTP {r.status_code}"}
+            return {"ok": False, "error": f"unknown provider: {provider}"}
+        except Exception as e:
+            logger.info("llm_test failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
     @app.get("/voice/status")
     async def voice_status(request: Request) -> dict[str, Any]:
         vp = request.app.state.voice_pipeline
