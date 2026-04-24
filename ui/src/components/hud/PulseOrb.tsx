@@ -29,6 +29,8 @@ export function PulseOrb({
 }: PulseOrbProps) {
   const reduce = usePrefersReducedMotion();
   const colors = active ? STATUS_COLORS[status] : { core: "var(--j-offline)", glow: "var(--j-offline-glow)" };
+  // Alpha-faded core via color-mix — var() can't be concatenated with hex suffix.
+  const coreMid = `color-mix(in srgb, ${colors.core} 27%, transparent)`;
   return (
     <span
       data-testid="pulse-orb"
@@ -40,7 +42,7 @@ export function PulseOrb({
         width: size,
         height: size,
         borderRadius: "50%",
-        background: `radial-gradient(circle, ${colors.core} 0%, ${colors.core}44 60%, transparent 100%)`,
+        background: `radial-gradient(circle, ${colors.core} 0%, ${coreMid} 60%, transparent 100%)`,
         boxShadow: active ? `0 0 ${size}px ${colors.glow}` : "none",
         animation: active && !reduce ? "pulse-orb 2s ease-in-out infinite" : "none",
       }}
