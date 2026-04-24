@@ -18,6 +18,23 @@ pub async fn health() -> AppResult<Json<HealthResponse>> {
     }))
 }
 
+#[derive(Serialize)]
+pub struct VersionResponse {
+    pub version: &'static str,
+    pub build_profile: &'static str,
+    pub commit: Option<&'static str>,
+}
+
+pub async fn version() -> AppResult<Json<VersionResponse>> {
+    Ok(Json(VersionResponse {
+        version: env!("CARGO_PKG_VERSION"),
+        build_profile: if cfg!(debug_assertions) { "debug" } else { "release" },
+        commit: option_env!("KALI_GIT_COMMIT"),
+    }))
+}
+
 pub fn router() -> Router {
-    Router::new().route("/health", get(health))
+    Router::new()
+        .route("/health", get(health))
+        .route("/version", get(version))
 }
