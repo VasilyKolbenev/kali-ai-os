@@ -13,6 +13,7 @@ use serde_json::json;
 use crate::backend::config;
 use crate::backend::error::AppResult;
 use crate::backend::event_bus::EventBus;
+use crate::backend::ingestion;
 use crate::backend::proxy;
 use crate::backend::ws;
 
@@ -90,6 +91,10 @@ pub fn router_with_bus(bus: Arc<EventBus>) -> Router {
         .route("/config", get(get_config).patch(patch_config))
         .route("/voice/status", get(voice_status))
         .route("/ws", get(ws::handler))
+        .route(
+            "/_internal/events",
+            axum::routing::post(ingestion::ingest),
+        )
         .with_state(bus)
 }
 

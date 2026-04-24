@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod event_bus;
 pub mod http;
+pub mod ingestion;
 pub mod models;
 pub mod proxy;
 pub mod ws;
@@ -29,8 +30,11 @@ pub async fn serve() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("bind {}", addr))?;
     info!("Rust backend listening on http://{}", addr);
-    axum::serve(listener, app)
-        .await
-        .context("axum server terminated unexpectedly")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("axum server terminated unexpectedly")?;
     Ok(())
 }

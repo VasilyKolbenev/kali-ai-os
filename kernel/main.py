@@ -404,6 +404,15 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
+        # Phase 2: forward relayed topics to the Rust backend on :3006 so it
+        # can fan out to UI WebSocket clients. Fire-and-forget — Rust being
+        # absent during dev does not affect Python behaviour.
+        from kernel.rust_bridge import RustEventBridge, subscribe_to_bus
+
+        rust_bridge = RustEventBridge()
+        subscribe_to_bus(rust_bridge, event_bus)
+        app.state.rust_bridge = rust_bridge
+
         # In frozen (PyInstaller) mode, patch AgentRuntime to use in-process
         # protocol instead of subprocess — prevents fork bomb from sys.executable.
         if hasattr(sys, "_MEIPASS"):
@@ -467,6 +476,7 @@ def create_app(
         await agent_runtime.shutdown_all()
         await scheduler.stop()
         await database.close()
+        await rust_bridge.close()
         logger.info("KALI kernel stopped")
 
     app = FastAPI(title="KALI Kernel", version=__version__, lifespan=lifespan)
