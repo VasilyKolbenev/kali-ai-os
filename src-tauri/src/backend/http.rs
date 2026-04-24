@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use crate::backend::config;
 use crate::backend::error::AppResult;
+use crate::backend::proxy;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -39,9 +40,15 @@ pub async fn get_config() -> AppResult<Json<config::AppConfig>> {
     Ok(Json(cfg))
 }
 
+pub async fn voice_status() -> AppResult<Json<serde_json::Value>> {
+    let body = proxy::proxy_get_json("/voice/status").await?;
+    Ok(Json(body))
+}
+
 pub fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/version", get(version))
         .route("/config", get(get_config))
+        .route("/voice/status", get(voice_status))
 }
