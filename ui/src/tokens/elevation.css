@@ -1,0 +1,8 @@
+:root {
+  --j-elev-0: none;
+  --j-elev-1: 0 0 12px var(--j-cyan-glow);
+  --j-elev-2: 0 0 24px var(--j-cyan-glow), 0 0 48px rgba(0, 212, 255, 0.06);
+  --j-elev-3: 0 0 32px var(--j-cyan-soft), 0 0 80px var(--j-cyan-glow);
+
+  --j-elev-inset: inset 0 0 20px var(--j-cyan-wash);
+}

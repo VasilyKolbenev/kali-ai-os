@@ -1,0 +1,21 @@
+:root {
+  /* 4px base grid */
+  --j-space-0: 0;
+  --j-space-1: 0.25rem;
+  --j-space-2: 0.5rem;
+  --j-space-3: 0.75rem;
+  --j-space-4: 1rem;
+  --j-space-5: 1.5rem;
+  --j-space-6: 2rem;
+  --j-space-8: 3rem;
+  --j-space-12: 5rem;
+
+  --j-radius-sm: 4px;
+  --j-radius-md: 8px;
+  --j-radius-lg: 16px;
+  --j-radius-xl: 24px;
+  --j-radius-full: 9999px;
+
+  /* Hex-clip corner offset for HexFrame */
+  --j-hex-corner: 14px;
+}

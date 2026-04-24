@@ -1,0 +1,24 @@
+:root {
+  --j-duration-fast: 150ms;
+  --j-duration-base: 300ms;
+  --j-duration-slow: 600ms;
+
+  --j-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --j-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --j-ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --j-duration-fast: 0ms;
+    --j-duration-base: 0ms;
+    --j-duration-slow: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,24 +1,10 @@
 @import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
-
-:root {
-  --j-bg: #050508;
-  --j-surface: rgba(255, 255, 255, 0.03);
-  --j-surface-hover: rgba(255, 255, 255, 0.06);
-  --j-border: rgba(255, 255, 255, 0.06);
-  --j-border-glow: rgba(0, 212, 255, 0.15);
-  --j-cyan: #00d4ff;
-  --j-cyan-dim: rgba(0, 212, 255, 0.6);
-  --j-cyan-glow: rgba(0, 212, 255, 0.12);
-  --j-amber: #ffb800;
-  --j-green: #00e676;
-  --j-red: #ff3d57;
-  --j-text: #e8eaed;
-  --j-text-dim: rgba(255, 255, 255, 0.4);
-  --j-text-muted: rgba(255, 255, 255, 0.2);
-  --j-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
-  --j-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-}
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/elevation.css";
+@import "./tokens/motion.css";
 
 * { box-sizing: border-box; }
 

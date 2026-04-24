@@ -1,0 +1,21 @@
+:root {
+  --j-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --j-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+  /* Modular scale — 1.25 ratio from 14px body */
+  --j-text-xs: 0.72rem;
+  --j-text-sm: 0.875rem;
+  --j-text-base: 1rem;
+  --j-text-lg: 1.25rem;
+  --j-text-xl: 1.563rem;
+  --j-text-2xl: 1.953rem;
+
+  --j-leading-tight: 1.2;
+  --j-leading-normal: 1.5;
+  --j-leading-relaxed: 1.75;
+
+  --j-tracking-tight: -0.01em;
+  --j-tracking-normal: 0;
+  --j-tracking-wide: 0.05em;
+  --j-tracking-hud: 0.15em;
+}

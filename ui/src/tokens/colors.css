@@ -1,0 +1,34 @@
+:root {
+  /* Existing — copied verbatim from ui/src/index.css */
+  --j-bg: #050508;
+  --j-surface: rgba(255, 255, 255, 0.03);
+  --j-surface-hover: rgba(255, 255, 255, 0.06);
+  --j-border: rgba(255, 255, 255, 0.06);
+  --j-border-glow: rgba(0, 212, 255, 0.15);
+  --j-cyan: #00d4ff;
+  --j-cyan-dim: rgba(0, 212, 255, 0.6);
+  --j-cyan-glow: rgba(0, 212, 255, 0.12);
+  --j-amber: #ffb800;
+  --j-green: #00e676;
+  --j-red: #ff3d57;
+  --j-text: #e8eaed;
+  --j-text-dim: rgba(255, 255, 255, 0.4);
+  --j-text-muted: rgba(255, 255, 255, 0.2);
+
+  /* Semantic cyan tiers */
+  --j-cyan-strong: rgba(0, 212, 255, 0.85);
+  --j-cyan-soft: rgba(0, 212, 255, 0.35);
+  --j-cyan-wash: rgba(0, 212, 255, 0.05);
+
+  /* Status tiers */
+  --j-success: var(--j-green);
+  --j-success-glow: rgba(0, 230, 118, 0.25);
+  --j-warning: var(--j-amber);
+  --j-warning-glow: rgba(255, 184, 0, 0.25);
+  --j-danger: var(--j-red);
+  --j-danger-glow: rgba(255, 61, 87, 0.25);
+
+  /* Offline / disabled (matches ArcReactor.tsx offline config) */
+  --j-offline: #4a5568;
+  --j-offline-glow: rgba(74, 85, 104, 0.2);
+}
