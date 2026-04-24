@@ -27,7 +27,7 @@
       "tooltip": "KALI — Personal AI OS"
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:3005 http://127.0.0.1:3005 ws://localhost:3005 ws://127.0.0.1:3005; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:3005 http://127.0.0.1:3005"
+      "csp": "default-src 'self'; connect-src 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:3005 http://127.0.0.1:3005 ws://localhost:3005 ws://127.0.0.1:3005 http://localhost:3006 http://127.0.0.1:3006 ws://localhost:3006 ws://127.0.0.1:3006; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:3005 http://127.0.0.1:3005 http://localhost:3006 http://127.0.0.1:3006"
     }
   },
   "bundle": {
