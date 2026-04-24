@@ -1,6 +1,6 @@
 """Tests for voice pipeline orchestrator."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -90,3 +90,110 @@ class TestVoicePipeline:
 
         assert len(received) == 1
         assert received[0].payload["text"] == "hello jarvis"
+
+
+class TestAntiEcho:
+    """Verify TTS playback does not leak into the microphone input path."""
+
+    async def test_speak_stops_recorder_during_playback(
+        self, pipeline: VoicePipeline, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Simulate active recording before _speak is called
+        pipeline._recorder._recording = True
+        stop_mock = AsyncMock()
+        start_mock = AsyncMock()
+        pipeline._recorder.stop = stop_mock
+        pipeline._recorder.start = start_mock
+
+        # Stub TTS to return a tiny non-empty audio buffer
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.tts_router.generate_audio",
+            lambda _text: (np.zeros(100, dtype=np.float32), 16000),
+        )
+        # Stub playback so tests don't touch real audio hardware
+        monkeypatch.setattr("kernel.voice.pipeline._play_audio", lambda _a, _sr: None)
+        # Skip the 500ms real sleep
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.asyncio.sleep", AsyncMock(return_value=None)
+        )
+
+        await pipeline._speak("test")
+
+        stop_mock.assert_awaited_once()
+        start_mock.assert_awaited_once()
+
+    async def test_speak_resets_detectors_and_buffer(
+        self, pipeline: VoicePipeline, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pre-populate buffer + counters as if some audio was being accumulated
+        pipeline._audio_buffer = [np.zeros(256, dtype=np.float32)]
+        pipeline._silence_count = 5
+        pipeline._speech_active = True
+        pipeline._wake_word.reset = MagicMock()
+        pipeline._vad.reset = MagicMock()
+
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.tts_router.generate_audio",
+            lambda _text: (np.zeros(100, dtype=np.float32), 16000),
+        )
+        monkeypatch.setattr("kernel.voice.pipeline._play_audio", lambda _a, _sr: None)
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.asyncio.sleep", AsyncMock(return_value=None)
+        )
+
+        await pipeline._speak("hello")
+
+        assert pipeline._audio_buffer == []
+        assert pipeline._silence_count == 0
+        assert pipeline._speech_active is False
+        pipeline._wake_word.reset.assert_called_once()
+        pipeline._vad.reset.assert_called_once()
+
+    async def test_speak_transitions_through_speaking_to_idle(
+        self, pipeline: VoicePipeline, monkeypatch: pytest.MonkeyPatch, event_bus: EventBus
+    ) -> None:
+        states_seen: list[str] = []
+
+        async def handler(event):
+            states_seen.append(event.payload["state"])
+
+        event_bus.subscribe("voice.state", handler)
+
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.tts_router.generate_audio",
+            lambda _text: (np.zeros(100, dtype=np.float32), 16000),
+        )
+        monkeypatch.setattr("kernel.voice.pipeline._play_audio", lambda _a, _sr: None)
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.asyncio.sleep", AsyncMock(return_value=None)
+        )
+
+        await pipeline._speak("hi")
+
+        # Must have passed through SPEAKING and ended on IDLE
+        assert "speaking" in states_seen
+        assert pipeline.state == PipelineState.IDLE
+
+    async def test_speak_does_not_restart_recorder_if_was_stopped(
+        self, pipeline: VoicePipeline, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Recorder NOT active — _speak must not spuriously start it
+        pipeline._recorder._recording = False
+        stop_mock = AsyncMock()
+        start_mock = AsyncMock()
+        pipeline._recorder.stop = stop_mock
+        pipeline._recorder.start = start_mock
+
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.tts_router.generate_audio",
+            lambda _text: (np.zeros(100, dtype=np.float32), 16000),
+        )
+        monkeypatch.setattr("kernel.voice.pipeline._play_audio", lambda _a, _sr: None)
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.asyncio.sleep", AsyncMock(return_value=None)
+        )
+
+        await pipeline._speak("test")
+
+        stop_mock.assert_not_awaited()
+        start_mock.assert_not_awaited()

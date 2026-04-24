@@ -387,32 +387,41 @@ class VoicePipeline:
         self._context.append({"role": "assistant", "content": response.text})
 
         if response.text:
-            await self._set_state(PipelineState.SPEAKING)
-            # Anti-echo: stop mic while speaking to avoid self-recording
-            await self._recorder.stop()
-            try:
-                audio, sr = await asyncio.to_thread(
-                    tts_router.generate_audio, response.text
-                )
-                if len(audio) > 0:
-                    await asyncio.to_thread(_play_audio, audio, sr)
-            except Exception:
-                logger.exception("TTS playback failed")
-            finally:
-                # 500ms buffer — lets speaker audio fully drain before mic resumes.
-                # Without this, STT picks up room echo of JARVIS's own voice.
-                await asyncio.sleep(0.5)
-                await self._recorder.start()
-                self._wake_word.reset()
-                self._vad.reset()
+            await self._play_tts_with_guard(response.text)
 
         await self._set_state(PipelineState.IDLE)
 
     async def _speak(self, text: str) -> None:
         """Synthesize and play text through the active TTS provider."""
+        await self._play_tts_with_guard(text)
+
+    async def _play_tts_with_guard(self, text: str) -> None:
+        """Play TTS through speakers with microphone anti-echo protection.
+
+        Stops the recorder for the duration of playback, then resumes after a
+        short drain buffer. Resets wake-word, VAD, and the pipeline audio
+        buffer so residual echo cannot trigger a false wake or be treated as
+        new speech. Always returns the pipeline to IDLE on completion.
+        """
+        was_recording = self._recorder.is_recording
+        await self._set_state(PipelineState.SPEAKING)
+        if was_recording:
+            await self._recorder.stop()
         try:
             audio, sr = await asyncio.to_thread(tts_router.generate_audio, text)
             if len(audio) > 0:
                 await asyncio.to_thread(_play_audio, audio, sr)
         except Exception:
-            logger.exception("TTS speak failed")
+            logger.exception("TTS playback failed")
+        finally:
+            # 500ms buffer — lets speaker audio fully drain before mic resumes.
+            # Without this, STT picks up room echo of JARVIS's own voice.
+            await asyncio.sleep(0.5)
+            if was_recording:
+                await self._recorder.start()
+            self._wake_word.reset()
+            self._vad.reset()
+            self._audio_buffer.clear()
+            self._silence_count = 0
+            self._speech_active = False
+            await self._set_state(PipelineState.IDLE)
