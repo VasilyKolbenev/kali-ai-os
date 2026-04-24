@@ -99,3 +99,9 @@ body {
 .status-online {
   animation: status-pulse 2s ease-in-out infinite;
 }
+
+/* Pulse orb (HUD primitive) — consumed by components/hud/PulseOrb.tsx */
+@keyframes pulse-orb {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
