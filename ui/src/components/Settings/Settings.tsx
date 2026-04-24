@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save } from "lucide-react";
 import { api } from "../../api/client";
 import { LlmSettings, type LlmSettingsValue } from "./sections/LlmSettings";
+import { VoiceSettings } from "./sections/VoiceSettings";
 import { AdvancedSettings } from "./sections/AdvancedSettings";
 import { HexFrame, HudDivider } from "../hud";
 
@@ -174,6 +175,8 @@ export function Settings() {
           value={settings.llm}
           onChange={(next) => setSettings({ ...settings, llm: next })}
         />
+
+        <VoiceSettings />
 
         <AdvancedSettings />
 

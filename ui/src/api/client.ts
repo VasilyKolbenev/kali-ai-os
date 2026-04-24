@@ -1,13 +1,21 @@
-import { resolveApiUrl } from "./endpoints";
+import { resolveApiUrl, type HttpMethod } from "./endpoints";
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(resolveApiUrl(path), {
+  const method = ((options?.method ?? "GET").toUpperCase()) as HttpMethod;
+  const res = await fetch(resolveApiUrl(path, method), {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
   return res.json();
 }
+
+type Primitive = string | number | boolean | null;
+type DeepPartial<T> = T extends Primitive
+  ? T
+  : T extends Array<infer U>
+    ? Array<DeepPartial<U>>
+    : { [K in keyof T]?: DeepPartial<T[K]> };
 
 export const api = {
   health: () => fetchJSON<import("./types").HealthResponse>("/health"),
@@ -22,6 +30,11 @@ export const api = {
     body: JSON.stringify({ text }),
   }),
   config: () => fetchJSON<Record<string, unknown>>("/config"),
+  updateConfig: (patch: DeepPartial<Record<string, unknown>>) =>
+    fetchJSON<Record<string, unknown>>("/config", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   voiceStatus: () => fetchJSON<import("./types").VoiceStatus>("/voice/status"),
   testApiKey: (provider: string, apiKey: string) =>
     fetchJSON<{ ok: boolean; error?: string }>("/llm/test", {

@@ -1,14 +1,27 @@
 import { apiUrl, rustApiUrl } from "./runtime";
 
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface RustRoute {
+  method: HttpMethod;
+  path: string;
+}
+
 /**
- * Paths served by the Rust backend on port 3006.
- * Grows as endpoints migrate from Python. Everything else goes to 3005.
+ * Method+path pairs served by the Rust backend on port 3006.
+ * Each entry declares which HTTP method on which path is handled by
+ * Rust. Everything else goes to Python on 3005. Rust may either serve
+ * a route natively (GET /health, GET /config) or proxy to Python
+ * (GET /voice/status, PATCH /config).
+ *
+ * Grows as endpoints migrate from Python.
  */
-export const RUST_ENDPOINTS: readonly string[] = [
-  "/health",
-  "/version",
-  "/config",
-  "/voice/status",
+export const RUST_ENDPOINTS: readonly RustRoute[] = [
+  { method: "GET", path: "/health" },
+  { method: "GET", path: "/version" },
+  { method: "GET", path: "/config" },
+  { method: "PATCH", path: "/config" },
+  { method: "GET", path: "/voice/status" },
 ] as const;
 
 function pathOf(input: string): string {
@@ -18,6 +31,10 @@ function pathOf(input: string): string {
   return path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
 }
 
-export function resolveApiUrl(path: string): string {
-  return RUST_ENDPOINTS.includes(pathOf(path)) ? rustApiUrl(path) : apiUrl(path);
+export function resolveApiUrl(path: string, method: HttpMethod = "GET"): string {
+  const resolved = pathOf(path);
+  const inRust = RUST_ENDPOINTS.some(
+    (e) => e.method === method && e.path === resolved,
+  );
+  return inRust ? rustApiUrl(path) : apiUrl(path);
 }
