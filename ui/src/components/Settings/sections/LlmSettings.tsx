@@ -1,4 +1,9 @@
-import { Key, Cpu } from "lucide-react";
+import { useState } from "react";
+import { Cpu } from "lucide-react";
+import { api } from "../../../api/client";
+import { SecretField } from "../SecretField";
+
+type CheckStatus = "unknown" | "checking" | "valid" | "invalid";
 
 export interface LlmSettingsValue {
   provider: string;
@@ -48,40 +53,40 @@ const DEEPSEEK_MODELS = [
 
 function ProviderBlock({
   label,
-  keyField,
+  providerId,
   keyValue,
   modelField,
   modelValue,
   models,
   placeholder,
+  status,
   onKeyChange,
   onModelChange,
+  onTest,
 }: {
   label: string;
-  keyField: string;
+  providerId: string;
   keyValue: string;
   modelField: string;
   modelValue: string;
   models: string[];
   placeholder: string;
+  status: CheckStatus;
   onKeyChange: (v: string) => void;
   onModelChange: (v: string) => void;
+  onTest: () => void;
 }) {
   return (
     <div className="space-y-3">
       <div>
         <label className="text-xs text-white/40 block mb-1">{label} API Key</label>
-        <div className="flex gap-2">
-          <Key className="w-4 h-4 text-white/20 mt-2" />
-          <input
-            type="password"
-            value={keyValue}
-            onChange={(e) => onKeyChange(e.target.value)}
-            placeholder={placeholder}
-            data-field={keyField}
-            className="flex-1 bg-white/5 rounded px-3 py-2 text-sm outline-none placeholder:text-white/20 focus:bg-white/10 font-mono"
-          />
-        </div>
+        <SecretField
+          value={keyValue}
+          onChange={onKeyChange}
+          placeholder={placeholder}
+          onTest={onTest}
+          status={status}
+        />
       </div>
       <div>
         <label className="text-xs text-white/40 block mb-1">{label} Model</label>
@@ -90,6 +95,7 @@ function ProviderBlock({
             <button
               key={m}
               data-field={modelField}
+              data-provider={providerId}
               onClick={() => onModelChange(m)}
               className={`px-3 py-1.5 rounded text-xs transition ${
                 modelValue === m
@@ -108,6 +114,24 @@ function ProviderBlock({
 
 export function LlmSettings({ value, onChange }: LlmSettingsProps) {
   const patch = (partial: Partial<LlmSettingsValue>) => onChange({ ...value, ...partial });
+
+  const [statuses, setStatuses] = useState<Record<string, CheckStatus>>({
+    openai: "unknown",
+    anthropic: "unknown",
+    google: "unknown",
+    deepseek: "unknown",
+  });
+
+  async function testKey(provider: string, key: string) {
+    if (!key) return;
+    setStatuses((s) => ({ ...s, [provider]: "checking" }));
+    try {
+      const res = await api.testApiKey(provider, key);
+      setStatuses((s) => ({ ...s, [provider]: res.ok ? "valid" : "invalid" }));
+    } catch {
+      setStatuses((s) => ({ ...s, [provider]: "invalid" }));
+    }
+  }
 
   return (
     <div className="glass p-4 mb-4">
@@ -133,52 +157,72 @@ export function LlmSettings({ value, onChange }: LlmSettingsProps) {
 
       <ProviderBlock
         label="OpenAI"
-        keyField="openai_key"
+        providerId="openai"
         keyValue={value.openai_key}
         modelField="openai_model"
         modelValue={value.openai_model}
         models={OPENAI_MODELS}
         placeholder="sk-..."
-        onKeyChange={(v) => patch({ openai_key: v })}
+        status={statuses.openai}
+        onKeyChange={(v) => {
+          patch({ openai_key: v });
+          setStatuses((s) => ({ ...s, openai: "unknown" }));
+        }}
         onModelChange={(v) => patch({ openai_model: v })}
+        onTest={() => testKey("openai", value.openai_key)}
       />
       <div className="mt-4 pt-4 border-t border-white/5">
         <ProviderBlock
           label="Anthropic"
-          keyField="anthropic_key"
+          providerId="anthropic"
           keyValue={value.anthropic_key}
           modelField="anthropic_model"
           modelValue={value.anthropic_model}
           models={ANTHROPIC_MODELS}
           placeholder="sk-ant-..."
-          onKeyChange={(v) => patch({ anthropic_key: v })}
+          status={statuses.anthropic}
+          onKeyChange={(v) => {
+            patch({ anthropic_key: v });
+            setStatuses((s) => ({ ...s, anthropic: "unknown" }));
+          }}
           onModelChange={(v) => patch({ anthropic_model: v })}
+          onTest={() => testKey("anthropic", value.anthropic_key)}
         />
       </div>
       <div className="mt-4 pt-4 border-t border-white/5">
         <ProviderBlock
           label="Google"
-          keyField="google_key"
+          providerId="google"
           keyValue={value.google_key}
           modelField="google_model"
           modelValue={value.google_model}
           models={GOOGLE_MODELS}
           placeholder="AIza..."
-          onKeyChange={(v) => patch({ google_key: v })}
+          status={statuses.google}
+          onKeyChange={(v) => {
+            patch({ google_key: v });
+            setStatuses((s) => ({ ...s, google: "unknown" }));
+          }}
           onModelChange={(v) => patch({ google_model: v })}
+          onTest={() => testKey("google", value.google_key)}
         />
       </div>
       <div className="mt-4 pt-4 border-t border-white/5">
         <ProviderBlock
           label="DeepSeek"
-          keyField="deepseek_key"
+          providerId="deepseek"
           keyValue={value.deepseek_key}
           modelField="deepseek_model"
           modelValue={value.deepseek_model}
           models={DEEPSEEK_MODELS}
           placeholder="sk-..."
-          onKeyChange={(v) => patch({ deepseek_key: v })}
+          status={statuses.deepseek}
+          onKeyChange={(v) => {
+            patch({ deepseek_key: v });
+            setStatuses((s) => ({ ...s, deepseek: "unknown" }));
+          }}
           onModelChange={(v) => patch({ deepseek_model: v })}
+          onTest={() => testKey("deepseek", value.deepseek_key)}
         />
       </div>
     </div>
