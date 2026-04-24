@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::Json as ExtractJson,
+    extract::{Json as ExtractJson, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -22,13 +22,19 @@ pub struct HealthResponse {
     pub status: &'static str,
     pub version: &'static str,
     pub backend: &'static str,
+    /// Number of WebSocket clients currently subscribed to the broadcast
+    /// bus. Useful signal that the UI is actually connected to Rust — zero
+    /// with a running app means the UI is misconfigured or Phase 2 has
+    /// been rolled back via `rustWsUrl`.
+    pub ws_subscribers: usize,
 }
 
-pub async fn health() -> AppResult<Json<HealthResponse>> {
+pub async fn health(State(bus): State<Arc<EventBus>>) -> AppResult<Json<HealthResponse>> {
     Ok(Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
         backend: "rust",
+        ws_subscribers: bus.subscriber_count(),
     }))
 }
 

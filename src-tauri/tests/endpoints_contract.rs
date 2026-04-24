@@ -50,7 +50,8 @@ async fn health_shape_subset() {
             return;
         }
     };
-    assert_rust_keys_subset_of_python(&rust, &py, &["backend"]);
+    // `backend` and `ws_subscribers` are Rust-only (Phase 0/2 additions).
+    assert_rust_keys_subset_of_python(&rust, &py, &["backend", "ws_subscribers"]);
 }
 
 #[tokio::test]

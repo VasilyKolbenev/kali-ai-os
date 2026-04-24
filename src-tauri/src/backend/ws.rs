@@ -10,16 +10,22 @@
 //! matches Python's "no backfill on slow subscriber" semantics.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 
 use crate::backend::event_bus::EventBus;
 use crate::backend::models::{Event, WsMessage};
+
+/// Monotonic per-process connection id so every WS subscriber can be
+/// followed through the logs. Wraps at u64::MAX which never happens in
+/// practice.
+static SUB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub async fn handler(
     ws: WebSocketUpgrade,
@@ -29,6 +35,12 @@ pub async fn handler(
 }
 
 async fn handle_socket(socket: WebSocket, bus: Arc<EventBus>) {
+    let sub_id = SUB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let span = tracing::info_span!("ws_client", sub_id = sub_id);
+    handle_socket_inner(socket, bus).instrument(span).await
+}
+
+async fn handle_socket_inner(socket: WebSocket, bus: Arc<EventBus>) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = bus.subscribe();
     info!(subscribers = bus.subscriber_count(), "WS client connected");
