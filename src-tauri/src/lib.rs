@@ -196,12 +196,30 @@ fn stop_backend(app: &AppHandle) {
 }
 
 pub fn run() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "kali_desktop=info,tower_http=info".into()),
+        )
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app| {
             start_backend(app.handle());
+
+            // Phase 0: start Rust axum server on 127.0.0.1:3006 alongside Python
+            std::thread::spawn(|| {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build tokio runtime");
+                if let Err(err) = rt.block_on(backend::serve()) {
+                    eprintln!("Rust backend exited: {:#}", err);
+                }
+            });
 
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
             app.global_shortcut().on_shortcut(
