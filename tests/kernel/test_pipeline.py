@@ -197,3 +197,44 @@ class TestAntiEcho:
 
         stop_mock.assert_not_awaited()
         start_mock.assert_not_awaited()
+
+
+class TestPipelineLifecycleEvents:
+    """UI needs `voice.pipeline` events to differentiate offline vs listening."""
+
+    async def test_start_publishes_pipeline_active_true(
+        self, pipeline: VoicePipeline, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        received = []
+
+        async def handler(event):
+            received.append(event.payload)
+
+        event_bus.subscribe("voice.pipeline", handler)
+
+        # Avoid touching real mic / spawning the background loop
+        pipeline._recorder.start = AsyncMock()
+        monkeypatch.setattr(
+            "kernel.voice.pipeline.asyncio.create_task", lambda _coro: None
+        )
+
+        await pipeline.start()
+
+        assert any(p["active"] is True for p in received)
+
+    async def test_stop_publishes_pipeline_active_false(
+        self, pipeline: VoicePipeline, event_bus: EventBus
+    ) -> None:
+        received = []
+
+        async def handler(event):
+            received.append(event.payload)
+
+        event_bus.subscribe("voice.pipeline", handler)
+
+        pipeline._recorder.stop = AsyncMock()
+        pipeline._started = True
+
+        await pipeline.stop()
+
+        assert any(p["active"] is False for p in received)

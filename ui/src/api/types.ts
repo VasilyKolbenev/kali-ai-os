@@ -2,6 +2,7 @@ export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 
 export type WSMessage =
   | { type: "voice.state"; data: { state: VoiceState } }
+  | { type: "voice.pipeline"; data: { active: boolean; mode: string } }
   | { type: "voice.transcript"; data: { text: string; final: boolean } }
   | { type: "agent.response"; data: { agent: string; text: string; data?: unknown } }
   | { type: "agent.status"; data: { agents: AgentStatus[] } }

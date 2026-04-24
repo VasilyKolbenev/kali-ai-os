@@ -157,6 +157,7 @@ class VoicePipeline:
         self._started = True
         await self._recorder.start()
         await self._set_state(PipelineState.IDLE)
+        await self._publish_pipeline_status(active=True)
         logger.info("Voice pipeline started (mode=%s)", self.mode)
         asyncio.create_task(self._main_loop())
 
@@ -166,7 +167,22 @@ class VoicePipeline:
         await self._recorder.stop()
         self._reset_wake_state()
         await self._set_state(PipelineState.IDLE)
+        await self._publish_pipeline_status(active=False)
         logger.info("Voice pipeline stopped")
+
+    async def _publish_pipeline_status(self, *, active: bool) -> None:
+        """Notify subscribers that the background listening state changed.
+
+        The UI uses this to differentiate "pipeline off" (Jarvis silent) from
+        "pipeline on, idle" (Jarvis listening for wake-word in the background).
+        """
+        await self._bus.publish(
+            Event(
+                topic="voice.pipeline",
+                source="voice-pipeline",
+                payload={"active": active, "mode": self.mode},
+            )
+        )
 
     def _reset_wake_state(self) -> None:
         """Reset wake word and listening state."""

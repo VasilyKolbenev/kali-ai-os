@@ -5,11 +5,25 @@ const STATE_COLORS: Record<string, { core: string; glow: string; speed: number }
   listening: { core: "#00d4ff", glow: "rgba(0, 212, 255, 0.5)", speed: 2.5 },
   thinking: { core: "#ffb800", glow: "rgba(255, 184, 0, 0.4)", speed: 4 },
   speaking: { core: "#00e676", glow: "rgba(0, 230, 118, 0.4)", speed: 1.5 },
+  // Pipeline on, idle: Jarvis is listening for wake-word in the background.
+  // Brighter glow + faster pulse than plain idle makes the "I'm awake" state visible.
+  idle_active: { core: "#00d4ff", glow: "rgba(0, 212, 255, 0.45)", speed: 1.6 },
+  // Pipeline off: Jarvis silent, mic closed. Subdued to signal "not listening".
+  offline: { core: "#4a5568", glow: "rgba(74, 85, 104, 0.2)", speed: 0.3 },
 };
 
 export function ArcReactor() {
   const voiceState = useVoiceStore((s) => s.state);
-  const config = STATE_COLORS[voiceState] ?? STATE_COLORS.idle;
+  const pipelineActive = useVoiceStore((s) => s.pipelineActive);
+  // Derive visual key: explicit offline > active idle > raw state
+  const visualKey =
+    !pipelineActive
+      ? "offline"
+      : voiceState === "idle"
+        ? "idle_active"
+        : voiceState;
+  const config = STATE_COLORS[visualKey] ?? STATE_COLORS.idle;
+  const isIdleActive = visualKey === "idle_active";
 
   return (
     <div className="relative w-72 h-72 flex items-center justify-center">
@@ -20,6 +34,7 @@ export function ArcReactor() {
           background: `radial-gradient(circle, ${config.glow} 0%, transparent 70%)`,
           filter: "blur(30px)",
           transition: "all 0.8s ease",
+          animation: isIdleActive ? "listen-breath 3s ease-in-out infinite" : "none",
         }}
       />
 
@@ -97,7 +112,9 @@ export function ArcReactor() {
             background: `radial-gradient(circle, ${config.core} 0%, ${config.core}44 60%, transparent 100%)`,
             boxShadow: `0 0 15px ${config.core}, 0 0 30px ${config.glow}`,
             transition: "all 0.5s ease",
-            animation: voiceState === "idle" ? "breathe-core 4s ease-in-out infinite" : "none",
+            animation: isIdleActive
+              ? "breathe-core 2.4s ease-in-out infinite"
+              : "none",
           }}
         />
       </div>
@@ -131,6 +148,10 @@ export function ArcReactor() {
         @keyframes breathe-core {
           0%, 100% { transform: scale(1); opacity: 0.8; }
           50% { transform: scale(1.1); opacity: 1; }
+        }
+        @keyframes listen-breath {
+          0%, 100% { opacity: 0.7; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.06); }
         }
       `}</style>
     </div>

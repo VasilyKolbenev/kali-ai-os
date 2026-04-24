@@ -9,7 +9,7 @@ voice:
   stt_model: "base"
   tts_voice: "default"
   vad_threshold: 0.5
-  auto_start: false                   # If true: pipeline starts with app. Otherwise on-demand.
+  auto_start: true                    # If true: pipeline starts with app, Jarvis listens for wake-word in background. Otherwise on-demand.
 
 llm:
   cloud_provider: "openai"            # "anthropic" or "openai"
