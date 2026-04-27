@@ -5,6 +5,7 @@ pub mod http;
 pub mod ingestion;
 pub mod models;
 pub mod proxy;
+pub mod voice;
 pub mod ws;
 
 use std::net::SocketAddr;
