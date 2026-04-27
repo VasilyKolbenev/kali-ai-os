@@ -24,6 +24,10 @@ reqwest = { version = "0.12", features = ["json"] }
 futures-util = { version = "0.3", features = ["sink"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+
+[features]
+ml-tests = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

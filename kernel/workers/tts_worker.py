@@ -20,25 +20,74 @@ This is the Phase 3 Chunk 1 shell — only `ping` is wired. Chunk 2 adds
 full protocol spec.
 """
 
+import base64
 import json
+import os
 import sys
 import traceback
 from typing import Any
 
+# F5-TTS, tqdm, huggingface_hub, and friends spew progress to FD 1
+# (stdout). The bridge protocol needs FD 1 to be JSON-only — a single
+# rogue progress bar without a trailing `\n` can fill the pipe buffer
+# and deadlock both processes (the Rust BufReader waits for `\n`, Python
+# blocks on `write`). Solution: dup FD 1 once at startup and reroute the
+# original FD 1 to FD 2 (stderr). Python's `sys.stdout` and any C-level
+# `write(1, ...)` from ML libraries now land on stderr — inherited by
+# Rust and captured by `tracing` / the test harness. The JSON bridge
+# writes directly to the saved FD via `os.write` so it bypasses
+# `sys.stdout` entirely.
+_BRIDGE_FD = os.dup(1)
+os.dup2(2, 1)
+
 
 def _emit(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    os.write(_BRIDGE_FD, line.encode("utf-8"))
 
 
 def _log(level: str, message: str) -> None:
     _emit({"log": {"level": level, "message": message}})
 
 
+_F5_LOADED = False
+
+
+def _ensure_f5() -> None:
+    """Lazy-load F5-TTS on first tts_speak. ~30-60s warm-up on cold GPU."""
+    global _F5_LOADED
+    if _F5_LOADED:
+        return
+    from kernel.voice import tts_engine_f5
+
+    tts_engine_f5.load_models()
+    _F5_LOADED = True
+    _log("info", "F5-TTS Russian loaded")
+
+
+def _handle_tts_speak(args: dict[str, Any]) -> dict[str, Any]:
+    """text → ruaccent → F5-TTS → base64 f32 LE waveform."""
+    from kernel.voice import text_preprocessor, tts_engine_f5
+
+    text = args["text"]
+    accented = text_preprocessor.preprocess(text)
+    _ensure_f5()
+    waveform, sample_rate = tts_engine_f5.generate_audio(accented)
+    audio_bytes = waveform.astype("float32").tobytes()
+    return {
+        "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
+        "sample_rate": int(sample_rate),
+        "duration_ms": int(len(waveform) / sample_rate * 1000),
+    }
+
+
 def _handle(req: dict[str, Any]) -> dict[str, Any]:
     op = req.get("op")
+    args = req.get("args") or {}
     if op == "ping":
         return {"pong": True}
+    if op == "tts_speak":
+        return _handle_tts_speak(args)
     raise ValueError(f"unknown op: {op!r}")
 
 
