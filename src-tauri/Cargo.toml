@@ -25,6 +25,14 @@ futures-util = { version = "0.3", features = ["sink"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
+# ort 2.x — ONNX Runtime Rust bindings. Default features include
+# `download-binaries` which fetches the prebuilt ORT runtime at build
+# time (~10 MB), so no system install or manual DLL placement needed.
+ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
+# Pin to the same ndarray major as `ort` uses internally — passing
+# arrays across the crate boundary requires identical versions
+# (cargo treats different majors as different types).
+ndarray = "0.17"
 
 [features]
 ml-tests = []
