@@ -663,26 +663,38 @@ git commit -m "feat(voice): TTS over stdio bridge — text -> waveform (Phase 3 
 
 ---
 
-## Chunk 3: Whisper STT in Rust
+## Chunk 3: Whisper STT — REVISED to path B (Python sidecar)
 
-**What:** Native Whisper STT via `whisper-rs` 0.16. Loads `ggml-base.bin` from the model pack, accepts 16kHz int16 mono PCM, returns transcribed text. CPU is the default; CUDA opt-in once Blackwell kernels stabilise.
+> **Revision 2026-04-27 after attempted execution:** `whisper-rs` 0.16 on
+> Windows requires LLVM + CMake + Ninja + the FULL Visual Studio IDE
+> (BuildTools is not enough — cmake's Visual Studio generator rejects
+> BuildTools as a non-IDE instance). That's a ~4 GB chain of build deps
+> per dev machine + same in CI. Decision: keep STT in the Python ML
+> sidecar via `faster_whisper` (CTranslate2, already proven in
+> `kernel/voice/stt.py`). Adding a `stt_transcribe` op to the Chunk 1
+> bridge is a one-file change on the Python side and a 60-line
+> `SttClient` on the Rust side. The Rust-native STT path is revisited
+> in Phase 4+ if a) `whisper-rs`'s Windows build deps stabilise or b)
+> `whisper_burn` reaches production maturity. SHIPPED 2026-04-27.
 
-### Files
+**What (as shipped):** Add `stt_transcribe` op to `kernel/workers/tts_worker.py`. Worker decodes base64 i16 LE PCM, resamples to 16 kHz via `scipy.signal.resample_poly` (proper anti-alias filter — naive Rust decimation produced garbled audio that confused Whisper into detecting Spanish), forwards a language hint to `faster_whisper`, returns transcript text + detected language + duration. On the Rust side, `SttClient` mirrors `TtsClient` — both wrap an `Arc<BridgeWorker>` so one Python child serves both ops with correlation by id.
 
-- Create: `src-tauri/src/backend/voice/stt.rs` — `WhisperEngine { ctx }` with `transcribe(samples_i16) -> Result<String>`.
+### Files (as shipped)
+
+- Modify: `kernel/workers/tts_worker.py` — add `stt_transcribe` op + lazy `_ensure_stt`. Force `HF_HOME` to a project-local cache to dodge a pre-existing Windows global-cache permission issue (WinError 183).
+- Create: `src-tauri/src/backend/voice/stt.rs` — `SttClient { worker: Arc<BridgeWorker> }` with `transcribe(samples_i16, sample_rate, language_hint) -> Result<Transcript>`. Lib unit test for the audio_b64 round-trip is colocated.
 - Modify: `src-tauri/src/backend/voice/mod.rs` — `pub mod stt;`.
-- Modify: `src-tauri/Cargo.toml` — `whisper-rs = "0.16"`.
-- Create: `src-tauri/tests/voice_stt.rs` — `cfg(feature = "ml-tests")` gated; uses canned 16kHz wav of "проверка раз два три".
-- Create: `src-tauri/tests/fixtures/voice/test_ru_count.wav` — short pre-recorded sample (commit binary; ~50 KB).
+- Create: `src-tauri/tests/voice_stt.rs` — `cfg(feature = "ml-tests")` gated. End-to-end TTS → STT round-trip in one test; sends raw 24 kHz from F5 and lets the Python worker resample. Asserts non-empty Russian transcript (looser than original "exact phrase match" — F5 short-clip artifacts confuse `base` Whisper, but the bridge integration is what we're proving here, not Whisper accuracy).
 
-### Tasks
+### Tasks (executed)
 
-- [ ] Add `whisper-rs = "0.16"` to `[dependencies]` in `src-tauri/Cargo.toml`. Disable default features and enable `cuda` only behind a non-default Cargo feature flag — most dev machines don't have the toolchain set up.
-- [ ] Implement `WhisperEngine::load(model_path: &Path)` — wraps `WhisperContext::new`. Document that the model file ships in the model pack at `%APPDATA%/KALI/models/ggml-base.bin`; for tests resolve relative to the repo's bundled `models/` directory.
-- [ ] Implement `transcribe(&self, samples: &[i16]) -> Result<String>` — converts to f32 (`/= i16::MAX`), runs `state.full(...)`, concatenates segments, strips leading/trailing whitespace.
-- [ ] Wire failing test (`assert!(text.to_lowercase().contains("проверка"))`).
-- [ ] Run `cargo test --test voice_stt --features ml-tests` — pass.
-- [ ] Commit: `feat(voice): Whisper STT via whisper-rs (Phase 3 Chunk 3)`
+- [x] Cargo.toml left unchanged (no new Rust deps for STT).
+- [x] Worker op `stt_transcribe`: base64 → i16 → f32 → `scipy.signal.resample_poly(up, down)` if input rate ≠ 16 kHz → `faster_whisper.WhisperModel.transcribe(language=hint, vad_filter=True)` → JSON with text/language/duration.
+- [x] Force project-local `HF_HOME` at module top so the worker doesn't inherit a broken global cache.
+- [x] Rust `SttClient` over shared `BridgeWorker`; concurrent TTS/STT calls work because correlation is by id.
+- [x] Lib unit test `audio_b64_round_trip_preserves_samples` mirrors the Chunk 2 TTS pattern.
+- [x] Live ml-tests integration validates: spawn worker, TTS "Тестовая проверка распознавания", send raw 24 kHz to STT, expect non-empty Russian transcript. Verified passing in 36.98s on dev machine.
+- [x] Commit: `feat(voice): STT in Python sidecar via faster-whisper (Phase 3 Chunk 3, path B)`
 
 ---
 

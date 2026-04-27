@@ -25,7 +25,19 @@ import json
 import os
 import sys
 import traceback
+from pathlib import Path
 from typing import Any
+
+# Force HF_HOME to a project-local cache BEFORE any HF-using import
+# (faster-whisper, huggingface_hub, transformers). The user's global
+# cache at C:\Users\<u>\.cache\huggingface\ has had permission issues
+# on this dev box (WinError 183 / Permission denied on `refs/main`),
+# leaving the Whisper model in a half-downloaded state. A project-local
+# cache sidesteps the broken global one and is writable per-user.
+_HF_CACHE = (Path(__file__).resolve().parent.parent.parent / ".hf_cache")
+_HF_CACHE.mkdir(parents=True, exist_ok=True)
+os.environ["HF_HOME"] = str(_HF_CACHE)
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 # F5-TTS, tqdm, huggingface_hub, and friends spew progress to FD 1
 # (stdout). The bridge protocol needs FD 1 to be JSON-only — a single
@@ -51,6 +63,7 @@ def _log(level: str, message: str) -> None:
 
 
 _F5_LOADED = False
+_STT: Any = None
 
 
 def _ensure_f5() -> None:
@@ -63,6 +76,26 @@ def _ensure_f5() -> None:
     tts_engine_f5.load_models()
     _F5_LOADED = True
     _log("info", "F5-TTS Russian loaded")
+
+
+def _ensure_stt() -> Any:
+    """Lazy-load Whisper (faster-whisper) on first stt_transcribe.
+
+    `base` model on RTX-class GPU loads in ~3-5s. Falls back to CPU if
+    CUDA isn't available; `kernel/voice/stt.py::SpeechToText` handles the
+    detection.
+    """
+    global _STT
+    if _STT is not None:
+        return _STT
+    from kernel.voice.stt import SpeechToText
+
+    _STT = SpeechToText(model_size="base", device="auto")
+    _STT.load()
+    if not _STT.is_loaded:
+        raise RuntimeError("Whisper failed to load — see kernel.voice.stt logs")
+    _log("info", "Whisper STT loaded")
+    return _STT
 
 
 def _handle_tts_speak(args: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +114,65 @@ def _handle_tts_speak(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _handle_stt_transcribe(args: dict[str, Any]) -> dict[str, Any]:
+    """base64 i16 LE PCM → (resample to 16 kHz if needed) → faster-whisper.
+
+    faster-whisper expects 16 kHz mono. We accept any input sample rate
+    and resample server-side using `scipy.signal.resample_poly` (proper
+    anti-alias filter — naive decimation in Rust produces aliasing that
+    fools Whisper into detecting the wrong language).
+    """
+    import numpy as np
+    from scipy.signal import resample_poly
+
+    audio_b64 = args["audio_b64"]
+    sample_rate = int(args.get("sample_rate", 16000))
+    language = args.get("language")  # ISO 639-1 hint, e.g. "ru"; None to auto-detect
+    raw = base64.b64decode(audio_b64)
+    if len(raw) % 2 != 0:
+        raise ValueError(f"audio_b64 length {len(raw)} not divisible by 2 (expected i16 LE)")
+    samples_i16 = np.frombuffer(raw, dtype="<i2")
+    audio_f32 = samples_i16.astype(np.float32) / 32768.0
+
+    target_sr = 16000
+    if sample_rate != target_sr:
+        from math import gcd
+
+        g = gcd(sample_rate, target_sr)
+        up = target_sr // g
+        down = sample_rate // g
+        audio_f32 = resample_poly(audio_f32, up, down).astype(np.float32)
+
+    stt = _ensure_stt()
+    # Forward the language hint so faster-whisper skips its language
+    # detection step. kernel.voice.stt.SpeechToText.transcribe doesn't
+    # currently expose `language` — we call the underlying model
+    # directly via _model. Falls back to its default behaviour if the
+    # private attribute is missing.
+    if language and stt._model is not None:
+        import time
+        t0 = time.perf_counter()
+        segments, info = stt._model.transcribe(
+            audio_f32,
+            beam_size=5,
+            language=language,
+            vad_filter=True,
+        )
+        text = " ".join(s.text.strip() for s in segments).strip()
+        return {
+            "text": text,
+            "language": info.language,
+            "duration_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
+    result = stt.transcribe(audio_f32, sample_rate=target_sr)
+    return {
+        "text": result.text,
+        "language": result.language,
+        "duration_ms": result.duration_ms,
+    }
+
+
 def _handle(req: dict[str, Any]) -> dict[str, Any]:
     op = req.get("op")
     args = req.get("args") or {}
@@ -88,6 +180,8 @@ def _handle(req: dict[str, Any]) -> dict[str, Any]:
         return {"pong": True}
     if op == "tts_speak":
         return _handle_tts_speak(args)
+    if op == "stt_transcribe":
+        return _handle_stt_transcribe(args)
     raise ValueError(f"unknown op: {op!r}")
 
 
