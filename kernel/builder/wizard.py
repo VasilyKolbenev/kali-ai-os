@@ -44,15 +44,11 @@ class WizardSession:
             "type": self.intent.type,
             "template": self.intent.template,
         }
-        # Map answers to config based on question index
         config: dict[str, Any] = {}
         for i, (q, a) in enumerate(zip(self.questions, self.answers)):
-            if "часто" in q or "interval" in q.lower():
-                config["interval"] = a
-            elif "цел" in q or "goal" in q.lower():
-                config["goal"] = a
-            elif "уведом" in q or "notify" in q.lower() or "куда" in q:
-                config["notify_channel"] = a
+            key = _question_to_key(q)
+            if key:
+                config[key] = a
             else:
                 config[f"param_{i}"] = a
         spec["config"] = config

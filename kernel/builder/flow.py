@@ -182,8 +182,17 @@ class BuilderFlow:
         logger.info("BuilderFlow cancelled: sid=%s", session_id)
 
     def _build_spec(self, session: BuilderSession) -> dict[str, Any]:
-        """Materialise a skill spec from session answers (mirrors WizardSession.build_spec)."""
-        name = re.sub(r"[^\w\s-]", "", session.request.lower()).strip()
+        """Materialise a skill spec from session answers (uses shared helper)."""
+        from kernel.builder.wizard import _question_to_key
+
+        # Prefer LLM-extracted name_hint when present (set by /builder/extract);
+        # fall back to slugify-of-request for the existing text-pilot path.
+        name_source = (
+            session.name_hint
+            if getattr(session, "name_hint", None)
+            else session.request
+        )
+        name = re.sub(r"[^\w\s-]", "", name_source.lower()).strip()
         name = re.sub(r"[\s_]+", "-", name)[:40].strip("-")
         if not name:
             raise ValueError(
@@ -191,12 +200,9 @@ class BuilderFlow:
             )
         config: dict[str, Any] = {}
         for i, (q, a) in enumerate(zip(session.questions, session.answers)):
-            if "часто" in q or "interval" in q.lower():
-                config["interval"] = a
-            elif "цел" in q or "goal" in q.lower():
-                config["goal"] = a
-            elif "уведом" in q or "куда" in q:
-                config["notify_channel"] = a
+            key = _question_to_key(q)
+            if key:
+                config[key] = a
             else:
                 config[f"param_{i}"] = a
         return {
