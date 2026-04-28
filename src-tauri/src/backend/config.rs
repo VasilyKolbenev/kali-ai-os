@@ -41,6 +41,34 @@ pub struct VoiceConfig {
     pub tts_voice: String,
     pub vad_threshold: f32,
     pub auto_start: bool,
+    // Phase 3 Chunk 7 — pipeline state-machine knobs. Rust-side only;
+    // Python pipeline does not consume these (engine="rust" path).
+    // All fields are `#[serde(default = ...)]` so old kali.yaml files
+    // load without modification.
+    #[serde(default = "default_wake_threshold")]
+    pub wake_threshold: f32,
+    #[serde(default = "default_wake_listen_timeout_secs")]
+    pub wake_listen_timeout_secs: f32,
+    #[serde(default = "default_silence_chunks_to_end")]
+    pub silence_chunks_to_end: u32,
+    #[serde(default = "default_min_speech_chunks")]
+    pub min_speech_chunks: u32,
+}
+
+fn default_wake_threshold() -> f32 {
+    0.5
+}
+
+fn default_wake_listen_timeout_secs() -> f32 {
+    3.0
+}
+
+fn default_silence_chunks_to_end() -> u32 {
+    30
+}
+
+fn default_min_speech_chunks() -> u32 {
+    5
 }
 
 impl Default for VoiceConfig {
@@ -52,6 +80,10 @@ impl Default for VoiceConfig {
             tts_voice: "default".to_string(),
             vad_threshold: 0.5,
             auto_start: false,
+            wake_threshold: default_wake_threshold(),
+            wake_listen_timeout_secs: default_wake_listen_timeout_secs(),
+            silence_chunks_to_end: default_silence_chunks_to_end(),
+            min_speech_chunks: default_min_speech_chunks(),
         }
     }
 }

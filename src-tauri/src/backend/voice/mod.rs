@@ -8,8 +8,10 @@
 
 pub mod bridge;
 pub mod mute;
+pub mod pipeline;
 pub mod playback;
 pub mod recorder;
+pub mod state;
 pub mod stt;
 pub mod tts;
 pub mod vad;
