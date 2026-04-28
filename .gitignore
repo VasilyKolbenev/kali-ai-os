@@ -48,6 +48,9 @@ Jarvis Sound Pack*/
 !resources/sounds/**/*.mp3
 !resources/sounds/**/*.wav
 
+# Brainstorm visual companion (mockups + .events files)
+.superpowers/
+
 # IDE
 .idea/
 .vscode/
