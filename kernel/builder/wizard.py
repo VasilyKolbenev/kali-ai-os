@@ -123,3 +123,34 @@ def _slugify(text: str) -> str:
     text = re.sub(r"[\s_]+", "-", text)
     text = re.sub(r"-+", "-", text)
     return text[:40].strip("-")
+
+
+def _question_to_key(question: str) -> str:
+    """Map a wizard question text to the config key its answer populates.
+
+    Lowercases the question once so substring needles are case-insensitive
+    (wizard questions start with capitalised words like "Куда" / "Какая").
+
+    Order matters: `trigger` is checked BEFORE `notify_channel` because the
+    notifier question "При каком условии уведомлять?" contains both "услов"
+    and "уведом"; tighter / earlier matches win.
+
+    Returns "" for unrecognised questions so they fall into the param_N
+    bucket downstream (matching the historical `_build_spec` behaviour).
+    """
+    q = question.lower()
+    if "часто" in q or "interval" in q:
+        return "interval"
+    elif "цел" in q or "goal" in q:
+        return "goal"
+    elif "услов" in q or "trigger" in q:
+        return "trigger"
+    elif "уведом" in q or "notify" in q or "куда" in q:
+        return "notify_channel"
+    elif "url" in q or "сервис" in q:
+        return "target"
+    elif "событ" in q or "категор" in q:
+        return "categories"
+    elif "врем" in q or "time" in q:
+        return "time_window"
+    return ""
