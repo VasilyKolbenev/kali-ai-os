@@ -33,9 +33,21 @@ ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
 # arrays across the crate boundary requires identical versions
 # (cargo treats different majors as different types).
 ndarray = "0.17"
+# cpal — de-facto Rust audio I/O. Used by `recorder.rs` (16 kHz mono i16
+# input). Plan called for 0.16 but latest stable on 2026-04-28 is 0.17;
+# minor bump, no API breakage in our usage.
+cpal = "0.17"
+# rodio — built on cpal, used by `playback.rs` (TTS waveforms +
+# jarvis_sounds/*.wav). Default features include WAV via symphonia which
+# we want; leaving MP3/FLAC/Vorbis on for forward-compat with future
+# bundled audio assets.
+rodio = "0.22"
 
 [features]
 ml-tests = []
+# Manual playback verification (1 s 440 Hz tone) — listen-only test, no
+# programmatic assertion of audibility. Off by default.
+audio-tests = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -7,6 +7,9 @@
 //! Python child process spoken to via [`bridge::BridgeWorker`].
 
 pub mod bridge;
+pub mod mute;
+pub mod playback;
+pub mod recorder;
 pub mod stt;
 pub mod tts;
 pub mod vad;
