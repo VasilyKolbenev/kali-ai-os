@@ -15,6 +15,7 @@ use crate::backend::error::AppResult;
 use crate::backend::event_bus::EventBus;
 use crate::backend::ingestion;
 use crate::backend::proxy;
+use crate::backend::skills::registry::SkillsRegistry;
 use crate::backend::voice::pipeline::Pipeline;
 use crate::backend::ws;
 
@@ -22,6 +23,11 @@ use crate::backend::ws;
 /// `/voice/start`, `/voice/stop`, `/voice/status` serve natively; when
 /// `None` (the `engine: python` path), they proxy to Python.
 pub type PipelineHandle = Option<Arc<Pipeline>>;
+
+/// Optional handle to the local skills registry. When present,
+/// `/skills/installed` serves natively from the in-memory index;
+/// when `None`, the route proxies to Python.
+pub type SkillsRegistryHandle = Option<Arc<SkillsRegistry>>;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -173,6 +179,37 @@ pub async fn voice_stop(Extension(pipeline): Extension<PipelineHandle>) -> Respo
     proxy_voice("/voice/stop").await
 }
 
+/// `engine: rust` → answer from the in-memory skills registry.
+/// `engine: python` (no Extension) → proxy to Python's `/skills/installed`.
+/// Response shape mirrors Python — `{"results": [...], "count": N}`.
+pub async fn skills_installed(
+    Extension(registry): Extension<SkillsRegistryHandle>,
+) -> Response {
+    if let Some(reg) = registry {
+        let manifests = reg.list_all();
+        let count = manifests.len();
+        let results: Vec<serde_json::Value> = manifests.iter().map(|m| m.to_json()).collect();
+        return (
+            StatusCode::OK,
+            Json(json!({ "results": results, "count": count })),
+        )
+            .into_response();
+    }
+    match proxy::proxy_get_json("/skills/installed").await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": err.to_string(),
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// Common POST proxy for `/voice/start` and `/voice/stop`. Forwards an
 /// empty JSON body — the Python endpoints don't require parameters,
 /// and keeping the wire shape identical means the UI doesn't have to
@@ -197,12 +234,14 @@ async fn proxy_voice(path: &str) -> Response {
     }
 }
 
-/// Build the router with caller-supplied bus and pipeline handle. The
-/// pipeline is `None` on the `engine: python` path; when present, the
-/// `/voice/*` routes serve natively. Bus is passed via `State`,
-/// pipeline via `Extension` — keeps the existing `State<Arc<EventBus>>`
-/// extractor on `/health`, `/ws` etc. unchanged.
-pub fn router_with_bus_and_pipeline(bus: Arc<EventBus>, pipeline: PipelineHandle) -> Router {
+/// Full constructor — every backend handle in one call. Tests + serve()
+/// converge on this; the older 1- and 2-arg constructors below are
+/// thin wrappers that pass `None` for the handles they don't care about.
+pub fn router_full(
+    bus: Arc<EventBus>,
+    pipeline: PipelineHandle,
+    skills: SkillsRegistryHandle,
+) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/version", get(version))
@@ -210,25 +249,33 @@ pub fn router_with_bus_and_pipeline(bus: Arc<EventBus>, pipeline: PipelineHandle
         .route("/voice/status", get(voice_status))
         .route("/voice/start", post(voice_start))
         .route("/voice/stop", post(voice_stop))
+        .route("/skills/installed", get(skills_installed))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",
             axum::routing::post(ingestion::ingest),
         )
         .layer(Extension(pipeline))
+        .layer(Extension(skills))
         .with_state(bus)
+}
+
+/// Backwards-compatible constructor — bus + pipeline only, skills
+/// handle defaults to `None` (skills routes proxy to Python).
+pub fn router_with_bus_and_pipeline(bus: Arc<EventBus>, pipeline: PipelineHandle) -> Router {
+    router_full(bus, pipeline, None)
 }
 
 /// Backwards-compatible constructor for tests that pre-date the
 /// pipeline extension. Equivalent to passing `None` for the pipeline,
-/// i.e. all `/voice/*` traffic proxies to Python.
+/// i.e. all `/voice/*` and `/skills/*` native routes proxy to Python.
 pub fn router_with_bus(bus: Arc<EventBus>) -> Router {
-    router_with_bus_and_pipeline(bus, None)
+    router_full(bus, None, None)
 }
 
 /// Legacy constructor kept for tests that pre-date the event bus.
 /// Creates a fresh, unconnected bus per call — fine for contract tests
-/// that do not exercise `/ws`. No native pipeline.
+/// that do not exercise `/ws`. No native pipeline, no native skills.
 pub fn router() -> Router {
     router_with_bus(Arc::new(EventBus::new()))
 }

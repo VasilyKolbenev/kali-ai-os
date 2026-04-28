@@ -5,6 +5,7 @@ pub mod http;
 pub mod ingestion;
 pub mod models;
 pub mod proxy;
+pub mod skills;
 pub mod voice;
 pub mod ws;
 
@@ -18,6 +19,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
+use crate::backend::skills::registry::{default_sources, SkillsRegistry};
 use crate::backend::voice::pipeline::{Pipeline, PipelineDeps};
 
 /// Bind address for the Phase 0 Rust backend. Python backend remains on 3005.
@@ -41,7 +43,8 @@ pub async fn serve() -> anyhow::Result<()> {
         }
     };
 
-    let app = http::router_with_bus_and_pipeline(bus, pipeline)
+    let skills = build_skills_registry();
+    let app = http::router_full(bus, pipeline, skills)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
@@ -57,6 +60,27 @@ pub async fn serve() -> anyhow::Result<()> {
     .await
     .context("axum server terminated unexpectedly")?;
     Ok(())
+}
+
+/// Construct the local skills registry from the default source list
+/// (user + builtin). Failure is non-fatal: log and degrade to `None`
+/// so `/skills/installed` falls back to the Python proxy. The local
+/// registry is purely a performance + Phase 8 prerequisite — the
+/// proxy path keeps working as a safety net.
+fn build_skills_registry() -> http::SkillsRegistryHandle {
+    let sources = match default_sources() {
+        Ok(s) => s,
+        Err(err) => {
+            warn!(?err, "skills registry: failed to resolve sources, proxy fallback");
+            return None;
+        }
+    };
+    let registry = SkillsRegistry::new(sources);
+    if let Err(err) = registry.discover() {
+        warn!(?err, "skills registry: initial discovery failed, proxy fallback");
+        return None;
+    }
+    Some(Arc::new(registry))
 }
 
 /// Construct the Rust-native voice pipeline iff `voice.engine == "rust"`.
