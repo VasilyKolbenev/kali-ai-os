@@ -14,3 +14,4 @@ pub mod cache;
 pub mod catalog;
 pub mod loader;
 pub mod registry;
+pub mod validator;

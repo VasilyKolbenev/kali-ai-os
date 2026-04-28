@@ -27,6 +27,7 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   { method: "GET", path: "/skills/installed" },
   { method: "POST", path: "/skills/install" },
   { method: "POST", path: "/skills/uninstall" },
+  { method: "POST", path: "/skills/validate" },
   { method: "GET", path: "/skills/catalog/sources" },
   { method: "GET", path: "/skills/catalog" },
   { method: "POST", path: "/skills/catalog/refresh" },

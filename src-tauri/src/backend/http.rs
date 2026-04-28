@@ -185,6 +185,55 @@ pub async fn voice_stop(Extension(pipeline): Extension<PipelineHandle>) -> Respo
     proxy_voice("/voice/stop").await
 }
 
+/// `POST /skills/validate` — body `{"name": "<skill>"}`. Native iff
+/// the registry is `Some` and finds the skill; else proxy to Python.
+/// Response shape: `{status, skill_name, valid, errors, warnings}`.
+pub async fn skills_validate(
+    Extension(registry): Extension<SkillsRegistryHandle>,
+    ExtractJson(body): ExtractJson<serde_json::Value>,
+) -> Response {
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if name.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(json!({ "status": "error", "message": "name is required" })),
+        )
+            .into_response();
+    }
+    if let Some(reg) = registry {
+        let manifest = match reg.get(name) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "error",
+                        "message": format!("Skill '{name}' not found locally"),
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let result = crate::backend::skills::validator::validate_skill(&manifest.skill_dir);
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "status": if result.errors.is_empty() { "ok" } else { "invalid" },
+                "skill_name": name,
+                "valid": result.valid,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            })),
+        )
+            .into_response();
+    }
+    proxy_post_with_body("/skills/validate", &json!({ "name": name })).await
+}
+
 /// `engine: rust` → answer from the in-memory skills registry.
 /// `engine: python` (no Extension) → proxy to Python's `/skills/installed`.
 /// Response shape mirrors Python — `{"results": [...], "count": N}`.
@@ -450,6 +499,7 @@ pub fn router_full(
         .route("/skills/installed", get(skills_installed))
         .route("/skills/install", post(skills_install))
         .route("/skills/uninstall", post(skills_uninstall))
+        .route("/skills/validate", post(skills_validate))
         .route("/skills/catalog/sources", get(skills_catalog_sources))
         .route("/skills/catalog", get(skills_catalog_list))
         .route("/skills/catalog/refresh", post(skills_catalog_refresh))
