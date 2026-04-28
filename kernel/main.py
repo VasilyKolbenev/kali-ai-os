@@ -1426,6 +1426,71 @@ def create_app(
         """Alias for /tts — backward compat with TTS client and frontend."""
         return await text_to_speech(request)
 
+    @app.post("/voice/transcribe")
+    async def voice_transcribe(request: Request) -> Any:
+        """One-shot STT for the voice-builder pilot.
+
+        Bypasses the orchestrated wake-word pipeline — uses an
+        in-process SpeechToText (lazy-instantiated on first request,
+        cached on app.state.stt) and reuses the i16 LE PCM decode +
+        scipy resample logic from the bridge worker.
+        """
+        from fastapi.responses import JSONResponse
+        import asyncio
+        import time
+
+        from kernel.voice.transcribe_helper import (
+            decode_and_resample, get_or_create_stt,
+        )
+
+        body = await request.json()
+        audio_b64 = body.get("audio_b64")
+        if not audio_b64:
+            return JSONResponse(
+                {"error": "audio_b64 required"}, status_code=400
+            )
+        sample_rate = int(body.get("sample_rate", 16000))
+        language = body.get("language")
+
+        try:
+            audio_f32, target_sr = decode_and_resample(audio_b64, sample_rate)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+        try:
+            stt = await asyncio.to_thread(get_or_create_stt, request.app.state)
+        except Exception as e:
+            logger.exception("/voice/transcribe failed to init SpeechToText")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        t0 = time.perf_counter()
+        try:
+            if language and stt._model is not None:
+                segments, info = await asyncio.to_thread(
+                    stt._model.transcribe,
+                    audio_f32,
+                    beam_size=5,
+                    language=language,
+                    vad_filter=True,
+                )
+                text = " ".join(s.text.strip() for s in segments).strip()
+                detected_language = info.language
+            else:
+                result = await asyncio.to_thread(
+                    stt.transcribe, audio_f32, sample_rate=target_sr
+                )
+                text = result.text
+                detected_language = result.language
+        except Exception as e:
+            logger.exception("/voice/transcribe failed")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        return {
+            "text": text,
+            "language": detected_language,
+            "duration_ms": int((time.perf_counter() - t0) * 1000),
+        }
+
     @app.get("/health/tts")
     async def tts_health() -> dict[str, Any]:
         """TTS engine health check."""

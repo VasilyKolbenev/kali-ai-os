@@ -8,12 +8,19 @@ a bridge subprocess.
 from __future__ import annotations
 
 import base64
+import threading
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.signal import resample_poly
 
+if TYPE_CHECKING:
+    from kernel.voice.stt import SpeechToText
+
 
 _TARGET_SR = 16000
+
+_stt_lock = threading.Lock()
 
 
 def decode_and_resample(audio_b64: str, sample_rate: int) -> tuple[np.ndarray, int]:
@@ -47,3 +54,29 @@ def decode_and_resample(audio_b64: str, sample_rate: int) -> tuple[np.ndarray, i
         audio_f32 = resample_poly(audio_f32, up, down).astype(np.float32)
 
     return audio_f32, _TARGET_SR
+
+
+def get_or_create_stt(app_state) -> "SpeechToText":
+    """Return the cached SpeechToText, instantiating on first use.
+
+    Cached on `app_state.stt` so the Tauri build keeps a single model
+    in memory across requests. Mirrors `tts_worker._ensure_stt()` so
+    the bridge-process and the FastAPI endpoint converge on the same
+    initialisation contract.
+
+    Thread-safe via a module lock — first request wins; subsequent
+    requests reuse the cached instance.
+    """
+    existing = getattr(app_state, "stt", None)
+    if existing is not None:
+        return existing
+
+    with _stt_lock:
+        existing = getattr(app_state, "stt", None)
+        if existing is not None:
+            return existing
+        from kernel.voice.stt import SpeechToText
+
+        stt = SpeechToText()
+        app_state.stt = stt
+        return stt
