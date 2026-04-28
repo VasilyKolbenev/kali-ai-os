@@ -11,7 +11,7 @@ export function TasksWidget() {
         <span className="mono text-sm" style={{ color: "var(--j-text-muted)" }}>{data ? `/${data.total}` : ""}</span>
       </div>
       <div className="mt-3 h-[2px] rounded-full overflow-hidden" style={{ background: "var(--j-border)" }}>
-        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "var(--j-green)", boxShadow: "0 0 8px rgba(0,230,118,0.3)" }} />
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "var(--j-green)", boxShadow: "0 0 8px var(--j-success-glow)" }} />
       </div>
     </div>
   );

@@ -28,6 +28,18 @@
   --j-danger: var(--j-red);
   --j-danger-glow: rgba(255, 61, 87, 0.25);
 
+  /* Status tier washes — pale fills for cards, badges, button states.
+     Mirror the cyan-strong/soft/wash ladder so success + danger have
+     the same density grammar. Added 2026-04-28 (Tier 2 #8). */
+  --j-success-soft: rgba(0, 230, 118, 0.15);
+  --j-success-wash: rgba(0, 230, 118, 0.08);
+  --j-danger-soft: rgba(255, 61, 87, 0.15);
+  --j-danger-wash: rgba(255, 61, 87, 0.08);
+
+  /* Surface tier between hover (0.06) and a more pronounced highlight.
+     Used by inactive status indicators (e.g. AgentCard offline dot). */
+  --j-surface-soft: rgba(255, 255, 255, 0.1);
+
   /* Offline / disabled (matches ArcReactor.tsx offline config) */
   --j-offline: #4a5568;
   --j-offline-glow: rgba(74, 85, 104, 0.2);
