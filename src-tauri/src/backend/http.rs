@@ -216,6 +216,56 @@ pub async fn skills_installed(
     }
 }
 
+// ── /skills/install + /skills/uninstall (always proxy) ────────────
+//
+// Phase 4 Chunk 3 deliberately keeps the Python install path
+// authoritative. The Python flow runs `kernel.builder.safety_gate`
+// AST analysis on every Python script in a skill before deploy —
+// re-implementing that safety check in Rust would either need pyo3
+// (heavy embedding) or RustPython (incomplete) or a subprocess
+// delegation that adds a moving part for marginal benefit.
+//
+// `kernel/skills/installer.py` (284 LoC) is battle-tested; install
+// is a rare, cold operation (once per user per skill) so native
+// Rust would give zero perceptible UX win. Phase 8 retires the
+// proxy when the orchestration layer fully cuts over.
+//
+// Routing invariant preserved: UI hits Rust on `:3006` for every
+// `/skills/*` endpoint; Rust forwards `install`/`uninstall` to
+// Python on `:3005` while serving `installed` and `catalog/*`
+// natively from Phase 4 Chunks 1-2.
+
+pub async fn skills_install(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response {
+    proxy_post_with_body("/skills/install", &body).await
+}
+
+pub async fn skills_uninstall(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response {
+    proxy_post_with_body("/skills/uninstall", &body).await
+}
+
+/// Proxy a POST with the caller-supplied JSON body to Python,
+/// preserving upstream status semantics so 404s and validation
+/// failures surface cleanly to the UI.
+async fn proxy_post_with_body(path: &str, body: &serde_json::Value) -> Response {
+    match proxy::proxy_post_json(path, body).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(proxy::ProxyError::Upstream { status, body }) => {
+            let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+            (code, Json(body)).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": err.to_string(),
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
 // ── /skills/catalog/* ─────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -398,6 +448,8 @@ pub fn router_full(
         .route("/voice/start", post(voice_start))
         .route("/voice/stop", post(voice_stop))
         .route("/skills/installed", get(skills_installed))
+        .route("/skills/install", post(skills_install))
+        .route("/skills/uninstall", post(skills_uninstall))
         .route("/skills/catalog/sources", get(skills_catalog_sources))
         .route("/skills/catalog", get(skills_catalog_list))
         .route("/skills/catalog/refresh", post(skills_catalog_refresh))
