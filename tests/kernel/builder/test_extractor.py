@@ -5,8 +5,6 @@ validation, BuilderSession mutation contract, fallback behaviour).
 """
 from __future__ import annotations
 
-import pytest
-
 from kernel.builder import extractor
 
 

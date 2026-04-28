@@ -1,3 +1,4 @@
+# ruff: noqa: E501  # LLM_SYSTEM_PROMPT contains verbatim prompt lines >100 chars; reflow would break A4 fidelity
 """LLM-driven single-shot extraction over the wizard schema.
 
 Used by `POST /builder/extract` to populate as many wizard answers as
@@ -17,9 +18,9 @@ import logging
 import re
 from typing import Any
 
-from kernel.builder.session_store import BuilderSession, SessionStore
-from kernel.builder.wizard import _question_to_key, create_wizard
-from kernel.builder.intent_classifier import IntentResult
+from kernel.builder.intent_classifier import IntentResult  # noqa: F401  # Task 5: extract_spec
+from kernel.builder.session_store import BuilderSession, SessionStore  # noqa: F401  # Task 5
+from kernel.builder.wizard import _question_to_key, create_wizard  # noqa: F401  # Task 5
 
 logger = logging.getLogger(__name__)
 
