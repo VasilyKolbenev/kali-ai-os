@@ -15,6 +15,7 @@ use crate::backend::error::AppResult;
 use crate::backend::event_bus::EventBus;
 use crate::backend::ingestion;
 use crate::backend::proxy;
+use crate::backend::skills::catalog::CatalogClient;
 use crate::backend::skills::registry::SkillsRegistry;
 use crate::backend::voice::pipeline::Pipeline;
 use crate::backend::ws;
@@ -28,6 +29,11 @@ pub type PipelineHandle = Option<Arc<Pipeline>>;
 /// `/skills/installed` serves natively from the in-memory index;
 /// when `None`, the route proxies to Python.
 pub type SkillsRegistryHandle = Option<Arc<SkillsRegistry>>;
+
+/// Optional handle to the remote skills catalog client. When present,
+/// `/skills/catalog/*` serves natively (HTTP fetch + on-disk cache);
+/// when `None`, those routes proxy to Python.
+pub type CatalogClientHandle = Option<Arc<CatalogClient>>;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -210,6 +216,147 @@ pub async fn skills_installed(
     }
 }
 
+// ── /skills/catalog/* ─────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct CatalogQuery {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub q: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct RefreshBody {
+    #[serde(default)]
+    pub force: bool,
+}
+
+pub async fn skills_catalog_sources(
+    Extension(catalog): Extension<CatalogClientHandle>,
+) -> Response {
+    if let Some(client) = catalog {
+        return (StatusCode::OK, Json(client.sources_summary())).into_response();
+    }
+    proxy_get("/skills/catalog/sources").await
+}
+
+pub async fn skills_catalog_list(
+    Extension(catalog): Extension<CatalogClientHandle>,
+    axum::extract::Query(query): axum::extract::Query<CatalogQuery>,
+) -> Response {
+    if let Some(client) = catalog {
+        let entries = match (query.source.as_deref(), query.q.as_deref()) {
+            (Some(src), Some(q)) if !q.trim().is_empty() => client
+                .list_by_source(src)
+                .await
+                .into_iter()
+                .filter(|e| {
+                    let qlow = q.to_lowercase();
+                    e.name.to_lowercase().contains(&qlow)
+                        || e.description.to_lowercase().contains(&qlow)
+                })
+                .collect(),
+            (Some(src), _) => client.list_by_source(src).await,
+            (None, Some(q)) if !q.trim().is_empty() => client.search(q).await,
+            _ => client.list_all().await,
+        };
+        let count = entries.len();
+        let results: Vec<serde_json::Value> = entries.iter().map(|e| e.to_json()).collect();
+        return (
+            StatusCode::OK,
+            Json(json!({ "results": results, "count": count })),
+        )
+            .into_response();
+    }
+    // Build query string for the proxy fallback.
+    let mut qs = Vec::new();
+    if let Some(s) = query.source {
+        qs.push(format!("source={}", urlencoding_encode(&s)));
+    }
+    if let Some(q) = query.q {
+        qs.push(format!("q={}", urlencoding_encode(&q)));
+    }
+    let suffix = if qs.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", qs.join("&"))
+    };
+    proxy_get(&format!("/skills/catalog{suffix}")).await
+}
+
+pub async fn skills_catalog_refresh(
+    Extension(catalog): Extension<CatalogClientHandle>,
+    body: Option<ExtractJson<RefreshBody>>,
+) -> Response {
+    let force = body.map(|ExtractJson(b)| b.force).unwrap_or(true);
+    if let Some(client) = catalog {
+        let total = client.refresh_all(force).await;
+        return (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "total_entries": total })),
+        )
+            .into_response();
+    }
+    let body_json = json!({ "force": force });
+    match proxy::proxy_post_json("/skills/catalog/refresh", &body_json).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(proxy::ProxyError::Upstream { status, body }) => {
+            let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+            (code, Json(body)).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": err.to_string(),
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Minimal URL-encoder for query-string pass-through. Only handles
+/// the characters that the catalog query strings actually use
+/// (spaces, `&`, `=`); good enough for one-hop proxying without
+/// pulling in a full url-encoding crate.
+fn urlencoding_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '&' => out.push_str("%26"),
+            '=' => out.push_str("%3D"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Generic GET proxy with the same status-passing semantics as the
+/// existing `voice_status` proxy fallback. Used by every Phase 4
+/// route that wants to forward to Python when the native handle is
+/// `None`.
+async fn proxy_get(path: &str) -> Response {
+    match proxy::proxy_get_json(path).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "code": "upstream_unavailable",
+                    "message": err.to_string(),
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// Common POST proxy for `/voice/start` and `/voice/stop`. Forwards an
 /// empty JSON body — the Python endpoints don't require parameters,
 /// and keeping the wire shape identical means the UI doesn't have to
@@ -235,12 +382,13 @@ async fn proxy_voice(path: &str) -> Response {
 }
 
 /// Full constructor — every backend handle in one call. Tests + serve()
-/// converge on this; the older 1- and 2-arg constructors below are
-/// thin wrappers that pass `None` for the handles they don't care about.
+/// converge on this; the older constructors below are thin wrappers
+/// that pass `None` for the handles they don't care about.
 pub fn router_full(
     bus: Arc<EventBus>,
     pipeline: PipelineHandle,
     skills: SkillsRegistryHandle,
+    catalog: CatalogClientHandle,
 ) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -250,6 +398,9 @@ pub fn router_full(
         .route("/voice/start", post(voice_start))
         .route("/voice/stop", post(voice_stop))
         .route("/skills/installed", get(skills_installed))
+        .route("/skills/catalog/sources", get(skills_catalog_sources))
+        .route("/skills/catalog", get(skills_catalog_list))
+        .route("/skills/catalog/refresh", post(skills_catalog_refresh))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",
@@ -257,20 +408,21 @@ pub fn router_full(
         )
         .layer(Extension(pipeline))
         .layer(Extension(skills))
+        .layer(Extension(catalog))
         .with_state(bus)
 }
 
-/// Backwards-compatible constructor — bus + pipeline only, skills
-/// handle defaults to `None` (skills routes proxy to Python).
+/// Backwards-compatible constructor — bus + pipeline only, skills +
+/// catalog default to `None` (those routes proxy to Python).
 pub fn router_with_bus_and_pipeline(bus: Arc<EventBus>, pipeline: PipelineHandle) -> Router {
-    router_full(bus, pipeline, None)
+    router_full(bus, pipeline, None, None)
 }
 
 /// Backwards-compatible constructor for tests that pre-date the
 /// pipeline extension. Equivalent to passing `None` for the pipeline,
 /// i.e. all `/voice/*` and `/skills/*` native routes proxy to Python.
 pub fn router_with_bus(bus: Arc<EventBus>) -> Router {
-    router_full(bus, None, None)
+    router_full(bus, None, None, None)
 }
 
 /// Legacy constructor kept for tests that pre-date the event bus.

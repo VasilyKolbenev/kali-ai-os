@@ -19,6 +19,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
+use crate::backend::skills::catalog::{CatalogClient, CatalogClientOpts};
 use crate::backend::skills::registry::{default_sources, SkillsRegistry};
 use crate::backend::voice::pipeline::{Pipeline, PipelineDeps};
 
@@ -44,7 +45,8 @@ pub async fn serve() -> anyhow::Result<()> {
     };
 
     let skills = build_skills_registry();
-    let app = http::router_full(bus, pipeline, skills)
+    let catalog = build_catalog_client();
+    let app = http::router_full(bus, pipeline, skills, catalog)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
@@ -81,6 +83,27 @@ fn build_skills_registry() -> http::SkillsRegistryHandle {
         return None;
     }
     Some(Arc::new(registry))
+}
+
+/// Construct the remote-catalog client. Failure to resolve the cache
+/// directory degrades gracefully to `None` so `/skills/catalog/*`
+/// routes proxy to Python. The local registry is the authoritative
+/// source for installed skills; the catalog is read-only browsing.
+fn build_catalog_client() -> http::CatalogClientHandle {
+    let opts = match CatalogClientOpts::defaults() {
+        Ok(o) => o,
+        Err(err) => {
+            warn!(?err, "catalog client: defaults unavailable, proxy fallback");
+            return None;
+        }
+    };
+    match CatalogClient::new(opts) {
+        Ok(client) => Some(client),
+        Err(err) => {
+            warn!(?err, "catalog client: initialisation failed, proxy fallback");
+            None
+        }
+    }
 }
 
 /// Construct the Rust-native voice pipeline iff `voice.engine == "rust"`.

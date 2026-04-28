@@ -10,5 +10,7 @@
 //! — skills are Python code, the runtime owns them. Same precedent as
 //! STT and wake-word path B in Phase 3.
 
+pub mod cache;
+pub mod catalog;
 pub mod loader;
 pub mod registry;
