@@ -480,6 +480,34 @@ def create_app(
                 logger.warning("TTS engine not available (will use cloud fallbacks)")
         asyncio.create_task(_tts_bg_load())
 
+        # F5-TTS prewarm — load models eagerly so the first /tts/speak (the
+        # voice-builder's first wizard question) doesn't pay the ~5s cold-
+        # load cost at the worst possible moment. Best-effort: failures here
+        # don't abort startup, the on-demand load path in /tts/speak still
+        # serves as fallback.
+        try:
+            from kernel.voice.tts_router import is_loaded, load_models
+
+            if not is_loaded():
+                logger.info("TTS prewarm: loading F5 models...")
+                await asyncio.to_thread(load_models)
+                logger.info("TTS prewarm: ready")
+        except Exception as e:
+            logger.warning("TTS prewarm failed (non-fatal): %s", e)
+
+        # Whisper STT prewarm — same rationale, for /voice/transcribe.
+        # The voice-builder's first user utterance triggers the first STT
+        # call; cold-load there freezes the UI for ~3-5s. Best-effort:
+        # `get_or_create_stt` will retry on first request if prewarm fails.
+        try:
+            from kernel.voice.transcribe_helper import get_or_create_stt
+
+            logger.info("STT prewarm: loading Whisper model...")
+            await asyncio.to_thread(get_or_create_stt, app.state)
+            logger.info("STT prewarm: ready")
+        except Exception as e:
+            logger.warning("STT prewarm failed (non-fatal): %s", e)
+
         logger.info("KALI kernel started (v%s)", __version__)
         yield
 
