@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -164,6 +164,11 @@ class VoiceConfig(BaseModel):
     tts_voice: str = "default"
     vad_threshold: float = 0.5
     auto_start: bool = False  # If true: pipeline starts with app. Otherwise on-demand.
+    # Phase 3 Chunk 8 — engine selector. "python" keeps the legacy
+    # in-process pipeline (this module). "rust" disables it; the Rust
+    # backend's native /voice/* routes take over. Default stays "python"
+    # until Vasily's manual rehearsal validates the Rust path.
+    engine: Literal["python", "rust"] = "python"
 
 
 class LLMConfig(BaseModel):

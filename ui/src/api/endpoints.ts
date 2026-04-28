@@ -22,6 +22,8 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   { method: "GET", path: "/config" },
   { method: "PATCH", path: "/config" },
   { method: "GET", path: "/voice/status" },
+  { method: "POST", path: "/voice/start" },
+  { method: "POST", path: "/voice/stop" },
 ] as const;
 
 function pathOf(input: string): string {

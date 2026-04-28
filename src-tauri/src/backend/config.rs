@@ -53,6 +53,14 @@ pub struct VoiceConfig {
     pub silence_chunks_to_end: u32,
     #[serde(default = "default_min_speech_chunks")]
     pub min_speech_chunks: u32,
+    // Phase 3 Chunk 8 — voice pipeline engine selector. "python" routes
+    // /voice/* through Rust as a thin proxy to the existing Python
+    // pipeline (legacy behaviour). "rust" makes Rust authoritative and
+    // disables the Python pipeline init in `kernel/main.py`. Default
+    // stays "python" until Vasily's manual rehearsal validates the
+    // Rust path on real hardware.
+    #[serde(default = "default_engine")]
+    pub engine: String,
 }
 
 fn default_wake_threshold() -> f32 {
@@ -71,6 +79,10 @@ fn default_min_speech_chunks() -> u32 {
     5
 }
 
+fn default_engine() -> String {
+    "python".to_string()
+}
+
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
@@ -84,6 +96,7 @@ impl Default for VoiceConfig {
             wake_listen_timeout_secs: default_wake_listen_timeout_secs(),
             silence_chunks_to_end: default_silence_chunks_to_end(),
             min_speech_chunks: default_min_speech_chunks(),
+            engine: default_engine(),
         }
     }
 }

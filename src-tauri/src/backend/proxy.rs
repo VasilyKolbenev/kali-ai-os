@@ -60,6 +60,38 @@ pub async fn proxy_patch_json(
     Ok(payload)
 }
 
+/// Proxy a POST request with a JSON body to the Python backend.
+/// Same status-preserving semantics as [`proxy_patch_json`] — the
+/// handler can map upstream non-success codes through to the client
+/// instead of flattening to a generic 500. Phase 3 Chunk 8 uses this
+/// for `/voice/start` and `/voice/stop` when the engine flag selects
+/// the Python pipeline.
+pub async fn proxy_post_json(
+    path: &str,
+    body: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, ProxyError> {
+    let base = python_backend_url();
+    let url = format!("{}{}", base, path);
+    let client = Client::new();
+    let resp = client
+        .post(&url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| ProxyError::Network(format!("POST {}: {}", url, e)))?;
+    let status = resp.status();
+    let payload: serde_json::Value = resp.json().await.map_err(|e| {
+        ProxyError::Parse(format!("parse JSON response from POST {}: {}", url, e))
+    })?;
+    if !status.is_success() {
+        return Err(ProxyError::Upstream {
+            status: status.as_u16(),
+            body: payload,
+        });
+    }
+    Ok(payload)
+}
+
 /// Proxy failure modes. Kept separate from `anyhow::Error` so the
 /// handler can preserve Python's HTTP status and body when forwarding
 /// a non-success response to the UI.

@@ -342,37 +342,49 @@ def create_app(
                         logger.warning("Invalid cron for skill %s: %s", name, e)
 
         # Voice pipeline (optional — only if dependencies available)
-        try:
-            voice_pipeline = VoicePipeline(
-                event_bus=event_bus,
-                voice_config=config_manager.config.voice,
-                llm_config=config_manager.config.llm,
-                tools=plugin_registry.get_all_tools(),
-                app_state=app.state,
+        # Phase 3 Chunk 8: skip Python pipeline init when voice.engine="rust"
+        # so the Rust backend's native /voice/* routes own the lifecycle.
+        # `app.state.voice_pipeline = None` keeps any direct hits on Python's
+        # /voice/* endpoints returning 503 — UI dispatcher already routes
+        # them to Rust (RUST_ENDPOINTS allow-list).
+        if config_manager.config.voice.engine != "python":
+            logger.info(
+                "Voice pipeline disabled in Python (voice.engine=%s) — Rust backend authoritative",
+                config_manager.config.voice.engine,
             )
-            app.state.voice_pipeline = voice_pipeline
-            logger.info("Voice pipeline initialized")
-
-            # Voice pipeline — auto-start only if user opted in via config.
-            # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
-            voice_cfg = config_manager.config.voice
-            if voice_cfg.auto_start and voice_cfg.mode != "off":
-                async def _voice_bg_start() -> None:
-                    try:
-                        import asyncio as _aio_vp
-                        await _aio_vp.to_thread(voice_pipeline.load_models)
-                        await voice_pipeline.start()
-                        logger.info("Voice pipeline auto-started (mode=%s, wake_word=%s)",
-                                   voice_cfg.mode, voice_cfg.wake_word)
-                    except Exception as e:
-                        logger.warning("Voice pipeline auto-start failed: %s", e)
-                asyncio.create_task(_voice_bg_start())
-            else:
-                logger.info("Voice pipeline ready (mode=%s, auto_start=%s) — waiting for /voice/start",
-                           voice_cfg.mode, voice_cfg.auto_start)
-        except Exception:
-            logger.warning("Voice pipeline not available")
             app.state.voice_pipeline = None
+        else:
+            try:
+                voice_pipeline = VoicePipeline(
+                    event_bus=event_bus,
+                    voice_config=config_manager.config.voice,
+                    llm_config=config_manager.config.llm,
+                    tools=plugin_registry.get_all_tools(),
+                    app_state=app.state,
+                )
+                app.state.voice_pipeline = voice_pipeline
+                logger.info("Voice pipeline initialized")
+
+                # Voice pipeline — auto-start only if user opted in via config.
+                # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
+                voice_cfg = config_manager.config.voice
+                if voice_cfg.auto_start and voice_cfg.mode != "off":
+                    async def _voice_bg_start() -> None:
+                        try:
+                            import asyncio as _aio_vp
+                            await _aio_vp.to_thread(voice_pipeline.load_models)
+                            await voice_pipeline.start()
+                            logger.info("Voice pipeline auto-started (mode=%s, wake_word=%s)",
+                                       voice_cfg.mode, voice_cfg.wake_word)
+                        except Exception as e:
+                            logger.warning("Voice pipeline auto-start failed: %s", e)
+                    asyncio.create_task(_voice_bg_start())
+                else:
+                    logger.info("Voice pipeline ready (mode=%s, auto_start=%s) — waiting for /voice/start",
+                               voice_cfg.mode, voice_cfg.auto_start)
+            except Exception:
+                logger.warning("Voice pipeline not available")
+                app.state.voice_pipeline = None
 
         # Store on app.state for route access
         app.state.event_bus = event_bus
