@@ -480,6 +480,77 @@ async fn proxy_voice(path: &str) -> Response {
     }
 }
 
+// ── /catalog/* (Phase 4 Chunk 5 — Option C, proxy to Python) ──
+//
+// The legacy `.kali-agent` package format predates SKILL.md: zip
+// archive + `manifest.yaml`, install via path-traversal-hardened
+// extraction in `kernel/skills/installer.py:install_package`. Same
+// rationale as Chunk 3: re-implementing the zip-bomb / traversal
+// guards in Rust would be high-risk for cold-path operations.
+//
+// All five routes forward the request shape Python expects (raw
+// query string for GET, JSON body for POST). Phase 8 retires the
+// proxy together with `/skills/install` once orchestration cuts
+// over.
+
+pub async fn catalog_search(
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    let path = match query {
+        Some(q) if !q.is_empty() => format!("/catalog/search?{q}"),
+        _ => "/catalog/search".to_string(),
+    };
+    proxy_get(&path).await
+}
+
+pub async fn catalog_trending() -> Response {
+    proxy_get("/catalog/trending").await
+}
+
+pub async fn catalog_pack(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    proxy_post_with_body(
+        &format!("/catalog/pack/{}", encode_path_segment(&name)),
+        &json!({}),
+    )
+    .await
+}
+
+pub async fn catalog_install(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response {
+    proxy_post_with_body("/catalog/install", &body).await
+}
+
+pub async fn catalog_info(
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    let path = match query {
+        Some(q) if !q.is_empty() => format!("/catalog/info?{q}"),
+        _ => "/catalog/info".to_string(),
+    };
+    proxy_get(&path).await
+}
+
+/// Path-segment encoder for the agent name in `/catalog/pack/{name}`.
+/// Escapes only the bytes that would reshape the URL (`/`, `?`, `#`,
+/// `&`, ` `); Python is the security boundary for the actual zip
+/// extraction. This protects the wire shape during proxy forwarding,
+/// not the filesystem semantics on the far side.
+fn encode_path_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '/' => out.push_str("%2F"),
+            '?' => out.push_str("%3F"),
+            '#' => out.push_str("%23"),
+            '&' => out.push_str("%26"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Full constructor — every backend handle in one call. Tests + serve()
 /// converge on this; the older constructors below are thin wrappers
 /// that pass `None` for the handles they don't care about.
@@ -503,6 +574,11 @@ pub fn router_full(
         .route("/skills/catalog/sources", get(skills_catalog_sources))
         .route("/skills/catalog", get(skills_catalog_list))
         .route("/skills/catalog/refresh", post(skills_catalog_refresh))
+        .route("/catalog/search", get(catalog_search))
+        .route("/catalog/trending", get(catalog_trending))
+        .route("/catalog/pack/:name", post(catalog_pack))
+        .route("/catalog/install", post(catalog_install))
+        .route("/catalog/info", get(catalog_info))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",

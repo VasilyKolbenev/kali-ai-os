@@ -34,4 +34,18 @@ describe("endpoint dispatcher", () => {
     expect(resolveApiUrl("/health")).toContain(":3006");
     expect(resolveApiUrl("/skills")).toContain(":3005");
   });
+
+  it("dispatches path-param children of a prefix entry to Rust", () => {
+    // /catalog/pack is registered with prefix:true so any /catalog/pack/<name>
+    // routes to the Rust dispatcher (which then proxies to Python).
+    expect(resolveApiUrl("/catalog/pack/weather", "POST")).toContain(":3006");
+    expect(resolveApiUrl("/catalog/pack/строитель-помощник", "POST")).toContain(":3006");
+  });
+
+  it("does not let a prefix bleed into a longer sibling path", () => {
+    // /catalog/packed must NOT match the /catalog/pack prefix entry —
+    // we want true segment boundaries, not raw startsWith collisions.
+    expect(resolveApiUrl("/catalog/packed", "POST")).toContain(":3005");
+    expect(resolveApiUrl("/catalog/pack-foo", "POST")).toContain(":3005");
+  });
 });

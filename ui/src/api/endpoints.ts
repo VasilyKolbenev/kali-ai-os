@@ -5,6 +5,13 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export interface RustRoute {
   method: HttpMethod;
   path: string;
+  /**
+   * When true, `path` is treated as a prefix: any request whose
+   * resolved path equals `path` or begins with `path + "/"` is
+   * dispatched to Rust. Used for path-param routes such as
+   * `/catalog/pack/{name}`. Default (omitted/false) is exact match.
+   */
+  prefix?: boolean;
 }
 
 /**
@@ -31,6 +38,11 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   { method: "GET", path: "/skills/catalog/sources" },
   { method: "GET", path: "/skills/catalog" },
   { method: "POST", path: "/skills/catalog/refresh" },
+  { method: "GET", path: "/catalog/search" },
+  { method: "GET", path: "/catalog/trending" },
+  { method: "POST", path: "/catalog/pack", prefix: true },
+  { method: "POST", path: "/catalog/install" },
+  { method: "GET", path: "/catalog/info" },
 ] as const;
 
 function pathOf(input: string): string {
@@ -42,8 +54,12 @@ function pathOf(input: string): string {
 
 export function resolveApiUrl(path: string, method: HttpMethod = "GET"): string {
   const resolved = pathOf(path);
-  const inRust = RUST_ENDPOINTS.some(
-    (e) => e.method === method && e.path === resolved,
-  );
+  const inRust = RUST_ENDPOINTS.some((e) => {
+    if (e.method !== method) return false;
+    if (e.prefix) {
+      return resolved === e.path || resolved.startsWith(e.path + "/");
+    }
+    return e.path === resolved;
+  });
   return inRust ? rustApiUrl(path) : apiUrl(path);
 }
