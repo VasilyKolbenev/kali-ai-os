@@ -85,9 +85,6 @@ async def test_cancel_mid_flow(client):
     assert r.status_code == 404
 
 
-from unittest.mock import AsyncMock, MagicMock
-
-
 async def test_extract_endpoint_complete_path(client, monkeypatch):
     """Full extraction → 200 with spec field, session_id available for /deploy."""
     monkeypatch.setattr(
