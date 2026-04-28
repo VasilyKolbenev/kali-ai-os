@@ -36,6 +36,7 @@ class BuilderSession:
     request: str
     intent_type: str  # "skill" | "agent"
     template: str | None
+    name_hint: str | None = None  # NEW — populated by /builder/extract
     questions: list[str] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
     step: int = 0

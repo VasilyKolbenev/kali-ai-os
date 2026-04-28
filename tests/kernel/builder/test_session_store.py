@@ -42,3 +42,31 @@ def test_delete_nonexistent_is_noop() -> None:
     """delete() on unknown session_id must not raise."""
     store = SessionStore()
     store.delete("ghost-session-id")  # must not raise
+
+
+def test_session_carries_name_hint() -> None:
+    """name_hint is an optional attribute used by /builder/extract to
+    pre-populate the LLM's slug suggestion before _build_spec runs.
+    """
+    from kernel.builder.session_store import BuilderSession
+
+    s = BuilderSession(
+        session_id="abc",
+        request="трекер воды",
+        intent_type="skill",
+        template="tracker",
+        name_hint="treker-vody",
+    )
+    assert s.name_hint == "treker-vody"
+
+
+def test_session_default_name_hint_is_none() -> None:
+    from kernel.builder.session_store import BuilderSession
+
+    s = BuilderSession(
+        session_id="abc",
+        request="трекер воды",
+        intent_type="skill",
+        template="tracker",
+    )
+    assert s.name_hint is None
