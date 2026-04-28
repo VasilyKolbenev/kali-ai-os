@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -56,16 +56,25 @@ def decode_and_resample(audio_b64: str, sample_rate: int) -> tuple[np.ndarray, i
     return audio_f32, _TARGET_SR
 
 
-def get_or_create_stt(app_state) -> "SpeechToText":
-    """Return the cached SpeechToText, instantiating on first use.
+def get_or_create_stt(app_state: Any) -> "SpeechToText":
+    """Return the cached SpeechToText, instantiating + loading on first use.
 
     Cached on `app_state.stt` so the Tauri build keeps a single model
-    in memory across requests. Mirrors `tts_worker._ensure_stt()` so
-    the bridge-process and the FastAPI endpoint converge on the same
-    initialisation contract.
+    in memory across requests. Mirrors `tts_worker._ensure_stt()`
+    (kernel/workers/tts_worker.py:107-124) so the bridge-process and
+    the FastAPI endpoint converge on the same initialisation contract.
+
+    `SpeechToText.__init__` only sets up state — `.load()` is what
+    populates `_model` with the WhisperModel. Without `.load()` every
+    call returns `STTResult(text="", language=None)` silently, which
+    is exactly the failure mode the in-process port is meant to avoid.
 
     Thread-safe via a module lock — first request wins; subsequent
     requests reuse the cached instance.
+
+    Raises:
+        RuntimeError: If `SpeechToText.load()` fails to populate `_model`
+            (e.g. missing model weights, GPU OOM).
     """
     existing = getattr(app_state, "stt", None)
     if existing is not None:
@@ -77,6 +86,11 @@ def get_or_create_stt(app_state) -> "SpeechToText":
             return existing
         from kernel.voice.stt import SpeechToText
 
-        stt = SpeechToText()
+        stt = SpeechToText(model_size="base", device="auto")
+        stt.load()
+        if not stt.is_loaded:
+            raise RuntimeError(
+                "Whisper failed to load — see kernel.voice.stt logs"
+            )
         app_state.stt = stt
         return stt

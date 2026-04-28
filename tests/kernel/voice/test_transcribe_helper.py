@@ -41,3 +41,51 @@ def test_decode_rejects_odd_byte_length() -> None:
     bad = base64.b64encode(b"\x01\x02\x03").decode("ascii")  # 3 bytes — not divisible by 2
     with pytest.raises(ValueError, match="not divisible by 2"):
         decode_and_resample(bad, sample_rate=16000)
+
+
+# ── get_or_create_stt — cold-init path ────────────────────────────────
+
+
+class _FakeAppState:
+    """Minimal stand-in for FastAPI app.state — just an attribute bag."""
+
+    pass
+
+
+def test_get_or_create_stt_returns_cached_instance() -> None:
+    """When `app_state.stt` is already set, helper returns it without
+    instantiating SpeechToText (covers the test-fixture / hot-request path)."""
+    from kernel.voice.transcribe_helper import get_or_create_stt
+
+    state = _FakeAppState()
+    sentinel = object()  # any non-None value short-circuits the lazy-init
+    state.stt = sentinel  # type: ignore[attr-defined]
+    assert get_or_create_stt(state) is sentinel
+
+
+def test_get_or_create_stt_raises_when_load_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If SpeechToText().load() runs but `is_loaded` stays False, the helper
+    surfaces a RuntimeError so the endpoint maps to 500 (instead of silently
+    returning empty transcripts forever)."""
+    from kernel.voice import transcribe_helper
+
+    class _FakeStt:
+        def __init__(self, model_size: str = "base", device: str = "auto") -> None:
+            self.model_size = model_size
+            self.device = device
+            self.is_loaded = False
+
+        def load(self) -> None:
+            # Simulate load failure: model weights missing, GPU OOM, etc.
+            return None
+
+    monkeypatch.setattr(
+        "kernel.voice.stt.SpeechToText",
+        _FakeStt,
+    )
+
+    state = _FakeAppState()
+    with pytest.raises(RuntimeError, match="Whisper failed to load"):
+        transcribe_helper.get_or_create_stt(state)
+    # Confirm cache was NOT populated on failure.
+    assert getattr(state, "stt", None) is None
