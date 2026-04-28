@@ -1554,6 +1554,35 @@ def create_app(
             logger.exception("builder/start failed")
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    @app.post("/builder/extract")
+    async def builder_extract(request: Request) -> Any:
+        """A4 fast-path: single-shot LLM extraction over the wizard schema.
+
+        Tries to populate every wizard answer from the user utterance in
+        one LLM call. On full match returns the complete spec; on partial
+        match returns a session pre-populated up to the first missing
+        field plus the next question; on failure / invalid template /
+        LLM unavailable, silently falls back to `/builder/start` shape.
+        """
+        from fastapi.responses import JSONResponse
+        from kernel.builder.extractor import extract_spec
+
+        body = await request.json()
+        text = (body.get("request") or "").strip()
+        if not text:
+            return JSONResponse({"error": "request must be non-empty"}, status_code=400)
+
+        try:
+            return extract_spec(
+                request=text,
+                session_store=request.app.state.builder_flow._store,
+            )
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            logger.exception("/builder/extract failed")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     @app.post("/builder/answer")
     async def builder_answer(request: Request) -> Any:
         """Record an answer in the active builder wizard.

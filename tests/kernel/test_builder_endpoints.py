@@ -83,3 +83,62 @@ async def test_cancel_mid_flow(client):
 
     r = await client.post("/builder/answer", json={"session_id": sid, "answer": "x"})
     assert r.status_code == 404
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+
+async def test_extract_endpoint_complete_path(client, monkeypatch):
+    """Full extraction → 200 with spec field, session_id available for /deploy."""
+    monkeypatch.setattr(
+        "kernel.builder.extractor._call_llm",
+        lambda r: {
+            "type": "skill",
+            "template": "tracker",
+            "name_hint": "treker-vody",
+            "extracted": {
+                "interval": "2 часа",
+                "goal": "2 литра",
+                "notify_channel": "чат",
+            },
+            "confidence": 0.9,
+        },
+    )
+    r = await client.post(
+        "/builder/extract",
+        json={"request": "трекер воды два литра каждые 2 часа в чат"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["complete"] is True
+    assert data["session_id"]
+    assert data["spec"]["name"] == "treker-vody"
+    assert data["spec"]["config"]["interval"] == "2 часа"
+
+
+async def test_extract_endpoint_partial_path(client, monkeypatch):
+    monkeypatch.setattr(
+        "kernel.builder.extractor._call_llm",
+        lambda r: {
+            "type": "skill",
+            "template": "tracker",
+            "name_hint": "treker-vody",
+            "extracted": {"goal": "2 литра"},
+            "confidence": 0.7,
+        },
+    )
+    r = await client.post(
+        "/builder/extract",
+        json={"request": "трекер 2 литра"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["complete"] is False
+    assert data["next_question"] == "Как часто напоминать?"
+    assert data["step"] == 1
+    assert data["total_steps"] == 3
+
+
+async def test_extract_endpoint_rejects_empty_request(client):
+    r = await client.post("/builder/extract", json={"request": ""})
+    assert r.status_code == 400
