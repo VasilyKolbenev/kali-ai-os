@@ -64,6 +64,7 @@ def _log(level: str, message: str) -> None:
 
 _F5_LOADED = False
 _STT: Any = None
+_WAKE_WORD: Any = None
 
 
 def _ensure_f5() -> None:
@@ -76,6 +77,31 @@ def _ensure_f5() -> None:
     tts_engine_f5.load_models()
     _F5_LOADED = True
     _log("info", "F5-TTS Russian loaded")
+
+
+def _ensure_wake_word() -> Any:
+    """Lazy-load OpenWakeWord on first wake_detect.
+
+    The upstream package downloads/loads three ONNX models in sequence:
+    melspectrogram → embedding → keyword classifier (`hey_jarvis_v0.1`
+    and the other bundled keywords). Cold start on this dev box is
+    ~10-20 s; steady-state inference is well under 100 ms on CPU.
+
+    Reuses `kernel.voice.wake_word.WakeWordDetector` so the threshold
+    + buffer + reset semantics match exactly what the Python pipeline
+    used pre-Phase-3.
+    """
+    global _WAKE_WORD
+    if _WAKE_WORD is not None:
+        return _WAKE_WORD
+    from kernel.voice.wake_word import WakeWordDetector
+
+    _WAKE_WORD = WakeWordDetector(wake_word="jarvis")
+    _WAKE_WORD.load()
+    if not _WAKE_WORD.is_loaded:
+        raise RuntimeError("OpenWakeWord failed to load — see kernel.voice.wake_word logs")
+    _log("info", "OpenWakeWord loaded")
+    return _WAKE_WORD
 
 
 def _ensure_stt() -> Any:
@@ -173,6 +199,63 @@ def _handle_stt_transcribe(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _handle_wake_detect(args: dict[str, Any]) -> dict[str, Any]:
+    """base64 i16 LE PCM → (resample to 16 kHz if needed) → openwakeword.
+
+    OpenWakeWord requires 16 kHz mono input — its mel-spectrogram ONNX
+    is hard-coded to that rate. We accept any sample rate and resample
+    server-side via `scipy.signal.resample_poly` (proper anti-alias —
+    naive Rust decimation produced gibberish for STT and would do the
+    same here).
+    """
+    import numpy as np
+    from scipy.signal import resample_poly
+
+    audio_b64 = args["audio_b64"]
+    sample_rate = int(args.get("sample_rate", 16000))
+    threshold = float(args.get("threshold", 0.5))
+
+    raw = base64.b64decode(audio_b64)
+    if len(raw) % 2 != 0:
+        raise ValueError(f"audio_b64 length {len(raw)} not divisible by 2 (expected i16 LE)")
+    samples_i16 = np.frombuffer(raw, dtype="<i2")
+    audio_f32 = samples_i16.astype(np.float32) / 32768.0
+
+    target_sr = 16000
+    if sample_rate != target_sr:
+        from math import gcd
+
+        g = gcd(sample_rate, target_sr)
+        up = target_sr // g
+        down = sample_rate // g
+        audio_f32 = resample_poly(audio_f32, up, down).astype(np.float32)
+
+    wake = _ensure_wake_word()
+    # Apply caller-supplied threshold — instance var, only consulted
+    # inside `.process()` at the score comparison. Reassign per-call so
+    # the pipeline can tune dynamically without re-loading models.
+    wake.threshold = threshold
+    result = wake.process(audio_f32)
+
+    return {
+        "detected": bool(result.detected),
+        "word": result.word,
+        "confidence": float(result.confidence),
+    }
+
+
+def _handle_wake_reset(args: dict[str, Any]) -> dict[str, Any]:
+    """Clear OpenWakeWord's internal LSTM state.
+
+    No-op if the model hasn't been lazy-loaded yet — saves a 10-20 s
+    cold start when the pipeline calls `reset()` defensively before
+    the first detection.
+    """
+    if _WAKE_WORD is not None:
+        _WAKE_WORD.reset()
+    return {"ok": True}
+
+
 def _handle(req: dict[str, Any]) -> dict[str, Any]:
     op = req.get("op")
     args = req.get("args") or {}
@@ -182,6 +265,10 @@ def _handle(req: dict[str, Any]) -> dict[str, Any]:
         return _handle_tts_speak(args)
     if op == "stt_transcribe":
         return _handle_stt_transcribe(args)
+    if op == "wake_detect":
+        return _handle_wake_detect(args)
+    if op == "wake_reset":
+        return _handle_wake_reset(args)
     raise ValueError(f"unknown op: {op!r}")
 
 
