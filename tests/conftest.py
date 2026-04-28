@@ -1,9 +1,16 @@
 """Shared test fixtures."""
 
+import os
 from pathlib import Path
 
 import pytest
 import yaml
+
+# Skip the voice-engine prewarm (F5-TTS + Whisper STT) when the FastAPI
+# `lifespan` runs inside test fixtures. Without this, every test that
+# instantiates `create_app()` pays the ~3-5s ML-model cold-load cost
+# per fixture scope — kills CI throughput. See kernel/main.py lifespan.
+os.environ.setdefault("KALI_SKIP_PREWARM", "1")
 
 
 @pytest.fixture

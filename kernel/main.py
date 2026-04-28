@@ -465,48 +465,44 @@ def create_app(
             scheduler=app.state.scheduler,
         )
 
-        # Load TTS models in background — only if voice auto_start is enabled.
-        # Otherwise load on-demand via /tts/speak or /voice/start (avoids unused RAM).
-        async def _tts_bg_load() -> None:
-            if not config_manager.config.voice.auto_start:
-                logger.info("TTS deferred — will load on first /tts/speak or /voice/start")
-                return
+        # Voice-engine prewarm — load F5-TTS + Whisper STT eagerly so the
+        # first /tts/speak (wizard question) and /voice/transcribe (user
+        # utterance) don't pay the ~5s cold-load cost at the worst possible
+        # moment for the voice-builder pilot.
+        #
+        # Subsumes the previous `_tts_bg_load()` background task (deleted)
+        # which raced with this prewarm in default config (auto_start=true)
+        # and could double-load F5 weights → GPU OOM on smaller cards.
+        # Sequential `await` here is intentional: startup blocks until both
+        # engines are warm so the first user gesture sees a hot cache.
+        #
+        # Best-effort: each block has its own try/except → logger.warning;
+        # startup never aborts on prewarm failure (on-demand load paths
+        # in /tts/speak and get_or_create_stt still work as fallback).
+        #
+        # Tests skip via `KALI_SKIP_PREWARM=1` (set in tests/conftest.py)
+        # to avoid loading real ML models per-test fixture.
+        if os.environ.get("KALI_SKIP_PREWARM"):
+            logger.info("Voice prewarm skipped (KALI_SKIP_PREWARM set)")
+        else:
             try:
-                import asyncio as _aio_tts
-                from kernel.voice.tts_router import load_models as _load_tts
-                await _aio_tts.to_thread(_load_tts)
-                logger.info("TTS engine loaded in-process")
-            except Exception:
-                logger.warning("TTS engine not available (will use cloud fallbacks)")
-        asyncio.create_task(_tts_bg_load())
+                from kernel.voice.tts_router import is_loaded, load_models
 
-        # F5-TTS prewarm — load models eagerly so the first /tts/speak (the
-        # voice-builder's first wizard question) doesn't pay the ~5s cold-
-        # load cost at the worst possible moment. Best-effort: failures here
-        # don't abort startup, the on-demand load path in /tts/speak still
-        # serves as fallback.
-        try:
-            from kernel.voice.tts_router import is_loaded, load_models
+                if not is_loaded():
+                    logger.info("TTS prewarm: loading F5 models...")
+                    await asyncio.to_thread(load_models)
+                    logger.info("TTS prewarm: ready")
+            except Exception as e:
+                logger.warning("TTS prewarm failed (non-fatal): %s", e)
 
-            if not is_loaded():
-                logger.info("TTS prewarm: loading F5 models...")
-                await asyncio.to_thread(load_models)
-                logger.info("TTS prewarm: ready")
-        except Exception as e:
-            logger.warning("TTS prewarm failed (non-fatal): %s", e)
+            try:
+                from kernel.voice.transcribe_helper import get_or_create_stt
 
-        # Whisper STT prewarm — same rationale, for /voice/transcribe.
-        # The voice-builder's first user utterance triggers the first STT
-        # call; cold-load there freezes the UI for ~3-5s. Best-effort:
-        # `get_or_create_stt` will retry on first request if prewarm fails.
-        try:
-            from kernel.voice.transcribe_helper import get_or_create_stt
-
-            logger.info("STT prewarm: loading Whisper model...")
-            await asyncio.to_thread(get_or_create_stt, app.state)
-            logger.info("STT prewarm: ready")
-        except Exception as e:
-            logger.warning("STT prewarm failed (non-fatal): %s", e)
+                logger.info("STT prewarm: loading Whisper model...")
+                await asyncio.to_thread(get_or_create_stt, app.state)
+                logger.info("STT prewarm: ready")
+            except Exception as e:
+                logger.warning("STT prewarm failed (non-fatal): %s", e)
 
         logger.info("KALI kernel started (v%s)", __version__)
         yield
