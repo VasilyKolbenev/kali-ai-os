@@ -28,7 +28,7 @@ export type VoiceCommand =
 const _tokens = (s: string): string[] =>
   s
     .toLowerCase()
-    .replace(/[.,!?;:«»"]/g, " ")
+    .replace(/[.,!?;:«»"—–…­]/g, " ")
     .split(/\s+/)
     .filter(Boolean);
 
