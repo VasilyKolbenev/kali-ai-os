@@ -84,6 +84,10 @@ export function VoiceBuilderScreen() {
   // Audio capture wired to feed the single VAD via onFrame.
   const audio = useAudioCapture({ onFrame: vad.feed });
 
+  // Ref to capture live isRecording state for unmount cleanup.
+  const isRecordingRef = useRef(audio.isRecording);
+  isRecordingRef.current = audio.isRecording;
+
   // Hook the orb tap → start/stop recording.
   const handleTap = async () => {
     if (phase === "idle") {
@@ -115,11 +119,10 @@ export function VoiceBuilderScreen() {
   // the OS mic indicator doesn't stay lit when the user navigates away.
   useEffect(() => {
     return () => {
-      if (audio.isRecording) {
+      if (isRecordingRef.current) {
         void audio.stop();
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Map phase → orb state
@@ -135,7 +138,7 @@ export function VoiceBuilderScreen() {
       <h2 style={{ color: "var(--j-text)" }}>Создать агента</h2>
 
       {error && (
-        <div style={{ color: "var(--j-error, #f87171)", margin: 8 }}>{error}</div>
+        <div style={{ color: "var(--j-danger)", margin: 8 }}>{error}</div>
       )}
 
       {phase !== "previewing" && phase !== "done" && (
