@@ -45,48 +45,76 @@ export function useAudioCapture(opts: UseAudioCaptureOptions = {}): UseAudioCapt
   const [isRecording, setIsRecording] = useState(false);
 
   const start = useCallback(async () => {
+    // Reset chunks BEFORE the try so stale data never carries into next attempt.
     chunksRef.current = [];
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
-    streamRef.current = stream;
 
-    // Live frame tap for VAD.
-    const audioCtx = new AudioContext();
-    audioCtxRef.current = audioCtx;
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = FFT_SIZE;
-    source.connect(analyser);
-    analyserRef.current = analyser;
+    let stream: MediaStream | null = null;
+    let audioCtx: AudioContext | null = null;
+    let pollerId: number | null = null;
 
-    const buf = new Float32Array(analyser.fftSize);
-    pollerRef.current = window.setInterval(() => {
-      analyserRef.current?.getFloatTimeDomainData(buf);
-      onFrameRef.current?.(buf);
-    }, POLL_MS);
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      streamRef.current = stream;
 
-    // Blob path for the eventual /voice/transcribe payload.
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-    recorder.start();
-    recorderRef.current = recorder;
-    setIsRecording(true);
+      // Live frame tap for VAD.
+      audioCtx = new AudioContext();
+      audioCtxRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = FFT_SIZE;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const buf = new Float32Array(analyser.fftSize);
+      pollerId = window.setInterval(() => {
+        analyserRef.current?.getFloatTimeDomainData(buf);
+        // I2 fix: pass a fresh copy so consumers can hold the reference safely
+        // across ticks without seeing it overwritten by the next poll.
+        onFrameRef.current?.(new Float32Array(buf));
+      }, POLL_MS);
+      pollerRef.current = pollerId;
+
+      // Blob path for the eventual /voice/transcribe payload.
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (e) {
+      // C2 fix: cleanup partial init in reverse order before re-throwing.
+      if (pollerId !== null) window.clearInterval(pollerId);
+      pollerRef.current = null;
+      if (audioCtx) audioCtx.close();
+      audioCtxRef.current = null;
+      analyserRef.current = null;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      recorderRef.current = null;
+      throw e;
+    }
   }, []);
 
   const stop = useCallback(async () => {
+    // 1. Always clear poller first.
     if (pollerRef.current !== null) {
       window.clearInterval(pollerRef.current);
       pollerRef.current = null;
     }
 
+    // 2. Capture refs locally, then null them out so re-entry sees null.
     const recorder = recorderRef.current;
+    const stream = streamRef.current;
+    recorderRef.current = null;
+    streamRef.current = null;
+
     if (!recorder) {
       audioCtxRef.current?.close();
       audioCtxRef.current = null;
@@ -94,13 +122,19 @@ export function useAudioCapture(opts: UseAudioCaptureOptions = {}): UseAudioCapt
       return null;
     }
 
-    const stopped = new Promise<void>((resolve) => {
-      recorder.onstop = () => resolve();
-    });
-    recorder.stop();
-    await stopped;
+    // 3. C1 fix: only call stop()+await if recorder is actually active.
+    // Calling recorder.stop() when state === "inactive" throws InvalidStateError.
+    // If already inactive, the onstop event has already fired and assigning a new
+    // onstop handler will NOT re-fire it — the promise would hang forever.
+    if (recorder.state !== "inactive") {
+      const stopped = new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
+      recorder.stop();
+      await stopped;
+    }
 
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    stream?.getTracks().forEach((t) => t.stop());
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
     analyserRef.current = null;
@@ -111,7 +145,9 @@ export function useAudioCapture(opts: UseAudioCaptureOptions = {}): UseAudioCapt
     const decodeCtx = new AudioContext();
     const decoded = await decodeCtx.decodeAudioData(arrayBuffer);
     const sample_rate = decoded.sampleRate;
-    const float32 = decoded.getChannelData(0);
+    // I1 fix: copy before closing context — getChannelData returns a view into
+    // the AudioBuffer's internal storage which may be invalidated by close().
+    const float32 = new Float32Array(decoded.getChannelData(0));
     decodeCtx.close();
 
     // Float32 [-1, 1] → Int16 LE — symmetric scaling to match
@@ -123,8 +159,6 @@ export function useAudioCapture(opts: UseAudioCaptureOptions = {}): UseAudioCapt
     }
     const audio = new Uint8Array(int16.buffer);
 
-    recorderRef.current = null;
-    streamRef.current = null;
     return { audio, sample_rate };
   }, []);
 
