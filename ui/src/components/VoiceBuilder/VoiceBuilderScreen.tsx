@@ -181,7 +181,47 @@ export function VoiceBuilderScreen() {
       <h2 style={{ color: "var(--j-text)" }}>Создать агента</h2>
 
       {error && (
-        <div style={{ color: "var(--j-danger)", margin: 8 }}>{error}</div>
+        <div
+          style={{
+            maxWidth: 480,
+            margin: "12px auto",
+            padding: 12,
+            background: "rgba(248,113,113,0.12)",
+            border: "1px solid #f87171",
+            borderRadius: 6,
+            color: "var(--j-text)",
+          }}
+        >
+          <div style={{ marginBottom: 8 }}>{error}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={reset}
+              style={{
+                background: "transparent",
+                color: "var(--j-text-dim)",
+                border: "1px solid var(--j-border)",
+                borderRadius: 4,
+                padding: "4px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Сбросить
+            </button>
+            <button
+              onClick={() => setShowFallback(true)}
+              style={{
+                background: "transparent",
+                color: "var(--j-text-dim)",
+                border: "1px solid var(--j-border)",
+                borderRadius: 4,
+                padding: "4px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Печатать вместо
+            </button>
+          </div>
+        </div>
       )}
 
       {phase !== "previewing" && phase !== "done" && (
