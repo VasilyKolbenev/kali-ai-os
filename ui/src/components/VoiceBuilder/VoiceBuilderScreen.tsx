@@ -11,6 +11,8 @@ import { useAudioCapture } from "./useAudioCapture";
 import { useRmsVad } from "./useRmsVad";
 import { parseVoiceCommand } from "./voiceCommands";
 
+const FIRST_MOUNT_FLAG = "kali.voice_builder.intro_seen";
+
 export function VoiceBuilderScreen() {
   const {
     phase,
@@ -36,6 +38,21 @@ export function VoiceBuilderScreen() {
 
   const [showFallback, setShowFallback] = useState(false);
   const [textInput, setTextInput] = useState("");
+  const [showIntro, setShowIntro] = useState(() => {
+    try {
+      return !window.localStorage.getItem(FIRST_MOUNT_FLAG);
+    } catch {
+      return true;
+    }
+  });
+
+  const dismissIntro = () => {
+    try {
+      window.localStorage.setItem(FIRST_MOUNT_FLAG, "1");
+    } catch {}
+    setShowIntro(false);
+  };
+
   // Phase ref so the VAD onSilence closure (created once) reads current
   // phase without forcing the audio hook to re-create on every change.
   const phaseRef = useRef(phase);
@@ -169,6 +186,37 @@ export function VoiceBuilderScreen() {
 
       {phase !== "previewing" && phase !== "done" && (
         <>
+          {showIntro && (
+            <div
+              style={{
+                maxWidth: 480,
+                margin: "16px auto",
+                padding: 16,
+                background: "rgba(0,224,255,0.08)",
+                border: "1px solid var(--j-border)",
+                borderRadius: 8,
+                color: "var(--j-text)",
+              }}
+            >
+              <p style={{ marginBottom: 8 }}>
+                Чтобы говорить с Jarvis, нужен доступ к микрофону. Нажми на микрофон и
+                разреши доступ — это разовое действие.
+              </p>
+              <button
+                onClick={dismissIntro}
+                style={{
+                  background: "var(--j-cyan)",
+                  color: "var(--j-bg)",
+                  border: "none",
+                  padding: "6px 14px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Понятно
+              </button>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "center", margin: 24 }}>
             <VoiceOrb state={orbState} onTap={handleTap} />
           </div>
