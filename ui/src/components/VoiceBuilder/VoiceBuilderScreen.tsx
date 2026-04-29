@@ -15,6 +15,7 @@ export function VoiceBuilderScreen() {
   const {
     phase,
     askingSubState,
+    previewSubState,
     transcript,
     question,
     step,
@@ -124,6 +125,31 @@ export function VoiceBuilderScreen() {
       }
     };
   }, []);
+
+  // Re-start audio capture whenever we enter a listening sub-state.
+  // Single source of truth — no parallel VAD, no setTimeout fudge.
+  // PreviewConfirm and WizardPrompt both set their sub-state to "listening_*"
+  // only AFTER `say()` resolves (i.e. the speakers are silent), so mic-on
+  // won't echo TTS audio back into STT.
+  useEffect(() => {
+    const shouldListen =
+      (phase === "asking" && askingSubState === "listening_for_answer") ||
+      (phase === "previewing" && previewSubState === "listening_for_command");
+
+    if (!shouldListen) return;
+    // Already recording? (e.g. orb tap → listening) — leave alone.
+    if (audio.isRecording) return;
+
+    let cancelled = false;
+    void audio.start().catch(() => {
+      // permission was revoked between turns
+      if (!cancelled) setShowFallback(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, askingSubState, previewSubState]);
 
   // Map phase → orb state
   const orbState: VoiceOrbState =
