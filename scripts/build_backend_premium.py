@@ -97,6 +97,23 @@ HIDDEN = [
     "onnxruntime",
 ]
 
+# Packages whose runtime data files (e.g. bundled .onnx models, configs)
+# must be collected into the PyInstaller bundle. Without these, packages
+# look at <pkg>/resources/ at runtime and fail with NO_SUCHFILE.
+#
+# - openwakeword: ships 9 .onnx models (incl hey_jarvis, alexa, melspectrogram)
+#   under openwakeword/resources/models/.
+# - f5_tts / vocos: bundled configs + small data referenced by F5TTS().
+# - ruaccent: Russian accent dictionary for TTS preprocessing.
+# - faster_whisper: model assets used at first-run download path.
+COLLECT_DATA = [
+    "openwakeword",
+    "f5_tts",
+    "vocos",
+    "ruaccent",
+    "faster_whisper",
+]
+
 
 def main() -> None:
     cmd = [
@@ -115,6 +132,8 @@ def main() -> None:
         cmd.extend(["--add-data", f"{src};{dst}"])
     for imp in HIDDEN:
         cmd.extend(["--hidden-import", imp])
+    for pkg in COLLECT_DATA:
+        cmd.extend(["--collect-data", pkg])
 
     cmd.append(str(ENTRY))
 

@@ -2082,6 +2082,9 @@ def create_app(
                 "stt_model": os.environ.get("STT_MODEL", "base"),
             },
             "language": os.environ.get("KALI_LANGUAGE", "ru"),
+            # Onboarding gate: frontend reads this to decide whether to show
+            # the welcome flow. Stored in .env as KALI_ONBOARDING_COMPLETED.
+            "onboarding_completed": os.environ.get("KALI_ONBOARDING_COMPLETED", "").lower() == "true",
         }
 
     @app.post("/settings")
@@ -2121,6 +2124,10 @@ def create_app(
         if "language" in body:
             os.environ["KALI_LANGUAGE"] = body["language"]
             updates["KALI_LANGUAGE"] = body["language"]
+        if "onboarding_completed" in body:
+            value = "true" if body["onboarding_completed"] else "false"
+            os.environ["KALI_ONBOARDING_COMPLETED"] = value
+            updates["KALI_ONBOARDING_COMPLETED"] = value
 
         if updates:
             _save_env(updates)
