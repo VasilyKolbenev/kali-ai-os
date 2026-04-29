@@ -17,7 +17,7 @@ describe("useRmsVad", () => {
       }),
     );
 
-    // Push 200 frames of silence (RMS=0). At 50ms each → 10s wall.
+    // Push 40 frames of silence (RMS=0). At 50ms each → 2s wall.
     act(() => {
       for (let i = 0; i < 40; i++) {
         result.current.feed(new Float32Array(800).fill(0));
@@ -49,8 +49,13 @@ describe("useRmsVad", () => {
       result.current.feed(new Float32Array(800).fill(0.5));
       vi.advanceTimersByTime(50);
 
-      // More silence — needs a full 1500ms again
-      for (let i = 0; i < 31; i++) {
+      // More silence — needs a full 1500ms again. With 50ms ticks, the
+      // first tick captures silenceStart at delta=0; fire happens when
+      // (i-1)*50 >= 1500, i.e., i >= 31. Express the count derivation
+      // inline rather than as a magic 31.
+      const CHUNK_MS = 50;
+      const silenceMs = 1500;
+      for (let i = 0; i < Math.floor(silenceMs / CHUNK_MS) + 1; i++) {
         result.current.feed(new Float32Array(800).fill(0));
         vi.advanceTimersByTime(50);
       }
