@@ -29,6 +29,7 @@ interface BuilderState {
   partialSpec: BuilderPreview | null;
   transcript: string;
   error: string | null;
+  _submitGen: number;  // internal — incremented on each new pipeline; invalidates stale promises
 
   tap: () => void;
   submitAudio: (audio: Uint8Array | ArrayBuffer, sample_rate: number) => Promise<void>;
@@ -82,6 +83,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   partialSpec: null,
   transcript: "",
   error: null,
+  _submitGen: 0,
 
   tap: () => {
     const { phase } = get();
@@ -104,13 +106,16 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   },
 
   submitAudio: async (audio, sample_rate) => {
-    set({ phase: "transcribing" });
+    const gen = get()._submitGen + 1;
+    set({ phase: "transcribing", _submitGen: gen });
     try {
       const audio_b64 = _toBase64(audio);
       const stt = await builderApi.transcribe(audio_b64, sample_rate, "ru");
+      if (get()._submitGen !== gen) return;
       set({ transcript: stt.text, phase: "extracting", request: stt.text });
 
       const result = await builderApi.extract(stt.text, "ru");
+      if (get()._submitGen !== gen) return;
       if (result.complete) {
         set({
           sessionId: result.session_id,
@@ -139,15 +144,18 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
         });
       }
     } catch (e) {
+      if (get()._submitGen !== gen) return;
       set({ phase: "error", error: String(e) });
     }
   },
 
   start: async (request) => {
     // Text-fallback path (StarterExamples or "печатать вместо голоса").
-    set({ phase: "extracting", request, error: null });
+    const gen = get()._submitGen + 1;
+    set({ phase: "extracting", request, error: null, _submitGen: gen });
     try {
       const result = await builderApi.extract(request, "ru");
+      if (get()._submitGen !== gen) return;
       if (result.complete) {
         set({
           sessionId: result.session_id,
@@ -169,6 +177,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
         });
       }
     } catch (e) {
+      if (get()._submitGen !== gen) return;
       set({ phase: "error", error: String(e) });
     }
   },
@@ -211,6 +220,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
 
   cancel: async () => {
     const sid = get().sessionId;
+    // Increment gen BEFORE the await so in-flight promises see stale gen immediately.
+    set({ _submitGen: get()._submitGen + 1 });
     if (sid) await builderApi.cancel(sid).catch(() => {});
     get().reset();
   },
@@ -233,5 +244,6 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       partialSpec: null,
       transcript: "",
       error: null,
+      _submitGen: get()._submitGen + 1,
     }),
 }));

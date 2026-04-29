@@ -35,6 +35,7 @@ describe("useBuilderStore phases", () => {
       step: 0,
       total_steps: 3,
       next_question: "Какая дневная цель?",
+      questions: ["Как часто проверять?", "Какая дневная цель?", "Куда отправлять?"],
       partial_spec: { name: "treker-vody", template: "tracker", config: {} },
     });
 
@@ -48,8 +49,10 @@ describe("useBuilderStore phases", () => {
     await useBuilderStore.getState().submitAudio(fakeBlob, 16000);
 
     unsub();
-    expect(phases).toContain("transcribing");
-    expect(phases).toContain("extracting");
+    const transcribingIdx = phases.indexOf("transcribing");
+    const extractingIdx = phases.indexOf("extracting");
+    expect(transcribingIdx).toBeGreaterThanOrEqual(0);
+    expect(extractingIdx).toBeGreaterThan(transcribingIdx);
     expect(useBuilderStore.getState().phase).toBe("asking");
     expect(useBuilderStore.getState().sessionId).toBe("sid1");
   });
@@ -78,6 +81,33 @@ describe("useBuilderStore phases", () => {
 
     expect(useBuilderStore.getState().phase).toBe("previewing");
     expect(useBuilderStore.getState().preview?.name).toBe("treker-vody");
+  });
+
+  it("cancel() mid-submitAudio is honored — stale STT response does not leak state", async () => {
+    const { builderApi } = await import("../../api/builder");
+
+    // transcribe takes long enough that cancel() can race it
+    let resolveTranscribe: ((v: { text: string; language: string; duration_ms: number }) => void) | null = null;
+    (builderApi.transcribe as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((res) => { resolveTranscribe = res; })
+    );
+    (builderApi.cancel as ReturnType<typeof vi.fn>).mockResolvedValue({ status: "cancelled" });
+
+    const fakeBlob = new Uint8Array([0, 0, 0, 0]);
+    const submitPromise = useBuilderStore.getState().submitAudio(fakeBlob, 16000);
+
+    expect(useBuilderStore.getState().phase).toBe("transcribing");
+
+    await useBuilderStore.getState().cancel();
+    expect(useBuilderStore.getState().phase).toBe("idle");
+
+    // Now resolve the stale STT promise — store must not flip back into voice flow
+    resolveTranscribe!({ text: "тест", language: "ru", duration_ms: 100 });
+    await submitPromise;
+
+    expect(useBuilderStore.getState().phase).toBe("idle");
+    expect(useBuilderStore.getState().sessionId).toBeNull();
+    expect(useBuilderStore.getState().transcript).toBe("");
   });
 
   it("tap during listening cancels back to idle", () => {
