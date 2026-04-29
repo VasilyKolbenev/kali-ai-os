@@ -42,7 +42,7 @@ export function VoiceOrb({ state, onTap }: Props) {
         justifyContent: "center",
         cursor: disabled ? "default" : "pointer",
         transition: "box-shadow 0.2s, background 0.2s",
-        animation: state === "listening" ? "pulse 1.5s infinite" : undefined,
+        animation: state === "listening" ? "pulse-orb 1.5s infinite" : undefined,
       }}
     >
       {icon}
