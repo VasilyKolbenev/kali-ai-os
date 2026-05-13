@@ -5,7 +5,7 @@
 **Goal:** Move KALI from reactive ("ask, get answer") to proactive ("KALI tells you what matters") via three independent features built on existing primitives — without losing the voice-first non-tech identity. Direct counter to Anthropic Orbit's text dashboards (see `memory/project_competition.md` Competitor 3).
 
 **Architecture:** Three independent features (F1 voice morning briefing, F2 OS tray notifications, F3 chat suggestion engine) layered on existing primitives:
-- F1 = `Scheduler.register_cron` subscriber + `BriefingService` + auto-TTS via `_speak_response`.
+- F1 = `Scheduler.register_cron` subscriber + the Russian-aware `_build_daily_briefing` (kernel/main.py:77 — same function that powers /chat's first-of-day branch) + auto-TTS via `_speak_response`. Note: `BriefingService` in kernel/briefing.py is English-only and its endpoint is a stub — NOT used by F1.
 - F2 = Tauri notification plugin (NEW) + WebSocket `notification.new` event listener + per-agent settings toggle.
 - F3 = SQLite `chat_intent_log` table (NEW) + 6h pattern detection cron + chat-side suggestion banner that hands off to `useBuilderStore.start()`.
 
@@ -29,7 +29,8 @@ All three are feature-flag-independent: shipping F1 alone still adds value, no a
 Before Chunk 1, the executing agent MUST read:
 
 1. `docs/superpowers/specs/2026-05-05-proactive-kali-v1.md` — full spec.
-2. `kernel/briefing.py` — existing `BriefingService` class, `generate_morning_briefing(agent_data)` signature.
+2. `kernel/briefing.py` — existing `BriefingService` class (English-only, **NOT used by F1** — kept for backwards-compat of `/briefing/morning` HTTP route).
+2a. `kernel/main.py:77-182` — **the actual Russian-aware briefing function**: `_build_daily_briefing(s, is_ru: bool)`. F1's BriefingRunner calls this.
 3. `kernel/notifications.py` — existing `NotificationManager`, `Notification` dataclass.
 4. `kernel/scheduler.py` — `register_cron(name, cron_expr, topic)`, `_loop()` morning_hour check, `emit(topic)`.
 5. `kernel/event_bus.py` — `subscribe(topic_pattern, handler)`, `publish(event)`.
@@ -49,7 +50,7 @@ Before Chunk 1, the executing agent MUST read:
 ## File structure (decomposition decisions locked in here)
 
 **Backend (Python — new files):**
-- `kernel/briefing_runner.py` — NEW. Subscribes to `schedule.morning` → assembles agent_data → calls `BriefingService.generate_morning_briefing` → invokes `_speak_response`. Pure orchestration, no business logic.
+- `kernel/briefing_runner.py` — NEW. Subscribes to `schedule.morning` → calls injected `build_text()` (wired to `_build_daily_briefing(app.state, is_ru=...)` at startup) → invokes `_speak_response`. Pure orchestration, no business logic, no BriefingService dependency.
 - `kernel/suggestions.py` — NEW. `SuggestionEngine` class — periodic intent-log pattern detection + suggestion record CRUD.
 - `tests/kernel/test_briefing_runner.py` — NEW.
 - `tests/kernel/test_suggestions.py` — NEW.
@@ -234,6 +235,16 @@ git commit -m "feat(briefing): /settings round-trip for morning briefing config"
 
 ### Task 1.3: `briefing_runner.py` — subscribe schedule.morning → speak
 
+**CRITICAL DESIGN NOTE — read carefully:**
+
+There are **two briefing implementations** in the codebase:
+- `_build_daily_briefing(s, is_ru: bool)` at `kernel/main.py:77` — **Russian/English aware**, does **real work** (weather/tasks/calendar/agents/skills via `s.agent_runtime.dispatch(...)`).
+- `BriefingService.generate_morning_briefing(agent_data: dict)` at `kernel/briefing.py:19` — English-only template + the `/briefing/morning` endpoint at `kernel/main.py:939-943` is **essentially a stub** (`data: dict[str, Any] = {}` with a TODO comment).
+
+For Russian-first KALI proactive briefing (the whole point of F1), **BriefingRunner MUST call `_build_daily_briefing`, NOT `BriefingService`**. Otherwise users hear English at 8 AM. Locale comes from `KALI_LANGUAGE` env var (default `"ru"` per the language setting in `/settings`).
+
+The runner is a thin adapter — it doesn't compose agent_data itself, the briefing-text builder already does that via `s.agent_runtime.dispatch(...)`.
+
 **Files:**
 - Create: `kernel/briefing_runner.py`, `tests/kernel/test_briefing_runner.py`
 
@@ -244,7 +255,7 @@ Create `tests/kernel/test_briefing_runner.py`:
 ```python
 """Tests for kernel.briefing_runner — wires schedule.morning event to TTS."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -259,10 +270,8 @@ def event_bus():
 
 
 @pytest.fixture
-def mock_briefing_service():
-    svc = MagicMock()
-    svc.generate_morning_briefing = AsyncMock(return_value="Good morning, sir. No events.")
-    return svc
+def mock_build_text():
+    return AsyncMock(return_value="Доброе утро, сэр. На улице 5°C, ясно.")
 
 
 @pytest.fixture
@@ -270,57 +279,69 @@ def mock_speak():
     return AsyncMock()
 
 
-@pytest.fixture
-def mock_agent_data_collector():
-    return AsyncMock(return_value={"calendar": {"events": []}})
-
-
-async def test_runner_subscribes_to_schedule_morning(
-    event_bus, mock_briefing_service, mock_speak, mock_agent_data_collector
-):
+async def test_runner_subscribes_and_speaks(event_bus, mock_build_text, mock_speak):
     runner = BriefingRunner(
         bus=event_bus,
-        briefing=mock_briefing_service,
+        build_text=mock_build_text,
         speak=mock_speak,
-        collect_agent_data=mock_agent_data_collector,
         enabled_getter=lambda: True,
     )
     await runner.start()
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
-    mock_briefing_service.generate_morning_briefing.assert_awaited_once()
-    mock_speak.assert_awaited_once_with("Good morning, sir. No events.")
+    mock_build_text.assert_awaited_once()
+    mock_speak.assert_awaited_once_with("Доброе утро, сэр. На улице 5°C, ясно.")
 
 
-async def test_runner_skips_when_disabled(
-    event_bus, mock_briefing_service, mock_speak, mock_agent_data_collector
-):
+async def test_runner_skips_when_disabled(event_bus, mock_build_text, mock_speak):
     runner = BriefingRunner(
         bus=event_bus,
-        briefing=mock_briefing_service,
+        build_text=mock_build_text,
         speak=mock_speak,
-        collect_agent_data=mock_agent_data_collector,
         enabled_getter=lambda: False,
     )
     await runner.start()
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
     mock_speak.assert_not_awaited()
-    mock_briefing_service.generate_morning_briefing.assert_not_awaited()
+    mock_build_text.assert_not_awaited()
 
 
-async def test_runner_swallows_tts_errors(
-    event_bus, mock_briefing_service, mock_agent_data_collector
-):
+async def test_runner_skips_when_text_empty(event_bus, mock_speak):
+    empty_build = AsyncMock(return_value="")
+    runner = BriefingRunner(
+        bus=event_bus,
+        build_text=empty_build,
+        speak=mock_speak,
+        enabled_getter=lambda: True,
+    )
+    await runner.start()
+    await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
+    mock_speak.assert_not_awaited()
+
+
+async def test_runner_swallows_tts_errors(event_bus, mock_build_text):
     failing_speak = AsyncMock(side_effect=RuntimeError("TTS down"))
     runner = BriefingRunner(
         bus=event_bus,
-        briefing=mock_briefing_service,
+        build_text=mock_build_text,
         speak=failing_speak,
-        collect_agent_data=mock_agent_data_collector,
         enabled_getter=lambda: True,
     )
     await runner.start()
     # Must not raise — briefing failure cannot kill the kernel.
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
+
+
+async def test_runner_swallows_build_errors(event_bus, mock_speak):
+    failing_build = AsyncMock(side_effect=RuntimeError("agent runtime down"))
+    runner = BriefingRunner(
+        bus=event_bus,
+        build_text=failing_build,
+        speak=mock_speak,
+        enabled_getter=lambda: True,
+    )
+    await runner.start()
+    await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
+    mock_speak.assert_not_awaited()
 ```
 
 **Why no `drain()` call?** `EventBus.publish()` (kernel/event_bus.py:39) already awaits `asyncio.gather(...)` on all matching handlers before returning. By the time `await bus.publish(...)` resolves, every handler has completed (or raised). No separate flush is needed.
@@ -335,24 +356,27 @@ Expected: `ImportError: cannot import name 'BriefingRunner'`.
 Create `kernel/briefing_runner.py`:
 
 ```python
-"""Wires Scheduler `schedule.morning` events to BriefingService + TTS auto-speak.
+"""Wires Scheduler `schedule.morning` events to TTS auto-speak.
 
-Pure orchestration — no business logic. BriefingService stays the single source
-of truth for assembling the briefing text.
+Pure orchestration — delegates briefing-text assembly to an injected callable.
+At wiring time (kernel/main.py lifespan) the caller binds this to
+`_build_daily_briefing(app.state, is_ru=...)` — the same Russian-aware function
+used by /chat's first-of-day branch. We do NOT use BriefingService here:
+that's English-only and its /briefing/morning endpoint is currently a stub
+with no real agent data wiring (kernel/main.py:941 TODO).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
-from kernel.briefing import BriefingService
 from kernel.event_bus import EventBus
 from kernel.models import Event
 
 logger = logging.getLogger(__name__)
 
-AgentDataCollector = Callable[[], Awaitable[dict[str, Any]]]
+BuildTextFn = Callable[[], Awaitable[str]]
 SpeakFn = Callable[[str], Awaitable[None]]
 EnabledGetter = Callable[[], bool]
 
@@ -362,11 +386,9 @@ class BriefingRunner:
 
     Args:
         bus: shared EventBus instance.
-        briefing: BriefingService used to assemble text.
+        build_text: async fn that returns the briefing text. Locale + data
+            collection are the builder's responsibility — runner stays thin.
         speak: async fn that takes briefing text and plays it via TTS.
-        collect_agent_data: async fn that gathers calendar/weather/etc dict
-            from agent runtime. Caller provides the actual collector to
-            avoid coupling to AgentRuntime here.
         enabled_getter: fn returning current "is briefing enabled" setting.
             Called at fire time (not at subscribe time) so changes take
             effect without restart.
@@ -375,15 +397,13 @@ class BriefingRunner:
     def __init__(
         self,
         bus: EventBus,
-        briefing: BriefingService,
+        build_text: BuildTextFn,
         speak: SpeakFn,
-        collect_agent_data: AgentDataCollector,
         enabled_getter: EnabledGetter,
     ) -> None:
         self._bus = bus
-        self._briefing = briefing
+        self._build_text = build_text
         self._speak = speak
-        self._collect = collect_agent_data
         self._enabled = enabled_getter
         self._started = False
 
@@ -400,13 +420,18 @@ class BriefingRunner:
             logger.debug("Morning briefing skipped: disabled in settings")
             return
         try:
-            agent_data = await self._collect()
-            text = await self._briefing.generate_morning_briefing(agent_data)
-            if text:
-                await self._speak(text)
-                logger.info("Morning briefing spoken (%d chars)", len(text))
+            text = await self._build_text()
         except Exception:
-            logger.exception("Morning briefing failed — swallowed to keep kernel alive")
+            logger.exception("Morning briefing text-build failed — skipping speak")
+            return
+        if not text:
+            logger.debug("Morning briefing skipped: empty text")
+            return
+        try:
+            await self._speak(text)
+            logger.info("Morning briefing spoken (%d chars)", len(text))
+        except Exception:
+            logger.exception("Morning briefing TTS failed — swallowed to keep kernel alive")
 ```
 
 - [ ] **Step 4: Run tests**
@@ -467,37 +492,36 @@ In `kernel/main.py` lifespan setup (find the section around `briefing = Briefing
 # After: briefing = BriefingService(event_bus)
 from kernel.briefing_runner import BriefingRunner
 
-async def _collect_briefing_data() -> dict[str, Any]:
-    """Aggregate calendar/tasks/weather/budget from running agents.
-
-    Returns at least an empty dict on any failure — caller handles
-    missing keys gracefully.
-    """
-    data: dict[str, Any] = {}
-    try:
-        # Re-use existing agent data collection used by /briefing/morning route.
-        # If a shared helper exists, call it here; otherwise inline the minimal
-        # set used by BriefingService.generate_morning_briefing.
-        data = await _gather_agent_data_for_briefing(runtime)
-    except Exception:
-        logger.exception("agent data collection failed; briefing will be minimal")
-    return data
-
 def _briefing_enabled() -> bool:
     return os.environ.get("KALI_BRIEFING_MORNING_ENABLED", "true").lower() == "true"
 
+def _briefing_is_ru() -> bool:
+    return os.environ.get("KALI_LANGUAGE", "ru").lower() == "ru"
+
+async def _build_briefing_text() -> str:
+    """Build briefing text using the Russian-aware helper.
+
+    `_build_daily_briefing` (kernel/main.py:77) is the existing function used
+    by /chat's first-of-day branch. It dispatches to agent_runtime for
+    weather/tasks/calendar/agents/skills and assembles localized text.
+    """
+    return await _build_daily_briefing(app.state, is_ru=_briefing_is_ru())
+
 briefing_runner = BriefingRunner(
     bus=event_bus,
-    briefing=briefing,
+    build_text=_build_briefing_text,
     speak=_speak_response,
-    collect_agent_data=_collect_briefing_data,
     enabled_getter=_briefing_enabled,
 )
 await briefing_runner.start()
 app.state.briefing_runner = briefing_runner
 ```
 
-If `_gather_agent_data_for_briefing` doesn't exist yet, extract the body of the current `/briefing/morning` route handler (kernel/main.py:940-943) into a module-level async fn and call from both sites. This is the spec's "Refactor briefing assembly logic into reusable module" line.
+**Verified state:**
+- `_build_daily_briefing(s, is_ru: bool)` at kernel/main.py:77 — takes the state object and locale flag, returns the assembled text.
+- It accesses `s.agent_runtime.dispatch(...)` and `s.skill_executor.list_skills()` — both already on `app.state` by the time lifespan startup reaches this code (verified by reading existing /briefing/morning handler at line 939-943 which uses `request.app.state.briefing`).
+- The locale flag follows `KALI_LANGUAGE` env (default `"ru"` per GET /settings response at line 2084).
+- `BriefingService` is NOT touched by this plan — the existing `/briefing/morning` endpoint stub stays as is for backwards-compat. Proactive briefing routes through `_build_daily_briefing` only.
 
 - [ ] **Step 4: Run test**
 
