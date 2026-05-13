@@ -190,27 +190,27 @@ Expected: FAIL (key not in response).
 
 - [ ] **Step 3: Implement**
 
-In `kernel/main.py` `GET /settings` handler, add to response dict:
+In `kernel/main.py` `GET /settings` handler (line 2058-2088), the response is a **nested dict** with `llm/tts/voice` sub-objects plus flat `language` and `onboarding_completed`. Add the two briefing keys at the **top level** (flat, alongside `language` and `onboarding_completed`):
 
 ```python
 "briefing_morning_enabled": os.environ.get("KALI_BRIEFING_MORNING_ENABLED", "true").lower() == "true",
 "briefing_morning_time": os.environ.get("KALI_BRIEFING_MORNING_TIME", "08:00"),
 ```
 
-In `POST /settings` handler, accept and persist:
+In `POST /settings` handler (line 2090), follow the **existing pattern** (line 2096 onwards): accumulate into a single `updates: dict[str, str]` and call `_save_env(updates)` once at the end (line 2133). Insert these blocks before the final `if updates:` check:
 
 ```python
-if "briefing_morning_enabled" in payload:
-    val = "true" if payload["briefing_morning_enabled"] else "false"
-    _env_set("KALI_BRIEFING_MORNING_ENABLED", val)
+if "briefing_morning_enabled" in body:
+    val = "true" if body["briefing_morning_enabled"] else "false"
     os.environ["KALI_BRIEFING_MORNING_ENABLED"] = val
-if "briefing_morning_time" in payload:
-    BriefingConfig(morning_time=payload["briefing_morning_time"])  # validates
-    _env_set("KALI_BRIEFING_MORNING_TIME", payload["briefing_morning_time"])
-    os.environ["KALI_BRIEFING_MORNING_TIME"] = payload["briefing_morning_time"]
+    updates["KALI_BRIEFING_MORNING_ENABLED"] = val
+if "briefing_morning_time" in body:
+    BriefingConfig(morning_time=body["briefing_morning_time"])  # validates HH:MM
+    os.environ["KALI_BRIEFING_MORNING_TIME"] = body["briefing_morning_time"]
+    updates["KALI_BRIEFING_MORNING_TIME"] = body["briefing_morning_time"]
 ```
 
-(Use existing `_env_set` helper — verify name by reading current onboarding_completed POST handler nearby.)
+The `_save_env(updates: dict[str, str])` helper is defined at `kernel/main.py:185` — takes a dict and writes once. Do NOT invent `_env_set` or call `_save_env` per-key.
 
 - [ ] **Step 4: Run test to verify pass**
 
@@ -279,7 +279,6 @@ async def test_runner_subscribes_to_schedule_morning(
     )
     await runner.start()
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
-    await event_bus.drain()  # flush pending handlers
     mock_briefing_service.generate_morning_briefing.assert_awaited_once()
     mock_speak.assert_awaited_once_with("Good morning, sir. No events.")
 
@@ -296,7 +295,6 @@ async def test_runner_skips_when_disabled(
     )
     await runner.start()
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
-    await event_bus.drain()
     mock_speak.assert_not_awaited()
     mock_briefing_service.generate_morning_briefing.assert_not_awaited()
 
@@ -315,10 +313,9 @@ async def test_runner_swallows_tts_errors(
     await runner.start()
     # Must not raise — briefing failure cannot kill the kernel.
     await event_bus.publish(Event(topic="schedule.morning", source="test", payload={}))
-    await event_bus.drain()
 ```
 
-(Verify `EventBus.drain()` method exists. If not, use `await asyncio.sleep(0.05)` after publish to let async handlers run. Read `kernel/event_bus.py` first to confirm the right pattern.)
+**Why no `drain()` call?** `EventBus.publish()` (kernel/event_bus.py:39) already awaits `asyncio.gather(...)` on all matching handlers before returning. By the time `await bus.publish(...)` resolves, every handler has completed (or raised). No separate flush is needed.
 
 - [ ] **Step 2: Run failing test**
 
@@ -444,7 +441,6 @@ async def test_briefing_runner_speaks_on_schedule_morning(client, monkeypatch):
     app = client.app
     bus = app.state.event_bus
     await bus.publish(Event(topic="schedule.morning", source="test", payload={}))
-    await bus.drain()  # or asyncio.sleep(0.1)
 
     assert len(spoken) == 1
     assert len(spoken[0]) > 0  # non-empty
@@ -832,7 +828,7 @@ Goal: notifier/monitor skill templates publish `notification.new` event with sha
 ### Task 3.1: Notifier template emits `notification.new` event
 
 **Files:**
-- Modify: `kernel/skill_templates/notifier.py` (per code map line 1-60 — execute() does not currently emit)
+- Modify: `kernel/skill_templates/notifier.py` — `NotifierTemplate` is an async class (line 14), `async def execute` (line 27), `async def _notify` (line 50). It does NOT currently emit events to the bus, only writes to `history.json`. We add an `await bus.publish(...)` call inside `_notify`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -840,96 +836,106 @@ Locate or create `tests/kernel/test_skill_template_notifier.py`. Add:
 
 ```python
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from kernel.skill_templates import notifier
+from kernel.skill_templates import notifier as notifier_mod
+from kernel.skill_templates.notifier import NotifierTemplate
 
 
-@pytest.mark.asyncio
-async def test_notify_action_publishes_event(monkeypatch):
-    bus = MagicMock()
-    bus.publish = AsyncMock()
+@pytest.fixture(autouse=True)
+def reset_event_bus():
+    notifier_mod.set_event_bus(None)
+    yield
+    notifier_mod.set_event_bus(None)
 
-    # Inject bus into the template's globals (read implementation to find pattern)
-    monkeypatch.setattr(notifier, "_get_event_bus", lambda: bus)
 
-    result = notifier.execute(
-        action="notify",
-        args={"title": "BTC alert", "message": "Биткоин -5%"},
-        config={"name": "biticoin_notifier"},
+async def test_notify_action_publishes_event(tmp_path):
+    bus = AsyncMock()
+    notifier_mod.set_event_bus(bus)
+
+    template = NotifierTemplate(
+        name="biticoin_notifier",
+        data_dir=tmp_path,
+        config={"default_channel": "voice"},
     )
 
-    assert result["ok"] is True
+    result = await template.execute(
+        action="notify",
+        args={"title": "BTC alert", "message": "Биткоин -5%"},
+        config={"default_channel": "voice"},
+    )
+
+    assert result["status"] == "sent"
     bus.publish.assert_awaited_once()
     event = bus.publish.await_args[0][0]
     assert event.topic == "notification.new"
     assert event.payload["title"] == "BTC alert"
     assert event.payload["message"] == "Биткоин -5%"
     assert event.payload["source"] == "biticoin_notifier"
+
+
+async def test_notify_does_not_publish_when_bus_unset(tmp_path):
+    """If no bus has been registered (e.g., template used outside KALI kernel),
+    _notify must still succeed without raising."""
+    template = NotifierTemplate(
+        name="x",
+        data_dir=tmp_path,
+        config={},
+    )
+    result = await template.execute(
+        action="notify",
+        args={"message": "hi"},
+        config={},
+    )
+    assert result["status"] == "sent"
 ```
+
+Verify `NotifierTemplate.__init__` signature first — read `kernel/skill_templates/base.py` to confirm `name`, `data_dir`, `config` constructor parameters. If different, adjust the test fixture.
 
 - [ ] **Step 2: Run failing test**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/kernel/test_skill_template_notifier.py -v`
-Expected: FAIL.
+Expected: FAIL — `AttributeError: module 'kernel.skill_templates.notifier' has no attribute 'set_event_bus'`.
 
 - [ ] **Step 3: Implement**
 
-Read current `kernel/skill_templates/notifier.py` first. Locate the `notify` branch in `execute()` (or wherever the alert is recorded). Add event-bus publish there.
+Templates are already async (`async def execute`, `async def _notify`). No sync-bridge needed — just `await bus.publish(...)` directly. Inject bus via a module-level setter called once at kernel startup.
 
-The challenge: skill templates are sync functions. They need an event-bus reference. Two options:
-- **Option A (preferred):** add a module-level `_get_event_bus()` function that returns the live bus. Set it once at kernel startup via `notifier.set_event_bus(bus)` or similar. The bus is async-safe to publish from sync code via `asyncio.run_coroutine_threadsafe(...)` if the executor is in a different thread. Simpler if everything is one loop: schedule with `asyncio.ensure_future`.
-- **Option B:** make `execute()` async — bigger refactor. Defer.
-
-Go with Option A. Add to `kernel/skill_templates/notifier.py`:
+Add to top of `kernel/skill_templates/notifier.py` (after existing imports):
 
 ```python
-import asyncio
-import logging
+from kernel.event_bus import EventBus
 from kernel.models import Event
 
-logger = logging.getLogger(__name__)
+_event_bus: EventBus | None = None
 
-_event_bus = None
 
-def set_event_bus(bus) -> None:
+def set_event_bus(bus: EventBus | None) -> None:
+    """Register the event bus that _notify will publish to.
+
+    Called once at kernel startup. Passing None unregisters (used in tests).
+    """
     global _event_bus
     _event_bus = bus
-
-def _get_event_bus():
-    return _event_bus
-
-def _publish_notification(title: str, message: str, source: str, priority: str = "normal") -> None:
-    bus = _get_event_bus()
-    if bus is None:
-        logger.debug("Notifier: event bus not set, skipping publish")
-        return
-    event = Event(
-        topic="notification.new",
-        source=source,
-        payload={"title": title, "message": message, "priority": priority, "source": source},
-    )
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(bus.publish(event))
-    except RuntimeError:
-        # No running loop in this thread — schedule via run_coroutine_threadsafe
-        # Caller must ensure there's a kernel loop reachable. Document this.
-        logger.warning("Notifier: no event loop in thread, notification dropped")
 ```
 
-Then in the `notify` action branch of `execute()`:
+Inside `async def _notify(self, args, config)`, after the existing `history.append(entry)` and `await self.save_data(...)` lines, add:
 
 ```python
-_publish_notification(
-    title=args.get("title", "Notification"),
-    message=args.get("message", ""),
-    source=config.get("name", "notifier"),
-    priority=args.get("priority", "normal"),
-)
+if _event_bus is not None:
+    await _event_bus.publish(Event(
+        topic="notification.new",
+        source=self.skill_name,
+        payload={
+            "title": args.get("title", "Notification"),
+            "message": message,
+            "priority": args.get("priority", "normal"),
+            "source": self.skill_name,
+        },
+    ))
 ```
 
-At kernel startup (`kernel/main.py` lifespan), call once after event_bus exists:
+At kernel startup in `kernel/main.py` lifespan, after `event_bus` is created, call once:
 
 ```python
 from kernel.skill_templates import notifier as _notifier_template
@@ -939,7 +945,7 @@ _notifier_template.set_event_bus(event_bus)
 - [ ] **Step 4: Run test**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/kernel/test_skill_template_notifier.py -v`
-Expected: PASS.
+Expected: 2 tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -950,24 +956,106 @@ git commit -m "feat(notifier): publish notification.new event on alert"
 
 ### Task 3.2: Monitor template emits `notification.new` event
 
-Mirror of Task 3.1 for `kernel/skill_templates/monitor.py`.
+Mirror of Task 3.1 for `kernel/skill_templates/monitor.py` — `MonitorTemplate` (line 17) is also an async class with `async def execute` (line 31). It does NOT currently emit events.
 
 **Files:**
 - Modify: `kernel/skill_templates/monitor.py`
 
-- [ ] **Step 1: Write failing test** — same pattern as 3.1, but for monitor's `check` action when alert threshold breached.
+- [ ] **Step 1: Write failing test**
 
-- [ ] **Step 2: Run failing test** — expect FAIL.
+Create `tests/kernel/test_skill_template_monitor.py`:
 
-- [ ] **Step 3: Implement** — apply same `_publish_notification` helper. Consider extracting it to `kernel/skill_templates/_notify.py` shared module to avoid duplication (DRY). If extracted, both notifier.py and monitor.py import from it.
+```python
+import pytest
+from unittest.mock import AsyncMock
+
+from kernel.skill_templates import monitor as monitor_mod
+from kernel.skill_templates.monitor import MonitorTemplate
+
+
+@pytest.fixture(autouse=True)
+def reset_event_bus():
+    monitor_mod.set_event_bus(None)
+    yield
+    monitor_mod.set_event_bus(None)
+
+
+async def test_monitor_publishes_on_status_mismatch(tmp_path):
+    bus = AsyncMock()
+    monitor_mod.set_event_bus(bus)
+
+    template = MonitorTemplate(
+        name="example_monitor",
+        data_dir=tmp_path,
+        config={"url": "https://example.com", "expected_status": 200},
+    )
+
+    # _mock_status forces a non-matching response (per existing args contract,
+    # see monitor.py docstring at line 38).
+    result = await template.execute(
+        action="check",
+        args={"_mock_status": 503},
+        config={"url": "https://example.com", "expected_status": 200},
+    )
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args[0][0]
+    assert event.topic == "notification.new"
+    assert event.payload["source"] == "example_monitor"
+
+
+async def test_monitor_does_not_publish_on_match(tmp_path):
+    bus = AsyncMock()
+    monitor_mod.set_event_bus(bus)
+
+    template = MonitorTemplate(
+        name="example_monitor",
+        data_dir=tmp_path,
+        config={"url": "https://example.com", "expected_status": 200},
+    )
+    await template.execute(
+        action="check",
+        args={"_mock_status": 200},
+        config={"url": "https://example.com", "expected_status": 200},
+    )
+
+    bus.publish.assert_not_awaited()
+```
+
+- [ ] **Step 2: Run failing test** — expect FAIL with `AttributeError: ... has no attribute 'set_event_bus'`.
+
+- [ ] **Step 3: Implement** — same pattern as Task 3.1. Add module-level `_event_bus` + `set_event_bus(bus)` to `kernel/skill_templates/monitor.py`. Inside async `_check` (or wherever status mismatch is detected — read the file first), publish on mismatch only:
+
+```python
+if _event_bus is not None and status != expected_status:
+    await _event_bus.publish(Event(
+        topic="notification.new",
+        source=self.skill_name,
+        payload={
+            "title": f"{self.skill_name}: статус {status}",
+            "message": f"URL {url} вернул {status}, ожидался {expected_status}",
+            "priority": "high",
+            "source": self.skill_name,
+        },
+    ))
+```
+
+In `kernel/main.py` lifespan, mirror the notifier wiring:
+
+```python
+from kernel.skill_templates import monitor as _monitor_template
+_monitor_template.set_event_bus(event_bus)
+```
+
+**DRY decision:** the two templates share ~5 lines of bus-publish code. **Do NOT** extract a shared helper for this in v1 — premature abstraction. If a third template needs the same pattern, then refactor.
 
 - [ ] **Step 4: Run tests** — both templates' tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add kernel/skill_templates/monitor.py kernel/skill_templates/_notify.py tests/kernel/test_skill_template_monitor.py
-git commit -m "feat(monitor): publish notification.new event when alert fires"
+git add kernel/skill_templates/monitor.py tests/kernel/test_skill_template_monitor.py kernel/main.py
+git commit -m "feat(monitor): publish notification.new event on status mismatch"
 ```
 
 ### Task 3.3: Add `tauri-plugin-notification` to Rust deps
@@ -1164,10 +1252,10 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
 }
 ```
 
-Also install the plugin's JS package:
+Also install the plugin's JS package. **Pin to v2.x** to match the Rust crate `tauri-plugin-notification = "2"` (Task 3.3). A `1.x` JS package would silently bind to incompatible Rust APIs:
 
 ```bash
-cd ui && pnpm add @tauri-apps/plugin-notification
+cd ui && pnpm add "@tauri-apps/plugin-notification@^2"
 ```
 
 - [ ] **Step 4: Run test**
@@ -1316,41 +1404,31 @@ git commit -m "feat(notifications): NotificationManager listens to WS notificati
 **Files:**
 - Modify: `ui/src/App.tsx`
 
-- [ ] **Step 1: Write failing test**
+This is a pure wiring task — adding a single component invocation to the render tree. The behavioral coverage is already in Task 4.2 (unit test for the component itself) and will be re-covered in Chunk 7's E2E test that fires a WS event end-to-end. **No unit test for this task** — testing "the component is in the JSX" has near-zero signal. We rely on the type checker + E2E for verification.
 
-Add to `ui/src/__tests__/App.test.tsx` (create if missing):
+- [ ] **Step 1: Implement**
 
-```typescript
-it("mounts NotificationManager (subscribes to WS)", async () => {
-  const { container } = render(<App />);
-  // NotificationManager returns null — assert no error and component is in tree.
-  // Best signal: spy on onMessage and assert subscription registered.
-  // ...
-});
-```
-
-Pragmatic alternative: skip this test and verify by integration in Chunk 7 e2e.
-
-- [ ] **Step 3: Implement**
-
-In `ui/src/App.tsx`, add import and mount:
+In `ui/src/App.tsx`, add import and mount the component once at the top of the JSX tree (inside the wrapping `<div>`, before `<Sidebar />`):
 
 ```tsx
 import { NotificationManager } from "./components/Notifications/NotificationManager";
 
-// Inside the main render tree, before <Sidebar /> or anywhere top-level:
+// Inside the main render JSX, top of the return tree:
 <NotificationManager />
+<Sidebar />
 ```
 
-- [ ] **Step 4: Verify**
+NotificationManager returns `null` so it does not affect layout.
+
+- [ ] **Step 2: Verify**
 
 ```bash
 cd ui && pnpm test && npx tsc --noEmit
 ```
 
-Expected: green.
+Expected: green. tsc exit 0. No new test failures introduced.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add ui/src/App.tsx
@@ -1516,51 +1594,72 @@ Goal: every /chat hit logs intent classification. Cron job every 6h scans for 5+
 - Create: `kernel/suggestions.py`, `tests/kernel/test_suggestions.py`
 - Modify: `kernel/database.py` (extend SCHEMA), `kernel/main.py` (/chat hook + /suggestions routes + cron registration), `kernel/models.py` (SuggestionRecord)
 
-### Task 5.1: Database schema — chat_intent_log + suggestions tables
+### Task 5.1: Database schema + public `conn` accessor
 
 **Files:**
-- Modify: `kernel/database.py`
+- Modify: `kernel/database.py` — extend `SCHEMA` (line 12-42) + add a **public** `conn` property. The existing `_db` (line 73) is private; SuggestionEngine needs a clean public accessor to avoid touching `_db`.
 
 - [ ] **Step 1: Write failing test**
 
-Add to `tests/kernel/test_database.py` (or create):
+Add to `tests/kernel/test_database.py` (or create — the project has `asyncio_mode = "auto"` so test functions don't need the `@pytest.mark.asyncio` decorator, but fixtures still do — see Task 5.3 for the fixture pattern):
 
 ```python
-import pytest
+from pathlib import Path
+
 from kernel.database import Database
 
-@pytest.mark.asyncio
-async def test_initialize_creates_intent_log_table(tmp_path):
+
+async def test_initialize_creates_intent_log_table(tmp_path: Path):
     db = Database(tmp_path / "test.db")
     await db.initialize()
-    async with db.connect() as conn:
-        cursor = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_intent_log'"
-        )
-        row = await cursor.fetchone()
+    cursor = await db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_intent_log'"
+    )
+    row = await cursor.fetchone()
+    await db.close()
     assert row is not None
 
-@pytest.mark.asyncio
-async def test_initialize_creates_suggestions_table(tmp_path):
+
+async def test_initialize_creates_suggestions_table(tmp_path: Path):
     db = Database(tmp_path / "test.db")
     await db.initialize()
-    async with db.connect() as conn:
-        cursor = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='suggestions'"
-        )
-        row = await cursor.fetchone()
+    cursor = await db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='suggestions'"
+    )
+    row = await cursor.fetchone()
+    await db.close()
     assert row is not None
+
+
+async def test_conn_property_returns_connection(tmp_path: Path):
+    db = Database(tmp_path / "test.db")
+    await db.initialize()
+    assert db.conn is not None
+    await db.close()
 ```
-
-(Verify `Database.connect()` shape — read database.py first.)
 
 - [ ] **Step 2: Run failing test**
 
-Expected: FAIL.
+Expected: FAIL — `chat_intent_log` does not exist, and `db.conn` raises `AttributeError`.
 
-- [ ] **Step 3: Extend `SCHEMA`**
+- [ ] **Step 3: Add `conn` property to Database**
 
-In `kernel/database.py`, append to the `SCHEMA` string:
+In `kernel/database.py`, right after the existing private `_db` property (around line 72-76), add:
+
+```python
+@property
+def conn(self) -> aiosqlite.Connection:
+    """Public accessor for the underlying connection.
+
+    Used by classes that compose Database (e.g., SuggestionEngine) and need to
+    issue queries not covered by Database's curated methods.
+    """
+    return self._db
+```
+
+- [ ] **Step 4: Extend `SCHEMA`**
+
+In `kernel/database.py`, append to the existing `SCHEMA` string (which currently ends after `user_preferences`):
 
 ```python
 SCHEMA = """
@@ -1594,16 +1693,16 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_active
 """
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 5: Run tests**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/kernel/test_database.py -v`
-Expected: PASS.
+Expected: 3 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add kernel/database.py tests/kernel/test_database.py
-git commit -m "feat(suggestions): add chat_intent_log + suggestions tables"
+git commit -m "feat(suggestions): add chat_intent_log + suggestions tables + conn accessor"
 ```
 
 ### Task 5.2: `SuggestionRecord` pydantic model
@@ -1661,31 +1760,36 @@ Create `tests/kernel/test_suggestions.py`:
 
 ```python
 import pytest
+import pytest_asyncio
+
 from kernel.database import Database
 from kernel.suggestions import SuggestionEngine
 
 
-@pytest.fixture
+# IMPORTANT: pyproject.toml has `asyncio_mode = "auto"` which auto-marks test
+# functions but NOT fixtures. Async fixtures MUST use @pytest_asyncio.fixture.
+@pytest_asyncio.fixture
 async def db(tmp_path):
     d = Database(tmp_path / "test.db")
     await d.initialize()
-    return d
+    yield d
+    await d.close()
 
 
 async def test_log_intent_appends_row(db):
     engine = SuggestionEngine(db)
-    await engine.log_intent(intent_type="skill", intent_template="notifier", raw_text="курс битcoin")
+    await engine.log_intent(intent_type="skill", intent_template="notifier", raw_text="курс биткоин")
     rows = await engine._all_intent_logs()
     assert len(rows) == 1
     assert rows[0]["intent_template"] == "notifier"
-    assert rows[0]["raw_text"] == "курс битcoin"
+    assert rows[0]["raw_text"] == "курс биткоин"
 
 
 async def test_detect_threshold_creates_suggestion(db):
     engine = SuggestionEngine(db)
     # 5 hits on same intent template within 7-day window
     for i in range(5):
-        await engine.log_intent("skill", "notifier", f"курс битcoin {i}")
+        await engine.log_intent("skill", "notifier", f"курс биткоин {i}")
     suggestions = await engine.detect_patterns()
     assert len(suggestions) == 1
     assert suggestions[0].intent_template == "notifier"
@@ -1747,7 +1851,7 @@ Privacy: intent log + raw text never leaves device.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kernel.database import Database
@@ -1768,8 +1872,18 @@ PROMPT_TEMPLATES: dict[str, str] = {
 }
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 class SuggestionEngine:
-    """Persists intent classifications and emits suggestion records."""
+    """Persists intent classifications and emits suggestion records.
+
+    Note on DB access: Database uses a single long-lived `aiosqlite.Connection`
+    (kernel/database.py:55). We access it via the public `db.conn` property
+    rather than opening per-call context managers — matches the existing
+    pattern in Database's own methods (e.g., save_conversation line 107).
+    """
 
     def __init__(
         self,
@@ -1785,89 +1899,83 @@ class SuggestionEngine:
         self, intent_type: str, intent_template: str | None, raw_text: str
     ) -> None:
         """Append an intent classification to chat_intent_log."""
-        now = datetime.utcnow().isoformat()
-        async with self._db.connect() as conn:
-            await conn.execute(
-                """
-                INSERT INTO chat_intent_log (timestamp, intent_type, intent_template, raw_text)
-                VALUES (?, ?, ?, ?)
-                """,
-                (now, intent_type, intent_template, raw_text),
-            )
-            await conn.commit()
+        await self._db.conn.execute(
+            """
+            INSERT INTO chat_intent_log (timestamp, intent_type, intent_template, raw_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            (_now_iso(), intent_type, intent_template, raw_text),
+        )
+        await self._db.conn.commit()
 
     async def detect_patterns(self) -> list[SuggestionRecord]:
         """Scan recent intent log and create suggestion records for clusters."""
-        cutoff = (datetime.utcnow() - self._window).isoformat()
+        cutoff = (datetime.now(UTC) - self._window).isoformat()
         new_suggestions: list[SuggestionRecord] = []
-        async with self._db.connect() as conn:
-            cursor = await conn.execute(
+
+        cursor = await self._db.conn.execute(
+            """
+            SELECT intent_template, COUNT(*) AS cnt
+            FROM chat_intent_log
+            WHERE timestamp >= ? AND intent_template IS NOT NULL
+            GROUP BY intent_template
+            HAVING cnt >= ?
+            """,
+            (cutoff, self._threshold),
+        )
+        clusters = await cursor.fetchall()
+
+        for row in clusters:
+            template = row[0]
+            if not template:
+                continue
+            existing = await self._db.conn.execute(
                 """
-                SELECT intent_template, COUNT(*) AS cnt
-                FROM chat_intent_log
-                WHERE timestamp >= ? AND intent_template IS NOT NULL
-                GROUP BY intent_template
-                HAVING cnt >= ?
+                SELECT id FROM suggestions
+                WHERE intent_template = ?
+                  AND accepted_at IS NULL
+                  AND (snoozed_until IS NULL OR snoozed_until < ?)
                 """,
-                (cutoff, self._threshold),
+                (template, _now_iso()),
             )
-            clusters = await cursor.fetchall()
+            if await existing.fetchone():
+                continue
 
-            for row in clusters:
-                template = row[0]
-                if not template:
-                    continue
-                # Dedup: skip if active suggestion already exists for this template
-                existing = await conn.execute(
-                    """
-                    SELECT id FROM suggestions
-                    WHERE intent_template = ?
-                      AND accepted_at IS NULL
-                      AND (snoozed_until IS NULL OR snoozed_until < ?)
-                    """,
-                    (template, datetime.utcnow().isoformat()),
-                )
-                if await existing.fetchone():
-                    continue
-
-                prompt = PROMPT_TEMPLATES.get(
-                    template,
-                    f"Я заметил повторяющийся паттерн ({template}). Создать агента?",
-                )
-                now = datetime.utcnow().isoformat()
-                cursor2 = await conn.execute(
-                    """
-                    INSERT INTO suggestions (created_at, intent_template, prompt_text)
-                    VALUES (?, ?, ?)
-                    """,
-                    (now, template, prompt),
-                )
-                await conn.commit()
-                rec = SuggestionRecord(
-                    id=cursor2.lastrowid,
-                    created_at=now,
-                    intent_template=template,
-                    prompt_text=prompt,
-                )
-                new_suggestions.append(rec)
-                logger.info("Suggestion created: %s", template)
+            prompt = PROMPT_TEMPLATES.get(
+                template,
+                f"Я заметил повторяющийся паттерн ({template}). Создать агента?",
+            )
+            now = _now_iso()
+            cursor2 = await self._db.conn.execute(
+                """
+                INSERT INTO suggestions (created_at, intent_template, prompt_text)
+                VALUES (?, ?, ?)
+                """,
+                (now, template, prompt),
+            )
+            await self._db.conn.commit()
+            new_suggestions.append(SuggestionRecord(
+                id=cursor2.lastrowid,
+                created_at=now,
+                intent_template=template,
+                prompt_text=prompt,
+            ))
+            logger.info("Suggestion created: %s", template)
         return new_suggestions
 
     async def list_active(self) -> list[SuggestionRecord]:
         """Return non-snoozed, non-accepted suggestions, newest first."""
-        now = datetime.utcnow().isoformat()
-        async with self._db.connect() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT id, created_at, intent_template, prompt_text, snoozed_until, accepted_at
-                FROM suggestions
-                WHERE accepted_at IS NULL
-                  AND (snoozed_until IS NULL OR snoozed_until < ?)
-                ORDER BY created_at DESC
-                """,
-                (now,),
-            )
-            rows = await cursor.fetchall()
+        cursor = await self._db.conn.execute(
+            """
+            SELECT id, created_at, intent_template, prompt_text, snoozed_until, accepted_at
+            FROM suggestions
+            WHERE accepted_at IS NULL
+              AND (snoozed_until IS NULL OR snoozed_until < ?)
+            ORDER BY created_at DESC
+            """,
+            (_now_iso(),),
+        )
+        rows = await cursor.fetchall()
         return [
             SuggestionRecord(
                 id=r[0], created_at=r[1], intent_template=r[2],
@@ -1878,39 +1986,31 @@ class SuggestionEngine:
 
     async def snooze(self, suggestion_id: int, days: int = DEFAULT_SNOOZE_DAYS) -> None:
         """Snooze a suggestion for N days."""
-        until = (datetime.utcnow() + timedelta(days=days)).isoformat()
-        async with self._db.connect() as conn:
-            await conn.execute(
-                "UPDATE suggestions SET snoozed_until = ? WHERE id = ?",
-                (until, suggestion_id),
-            )
-            await conn.commit()
+        until = (datetime.now(UTC) + timedelta(days=days)).isoformat()
+        await self._db.conn.execute(
+            "UPDATE suggestions SET snoozed_until = ? WHERE id = ?",
+            (until, suggestion_id),
+        )
+        await self._db.conn.commit()
 
     async def mark_accepted(self, suggestion_id: int) -> None:
         """Mark a suggestion as accepted (user clicked Создать)."""
-        now = datetime.utcnow().isoformat()
-        async with self._db.connect() as conn:
-            await conn.execute(
-                "UPDATE suggestions SET accepted_at = ? WHERE id = ?",
-                (now, suggestion_id),
-            )
-            await conn.commit()
+        await self._db.conn.execute(
+            "UPDATE suggestions SET accepted_at = ? WHERE id = ?",
+            (_now_iso(), suggestion_id),
+        )
+        await self._db.conn.commit()
 
-    # Internal helpers for tests
     async def _all_intent_logs(self) -> list[dict[str, Any]]:
-        async with self._db.connect() as conn:
-            cursor = await conn.execute("SELECT * FROM chat_intent_log ORDER BY id")
-            cols = [d[0] for d in cursor.description]
-            return [dict(zip(cols, row)) for row in await cursor.fetchall()]
+        cursor = await self._db.conn.execute("SELECT * FROM chat_intent_log ORDER BY id")
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in await cursor.fetchall()]
 
     async def _all_suggestions(self) -> list[dict[str, Any]]:
-        async with self._db.connect() as conn:
-            cursor = await conn.execute("SELECT * FROM suggestions ORDER BY id")
-            cols = [d[0] for d in cursor.description]
-            return [dict(zip(cols, row)) for row in await cursor.fetchall()]
+        cursor = await self._db.conn.execute("SELECT * FROM suggestions ORDER BY id")
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in await cursor.fetchall()]
 ```
-
-(Verify `Database.connect()` async-context-manager shape. If different — adjust accordingly.)
 
 - [ ] **Step 4: Run tests**
 
@@ -2016,10 +2116,10 @@ async def test_suggestion_detect_cron_fires(client, app):
     for i in range(5):
         await engine.log_intent("skill", "notifier", "x")
 
-    # Manually emit the cron topic
+    # Manually emit the cron topic. publish() awaits all subscribers via
+    # asyncio.gather before returning, so no separate drain step is needed.
     bus = app.state.event_bus
     await bus.publish(Event(topic="schedule.cron.suggestion_detect", source="test", payload={}))
-    await bus.drain()
 
     active = await engine.list_active()
     assert len(active) >= 1
