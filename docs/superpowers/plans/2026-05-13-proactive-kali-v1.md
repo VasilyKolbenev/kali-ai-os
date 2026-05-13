@@ -61,27 +61,35 @@ Before Chunk 1, the executing agent MUST read:
 - `kernel/scheduler.py` — verify `register_cron` works for daily morning fire (already general enough; no code change expected).
 
 **Frontend (TypeScript — new files):**
-- `ui/src/components/Notifications/NotificationManager.tsx` — NEW. Top-level listener for `notification.new` and `agent.alert` WS events, calls Tauri notification command.
+- `ui/src/api/notifications.ts` — NEW. Tauri command wrapper for cross-platform notify (uses `@tauri-apps/plugin-notification`).
+- `ui/src/stores/notificationStore.ts` — NEW. Zustand store holding the most recent `notification.new` event (mirrors `useVoiceStore` / `useAgentStore` pattern; needed because `api/websocket.ts` has no listener registry).
+- `ui/src/components/Notifications/NotificationManager.tsx` — NEW. Reads `useNotificationStore` and calls Tauri notify on each new event.
 - `ui/src/components/Notifications/AgentNotificationToggle.tsx` — NEW. Per-agent toggle row used in `AgentCard`.
 - `ui/src/components/Settings/BriefingSettings.tsx` — NEW. Time picker + toggle for morning briefing.
 - `ui/src/components/Suggestions/SuggestionBanner.tsx` — NEW. Inline suggestion display in chat with Создать/Не сейчас buttons.
-- `ui/src/hooks/useSuggestions.ts` — NEW. Polls `/suggestions/active` on focus.
-- `ui/src/api/notifications.ts` — NEW. Tauri command wrapper for cross-platform notify.
+- `ui/src/hooks/useSuggestions.ts` — NEW. Polls `/suggestions/active` (via `api.suggestionsActive()`) on focus.
 - `ui/src/__tests__/NotificationManager.test.tsx` — NEW.
 - `ui/src/__tests__/SuggestionBanner.test.tsx` — NEW.
 - `ui/src/__tests__/BriefingSettings.test.tsx` — NEW.
+- `ui/src/__tests__/useSuggestions.test.ts` — NEW.
 
 **Frontend (TypeScript — modified files):**
 - `ui/src/App.tsx` — mount `<NotificationManager />` at top level.
+- `ui/src/api/client.ts` — extend `api` with `suggestionsActive` / `suggestionsSnooze` / `suggestionsAccept`. NOTE: `api.settings` and `api.updateSettings` already exist at lines 165-171 — reused as-is.
+- `ui/src/api/types.ts` — add `Suggestion` interface + extend `WSMessage` union with `notification.new` variant.
+- `ui/src/api/websocket.ts` — extend `ws.onmessage` switch with `notification.new` case dispatching to `useNotificationStore`.
 - `ui/src/components/Settings/Settings.tsx` — add `<BriefingSettings />` section.
 - `ui/src/components/AgentPanel/AgentCard.tsx` — add `<AgentNotificationToggle agentName={...} />` row.
 - `ui/src/components/Chat/ChatInput.tsx` (or wherever chat messages render) — mount `<SuggestionBanner />`.
-- `ui/src/stores/builder.ts` — verify `start(request)` already accepts pre-filled text (per code map it does at line 36).
+
+**Frontend — verified state (do NOT modify or create parallel):**
+- `ui/src/api/client.ts:165-171` — `api.settings()` + `api.updateSettings()` already exist.
+- `ui/src/stores/builder.ts:36` — `start(request: string)` already accepts the seed phrase. No changes needed.
 
 **Rust/Tauri (modified):**
 - `src-tauri/Cargo.toml` — add `tauri-plugin-notification = "2"`.
-- `src-tauri/src/lib.rs` — add `.plugin(tauri_plugin_notification::init())`.
-- `src-tauri/capabilities/default.json` (NEW or modify if exists) — declare notification permission.
+- `src-tauri/src/lib.rs` — add `.plugin(tauri_plugin_notification::init())` after line 207.
+- `src-tauri/capabilities/default.json` — NEW (directory + file). Declares `notification:default` permission. `src-tauri/capabilities/` directory does NOT currently exist — Tauri 2 auto-discovers it on next build.
 
 ---
 
@@ -615,11 +623,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BriefingSettings } from "../components/Settings/BriefingSettings";
 
+// IMPORTANT: settings API already exists on the shared `api` object
+// (ui/src/api/client.ts:165-171 → `api.settings()` and `api.updateSettings()`).
+// Do NOT invent a separate ui/src/api/settings.ts — mock the existing module.
 const mockGet = vi.fn();
 const mockUpdate = vi.fn();
-vi.mock("../api/settings", () => ({
-  getSettings: () => mockGet(),
-  updateSettings: (payload: unknown) => mockUpdate(payload),
+vi.mock("../api/client", () => ({
+  api: {
+    settings: () => mockGet(),
+    updateSettings: (payload: unknown) => mockUpdate(payload),
+  },
 }));
 
 describe("BriefingSettings", () => {
@@ -682,7 +695,7 @@ Create `ui/src/components/Settings/BriefingSettings.tsx`:
 
 ```tsx
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings } from "../../api/settings";
+import { api } from "../../api/client";
 
 type State = {
   enabled: boolean;
@@ -697,10 +710,11 @@ export function BriefingSettings() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getSettings().then((s) => {
+    api.settings().then((s) => {
+      const settings = s as { briefing_morning_enabled?: boolean; briefing_morning_time?: string };
       setState({
-        enabled: s.briefing_morning_enabled ?? true,
-        time: s.briefing_morning_time ?? "08:00",
+        enabled: settings.briefing_morning_enabled ?? true,
+        time: settings.briefing_morning_time ?? "08:00",
       });
       setLoaded(true);
     });
@@ -709,7 +723,7 @@ export function BriefingSettings() {
   async function save() {
     setSaving(true);
     try {
-      await updateSettings({
+      await api.updateSettings({
         briefing_morning_enabled: state.enabled,
         briefing_morning_time: state.time,
       });
@@ -750,7 +764,7 @@ export function BriefingSettings() {
 }
 ```
 
-(Verify `api/settings.ts` exists with `getSettings` + `updateSettings`. If not, add minimal wrappers around fetch to `/settings` GET + POST.)
+**Note:** `api.settings()` and `api.updateSettings()` already exist on the shared `api` object (`ui/src/api/client.ts:165-171`). They wrap GET/POST `/settings` and route through `resolveApiUrl` (Python `:3005` for `/settings`). Do NOT create a parallel `api/settings.ts`.
 
 - [ ] **Step 4: Run tests**
 
@@ -763,6 +777,8 @@ Expected: 3 tests pass.
 git add ui/src/components/Settings/BriefingSettings.tsx ui/src/__tests__/BriefingSettings.test.tsx
 git commit -m "feat(briefing): Settings UI section for morning briefing time + toggle"
 ```
+
+(`ui/src/api/client.ts` is unchanged in this task — we reuse the existing `api.settings()` / `api.updateSettings()`.)
 
 ### Task 2.2: Mount `BriefingSettings` in Settings page
 
@@ -853,10 +869,12 @@ async def test_notify_action_publishes_event(tmp_path):
     bus = AsyncMock()
     notifier_mod.set_event_bus(bus)
 
+    # SkillTemplate.__init__(skill_name, data_dir) — confirmed at
+    # kernel/skill_templates/base.py:19. NO config in constructor;
+    # config arrives per execute() call.
     template = NotifierTemplate(
-        name="biticoin_notifier",
+        skill_name="biticoin_notifier",
         data_dir=tmp_path,
-        config={"default_channel": "voice"},
     )
 
     result = await template.execute(
@@ -877,11 +895,7 @@ async def test_notify_action_publishes_event(tmp_path):
 async def test_notify_does_not_publish_when_bus_unset(tmp_path):
     """If no bus has been registered (e.g., template used outside KALI kernel),
     _notify must still succeed without raising."""
-    template = NotifierTemplate(
-        name="x",
-        data_dir=tmp_path,
-        config={},
-    )
+    template = NotifierTemplate(skill_name="x", data_dir=tmp_path)
     result = await template.execute(
         action="notify",
         args={"message": "hi"},
@@ -889,8 +903,6 @@ async def test_notify_does_not_publish_when_bus_unset(tmp_path):
     )
     assert result["status"] == "sent"
 ```
-
-Verify `NotifierTemplate.__init__` signature first — read `kernel/skill_templates/base.py` to confirm `name`, `data_dir`, `config` constructor parameters. If different, adjust the test fixture.
 
 - [ ] **Step 2: Run failing test**
 
@@ -984,11 +996,8 @@ async def test_monitor_publishes_on_status_mismatch(tmp_path):
     bus = AsyncMock()
     monitor_mod.set_event_bus(bus)
 
-    template = MonitorTemplate(
-        name="example_monitor",
-        data_dir=tmp_path,
-        config={"url": "https://example.com", "expected_status": 200},
-    )
+    # SkillTemplate.__init__ signature: (skill_name, data_dir) — no config.
+    template = MonitorTemplate(skill_name="example_monitor", data_dir=tmp_path)
 
     # _mock_status forces a non-matching response (per existing args contract,
     # see monitor.py docstring at line 38).
@@ -1008,11 +1017,7 @@ async def test_monitor_does_not_publish_on_match(tmp_path):
     bus = AsyncMock()
     monitor_mod.set_event_bus(bus)
 
-    template = MonitorTemplate(
-        name="example_monitor",
-        data_dir=tmp_path,
-        config={"url": "https://example.com", "expected_status": 200},
-    )
+    template = MonitorTemplate(skill_name="example_monitor", data_dir=tmp_path)
     await template.execute(
         action="check",
         args={"_mock_status": 200},
@@ -1089,33 +1094,35 @@ git commit -m "build(tauri): add tauri-plugin-notification 2"
 
 ### Task 3.4: Init notification plugin in `lib.rs` + capability JSON
 
+**Verified state:**
+- `src-tauri/src/lib.rs:206-208` has the plugin-init block (`.plugin(tauri_plugin_shell::init())` then `.plugin(tauri_plugin_global_shortcut::Builder::new().build())`)
+- `src-tauri/capabilities/` directory does **NOT** exist — must be created
+- `src-tauri/gen/schemas/desktop-schema.json` **does** exist (tauri-build generates it) — the `$schema` reference resolves
+- `src-tauri/tauri.conf.json` window has no explicit `label`, which means Tauri 2 defaults the label to `"main"` — match it
+
 **Files:**
-- Modify: `src-tauri/src/lib.rs` (per code map line 195-210)
-- Create or modify: `src-tauri/capabilities/default.json`
+- Modify: `src-tauri/src/lib.rs` (insert one line at 208)
+- Create: `src-tauri/capabilities/default.json` (new file + new directory)
 
-- [ ] **Step 1: Read current lib.rs**
+- [ ] **Step 1: Add notification plugin init**
 
-Read `src-tauri/src/lib.rs` to confirm exact plugin-init section. Expect block like:
-
-```rust
-.plugin(tauri_plugin_shell::init())
-.plugin(tauri_plugin_global_shortcut::Builder::new().build())
-```
-
-- [ ] **Step 2: Add notification plugin init**
-
-Add line after shell init:
+In `src-tauri/src/lib.rs`, after line 207 (`.plugin(tauri_plugin_shell::init())`), insert:
 
 ```rust
 .plugin(tauri_plugin_notification::init())
 ```
 
-- [ ] **Step 3: Capability JSON**
+The result should be three contiguous `.plugin(...)` lines: shell, notification, global_shortcut.
 
-Check if `src-tauri/capabilities/default.json` exists.
+- [ ] **Step 2: Create capability JSON**
 
-If yes: add `"notification:default"` to the `permissions` array.
-If no: create it:
+Create directory + file:
+
+```bash
+mkdir -p src-tauri/capabilities
+```
+
+Create `src-tauri/capabilities/default.json` with:
 
 ```json
 {
@@ -1131,14 +1138,20 @@ If no: create it:
 }
 ```
 
-(Verify the existing capability identifier and window name first by reading `src-tauri/tauri.conf.json` and any `capabilities/*.json`.)
+Notes on each field:
+- `$schema` — relative to the file location; resolves to `src-tauri/gen/schemas/desktop-schema.json` which is auto-generated and present.
+- `identifier` — Tauri auto-loads `default` capability for windows by convention.
+- `windows: ["main"]` — matches Tauri 2's default window label when none is set in `tauri.conf.json`.
+- `permissions` — `core:default` is the Tauri 2 base, `shell:allow-open` matches the existing shell plugin usage (line 207), `notification:default` enables the notification plugin's permissions.
 
-- [ ] **Step 4: Build check**
+- [ ] **Step 3: Build check**
 
-Run: `cd src-tauri && cargo check`
-Expected: exit 0.
+Run from worktree root: `cd src-tauri && cargo check`
+Expected: exit 0. (First build of the new plugin may take 1-2 min — that's normal.)
 
-- [ ] **Step 5: Commit**
+If `cargo check` complains about the capability JSON syntax or schema, validate against the actual generated schema at `src-tauri/gen/schemas/desktop-schema.json`.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src-tauri/src/lib.rs src-tauri/capabilities/default.json
@@ -1270,10 +1283,18 @@ git add ui/src/api/notifications.ts ui/src/__tests__/api-notifications.test.ts u
 git commit -m "feat(notifications): Tauri notify wrapper with permission gate"
 ```
 
-### Task 4.2: `NotificationManager` component — WS listener → notify
+### Task 4.2: WS notification.new → Zustand store → Tauri notify
+
+**Important design note:** `ui/src/api/websocket.ts` currently has all message handling **inline** in `ws.onmessage` (verified — no listener registry, no `onMessage` export). The cleanest fit with the existing pattern (`useVoiceStore`, `useAgentStore`, `useDashboardStore` all consume WS events via Zustand) is to **add a new `useNotificationStore`** and dispatch the new topic into it from the existing switch. NotificationManager reads the store via selector.
+
+This task has 4 sub-changes that ship as **one commit** (one feature: "WS notification.new → desktop notify"):
 
 **Files:**
+- Create: `ui/src/stores/notificationStore.ts`
+- Modify: `ui/src/api/types.ts` (add WSMessage variant)
+- Modify: `ui/src/api/websocket.ts` (new switch case)
 - Create: `ui/src/components/Notifications/NotificationManager.tsx`
+- Create: `ui/src/__tests__/NotificationManager.test.tsx`
 
 - [ ] **Step 1: Write failing test**
 
@@ -1289,114 +1310,149 @@ vi.mock("../api/notifications", () => ({
   sendNotification: (p: unknown) => mockSend(p),
 }));
 
-const subscribers: Array<(msg: unknown) => void> = [];
-vi.mock("../api/websocket", () => ({
-  useWebSocket: () => ({}),
-  onMessage: (fn: (msg: unknown) => void) => {
-    subscribers.push(fn);
-    return () => {
-      const i = subscribers.indexOf(fn);
-      if (i >= 0) subscribers.splice(i, 1);
-    };
-  },
-}));
-
 import { NotificationManager } from "../components/Notifications/NotificationManager";
+import { useNotificationStore } from "../stores/notificationStore";
 
 describe("NotificationManager", () => {
   beforeEach(() => {
     mockSend.mockReset();
-    subscribers.length = 0;
+    // Reset store state between tests
+    useNotificationStore.setState({ lastEvent: null });
+    localStorage.clear();
   });
 
-  it("calls sendNotification on notification.new event", async () => {
+  it("calls sendNotification when store receives a new event", async () => {
     render(<NotificationManager />);
     act(() => {
-      subscribers.forEach((fn) =>
-        fn({
-          type: "event",
-          topic: "notification.new",
-          payload: { title: "Alert", message: "BTC fell", source: "biti_notifier" },
-        }),
-      );
+      useNotificationStore.getState().push({
+        title: "Alert",
+        message: "BTC fell",
+        source: "biti_notifier",
+        priority: "normal",
+        receivedAt: Date.now(),
+      });
     });
     expect(mockSend).toHaveBeenCalledWith({ title: "Alert", body: "BTC fell" });
   });
 
-  it("ignores events from disabled agents", async () => {
-    // Setup: pretend localStorage has agent biti_notifier disabled
+  it("ignores events from agents disabled in localStorage", async () => {
     localStorage.setItem("notifications.biti_notifier", "false");
     render(<NotificationManager />);
     act(() => {
-      subscribers.forEach((fn) =>
-        fn({
-          type: "event",
-          topic: "notification.new",
-          payload: { title: "X", message: "Y", source: "biti_notifier" },
-        }),
-      );
+      useNotificationStore.getState().push({
+        title: "X",
+        message: "Y",
+        source: "biti_notifier",
+        priority: "normal",
+        receivedAt: Date.now(),
+      });
     });
     expect(mockSend).not.toHaveBeenCalled();
-    localStorage.removeItem("notifications.biti_notifier");
   });
 });
 ```
 
 - [ ] **Step 2: Run failing test**
 
-Expected: import fails.
+Expected: import fails — neither the store nor the component exists yet.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Create Zustand store**
+
+Create `ui/src/stores/notificationStore.ts`:
+
+```typescript
+import { create } from "zustand";
+
+export interface NotificationEvent {
+  title: string;
+  message: string;
+  source: string;
+  priority: string;
+  receivedAt: number;
+}
+
+interface NotificationStore {
+  lastEvent: NotificationEvent | null;
+  push: (event: NotificationEvent) => void;
+}
+
+export const useNotificationStore = create<NotificationStore>((set) => ({
+  lastEvent: null,
+  push: (event) => set({ lastEvent: event }),
+}));
+```
+
+- [ ] **Step 4: Extend `WSMessage` discriminated union**
+
+In `ui/src/api/types.ts`, add a new variant to the `WSMessage` union (after `agent.status.update`):
+
+```typescript
+| { type: "notification.new"; data: { title: string; message: string; source: string; priority: string } }
+```
+
+- [ ] **Step 5: Wire dispatch into websocket switch**
+
+In `ui/src/api/websocket.ts`, inside the existing `switch (msg.type)` block (after `case "dashboard.update":`), add:
+
+```typescript
+case "notification.new":
+  useNotificationStore.getState().push({
+    title: msg.data.title,
+    message: msg.data.message,
+    source: msg.data.source,
+    priority: msg.data.priority,
+    receivedAt: Date.now(),
+  });
+  break;
+```
+
+Add the import at the top of the file alongside the other store imports:
+
+```typescript
+import { useNotificationStore } from "../stores/notificationStore";
+```
+
+- [ ] **Step 6: Create NotificationManager component**
 
 Create `ui/src/components/Notifications/NotificationManager.tsx`:
 
 ```tsx
 import { useEffect } from "react";
 import { sendNotification } from "../../api/notifications";
-import { onMessage } from "../../api/websocket";
+import { useNotificationStore } from "../../stores/notificationStore";
 
-type EventMessage = {
-  type: "event";
-  topic: string;
-  payload: { title?: string; message?: string; source?: string };
-};
-
-function isEnabledForAgent(source: string | undefined): boolean {
-  if (!source) return true;
-  const key = `notifications.${source}`;
-  const stored = localStorage.getItem(key);
+function isEnabledForAgent(source: string): boolean {
+  const stored = localStorage.getItem(`notifications.${source}`);
   return stored !== "false";
 }
 
 export function NotificationManager() {
+  const lastEvent = useNotificationStore((s) => s.lastEvent);
+
   useEffect(() => {
-    const unsub = onMessage((msg: unknown) => {
-      const m = msg as EventMessage;
-      if (!m || m.type !== "event") return;
-      if (m.topic !== "notification.new") return;
-      const { title = "KALI", message = "", source } = m.payload;
-      if (!isEnabledForAgent(source)) return;
-      sendNotification({ title, body: message });
-    });
-    return () => unsub();
-  }, []);
+    if (!lastEvent) return;
+    if (!isEnabledForAgent(lastEvent.source)) return;
+    sendNotification({ title: lastEvent.title, body: lastEvent.message });
+  }, [lastEvent]);
 
   return null;
 }
 ```
 
-(Verify `ui/src/api/websocket.ts` exports a usable `onMessage` subscription. If it currently only has `useWebSocket` hook, extend with a plain pub-sub: add a module-level Set of listeners + `onMessage(fn)` returning unsubscribe. Or fork the WS message handler. Read websocket.ts first.)
-
-- [ ] **Step 4: Run tests**
+- [ ] **Step 7: Run tests**
 
 Run: `cd ui && pnpm test NotificationManager`
-Expected: PASS.
+Expected: 2 tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add ui/src/components/Notifications/NotificationManager.tsx ui/src/__tests__/NotificationManager.test.tsx ui/src/api/websocket.ts
-git commit -m "feat(notifications): NotificationManager listens to WS notification.new"
+git add ui/src/stores/notificationStore.ts \
+        ui/src/api/types.ts \
+        ui/src/api/websocket.ts \
+        ui/src/components/Notifications/NotificationManager.tsx \
+        ui/src/__tests__/NotificationManager.test.tsx
+git commit -m "feat(notifications): WS notification.new → Tauri notify via store"
 ```
 
 ### Task 4.3: Mount `<NotificationManager />` in App.tsx
@@ -2231,97 +2287,139 @@ Goal: when `/suggestions/active` returns rows, banner appears in chat with Со�
 - Create: `ui/src/components/Suggestions/SuggestionBanner.tsx`, `ui/src/hooks/useSuggestions.ts`, two test files.
 - Modify: `ui/src/components/Chat/ChatInput.tsx` (or wherever chat messages render — verify by reading current chat surface).
 
-### Task 6.1: `useSuggestions` hook — polls /suggestions/active on focus
+### Task 6.1: Extend `api` client + `useSuggestions` hook
+
+**Important design note:** The plan must reuse the existing `api/client.ts` dispatcher pattern (uses `resolveApiUrl` to route Rust/Python automatically based on `RUST_ENDPOINTS` in `api/endpoints.ts`). Do NOT create a parallel `api/suggestions.ts` with a hardcoded `BASE` URL — that would bypass the dispatcher and break in Tauri builds where runtime overrides via `window.__KALI_CONFIG__` are honored.
+
+`/suggestions/*` lives in Python (kernel/main.py — added in Chunk 5 Task 5.6-5.7). It is **not in `RUST_ENDPOINTS`**, so the dispatcher defaults to Python `:3005` automatically. No change to `endpoints.ts` needed.
 
 **Files:**
+- Modify: `ui/src/api/client.ts` (add 3 methods + Suggestion type)
+- Modify: `ui/src/api/types.ts` (add Suggestion type)
 - Create: `ui/src/hooks/useSuggestions.ts`
+- Create: `ui/src/__tests__/useSuggestions.test.ts`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Add `Suggestion` type**
 
-```typescript
-describe("useSuggestions", () => {
-  it("fetches active suggestions on mount", async () => {
-    const fetchMock = vi.fn().mockResolvedValue([
-      { id: 1, intent_template: "notifier", prompt_text: "test?", created_at: "2026-05-13T10:00:00" },
-    ]);
-    vi.mock("../api/suggestions", () => ({ getActive: fetchMock }));
-
-    const { result } = renderHook(() => useSuggestions());
-    await waitFor(() => expect(result.current.suggestions.length).toBe(1));
-  });
-
-  it("re-fetches on window focus", async () => {
-    // Setup
-    // ... fire window focus event
-    // assert fetchMock called twice
-  });
-});
-```
-
-- [ ] **Step 2: Implement**
-
-Create `ui/src/api/suggestions.ts`:
+In `ui/src/api/types.ts`, add:
 
 ```typescript
-const BASE = "http://127.0.0.1:3005";
-
-export type Suggestion = {
+export interface Suggestion {
   id: number;
   intent_template: string;
   prompt_text: string;
   created_at: string;
-};
-
-export async function getActive(): Promise<Suggestion[]> {
-  const r = await fetch(`${BASE}/suggestions/active`);
-  if (!r.ok) return [];
-  return r.json();
-}
-
-export async function snooze(id: number): Promise<void> {
-  await fetch(`${BASE}/suggestions/${id}/snooze`, { method: "POST" });
-}
-
-export async function accept(id: number): Promise<void> {
-  await fetch(`${BASE}/suggestions/${id}/accept`, { method: "POST" });
+  snoozed_until?: string | null;
+  accepted_at?: string | null;
 }
 ```
+
+- [ ] **Step 2: Extend `api` object**
+
+In `ui/src/api/client.ts`, append to the `api` object (after `updateSettings`):
+
+```typescript
+  // Suggestions (Tier 2 #10.5 Proactive KALI)
+  suggestionsActive: () =>
+    fetchJSON<import("./types").Suggestion[]>("/suggestions/active"),
+  suggestionsSnooze: (id: number) =>
+    fetchJSON<{ status: string }>(`/suggestions/${id}/snooze`, { method: "POST" }),
+  suggestionsAccept: (id: number) =>
+    fetchJSON<{ status: string }>(`/suggestions/${id}/accept`, { method: "POST" }),
+```
+
+- [ ] **Step 3: Write failing hook test**
+
+Create `ui/src/__tests__/useSuggestions.test.ts`:
+
+```typescript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, waitFor, act } from "@testing-library/react";
+
+const mockActive = vi.fn();
+vi.mock("../api/client", () => ({
+  api: {
+    suggestionsActive: () => mockActive(),
+  },
+}));
+
+import { useSuggestions } from "../hooks/useSuggestions";
+
+describe("useSuggestions", () => {
+  beforeEach(() => {
+    mockActive.mockReset();
+  });
+
+  it("fetches active suggestions on mount", async () => {
+    mockActive.mockResolvedValue([
+      { id: 1, intent_template: "notifier", prompt_text: "test?", created_at: "2026-05-13T10:00:00" },
+    ]);
+    const { result } = renderHook(() => useSuggestions());
+    await waitFor(() => expect(result.current.suggestions.length).toBe(1));
+  });
+
+  it("re-fetches when window receives focus", async () => {
+    mockActive.mockResolvedValue([]);
+    renderHook(() => useSuggestions());
+    await waitFor(() => expect(mockActive).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(mockActive).toHaveBeenCalledTimes(2));
+  });
+
+  it("returns empty list on API failure", async () => {
+    mockActive.mockRejectedValue(new Error("network"));
+    const { result } = renderHook(() => useSuggestions());
+    await waitFor(() => expect(result.current.suggestions).toEqual([]));
+  });
+});
+```
+
+- [ ] **Step 4: Run failing test** — expect ImportError (hook doesn't exist).
+
+- [ ] **Step 5: Implement hook**
 
 Create `ui/src/hooks/useSuggestions.ts`:
 
 ```typescript
-import { useEffect, useState } from "react";
-import { getActive, Suggestion } from "../api/suggestions";
+import { useCallback, useEffect, useState } from "react";
+
+import { api } from "../api/client";
+import type { Suggestion } from "../api/types";
 
 export function useSuggestions() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      const data = await getActive();
-      if (!cancelled) setSuggestions(data);
+  const load = useCallback(async () => {
+    try {
+      const data = await api.suggestionsActive();
+      setSuggestions(data);
+    } catch {
+      setSuggestions([]);
     }
-    load();
-    const onFocus = () => load();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", onFocus);
-    };
   }, []);
 
-  return { suggestions, refresh: () => getActive().then(setSuggestions) };
+  useEffect(() => {
+    load();
+    const onFocus = () => {
+      load();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [load]);
+
+  return { suggestions, refresh: load };
 }
 ```
 
-- [ ] **Step 3: Run tests** — PASS.
+- [ ] **Step 6: Run tests** — 3 tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add ui/src/api/suggestions.ts ui/src/hooks/useSuggestions.ts ui/src/__tests__/useSuggestions.test.ts
-git commit -m "feat(suggestions): useSuggestions hook + api client"
+git add ui/src/api/client.ts ui/src/api/types.ts ui/src/hooks/useSuggestions.ts ui/src/__tests__/useSuggestions.test.ts
+git commit -m "feat(suggestions): api client methods + useSuggestions hook"
 ```
 
 ### Task 6.2: `SuggestionBanner` component
@@ -2370,7 +2468,7 @@ describe("SuggestionBanner", () => {
 - [ ] **Step 2: Implement**
 
 ```tsx
-import { Suggestion } from "../../api/suggestions";
+import type { Suggestion } from "../../api/types";
 
 type Props = {
   suggestion: Suggestion;
@@ -2414,7 +2512,7 @@ import { useSuggestions } from "../../hooks/useSuggestions";
 import { useBuilderStore } from "../../stores/builder";
 import { useAppStore } from "../../stores/appStore";
 import { SuggestionBanner } from "../Suggestions/SuggestionBanner";
-import { accept, snooze } from "../../api/suggestions";
+import { api } from "../../api/client";
 
 // in render:
 const { suggestions, refresh } = useSuggestions();
@@ -2423,7 +2521,7 @@ const start = useBuilderStore((s) => s.start);
 const setMode = useAppStore((s) => s.setMode);
 
 async function handleAccept(id: number) {
-  await accept(id);
+  await api.suggestionsAccept(id);
   // build a starter request from the template hint
   const hint = (top && PROMPT_HINTS[top.intent_template]) || "";
   start(hint);
@@ -2432,7 +2530,7 @@ async function handleAccept(id: number) {
 }
 
 async function handleSnooze(id: number) {
-  await snooze(id);
+  await api.suggestionsSnooze(id);
   refresh();
 }
 
@@ -2594,6 +2692,65 @@ git log --oneline -30
 Each commit should be one logical change. No mega-commits. No empty commits.
 
 - [ ] **Memory update:** add entry to `memory/project_roadmap.md` v2.16 (post-ship) noting #10.5 SHIPPED.
+
+---
+
+## Operational considerations
+
+### SuggestionEngine instance lifecycle
+
+`SuggestionEngine` is **a singleton per kernel process**, attached to `app.state.suggestion_engine` in the `lifespan` startup block (Chunk 5 Task 5.4 / 5.5). It shares the same long-lived `aiosqlite.Connection` via `Database.conn`. Routes (`/suggestions/active`, `/suggestions/{id}/snooze`, `/suggestions/{id}/accept`) and the 6h cron handler read it from `request.app.state.suggestion_engine` — never re-instantiate.
+
+Database is created once (existing pattern in `kernel/main.py` startup), `Database.initialize()` runs `executescript(SCHEMA)` which is idempotent (all `CREATE TABLE IF NOT EXISTS`). Adding the two new tables in Chunk 5 Task 5.1 means new installs and **existing installs** both get the tables on next boot — no separate migration step needed.
+
+### Performance budget
+
+The two new always-on code paths:
+
+| Path | Budget (typical) | Budget (worst) | Mitigation if exceeded |
+|---|---|---|---|
+| `SuggestionEngine.log_intent` (one INSERT per `/chat`) | < 5 ms | < 20 ms | Skip log if `time.perf_counter()` shows > 20 ms (log warning) |
+| `SuggestionEngine.detect_patterns` (cron every 6h) | < 100 ms | < 500 ms | Add `LIMIT` clause on GROUP BY scan if intent_log grows past 100k rows |
+| `BriefingRunner._on_morning` (cron daily) | TTS-bound (~1-5 s) | TTS may stall | Wrap in `asyncio.wait_for(..., timeout=30)`; swallow timeout |
+
+If `chat_intent_log` grows unbounded over months, add a pruning task analogous to `Database.prune_old_conversations(days=30)` — but **not in v1**. Track in a follow-up chip if intent log reaches 10k rows in normal use.
+
+### Migration story for existing users
+
+The two new SQLite tables (`chat_intent_log`, `suggestions`) are created via `CREATE TABLE IF NOT EXISTS` in the shared `SCHEMA` block. Existing users upgrading from KALI without this feature get empty tables on first boot — by design. Intent patterns are personal-history derived; **starting fresh is the correct UX**, not a bug.
+
+`.env` keys `KALI_BRIEFING_MORNING_ENABLED` and `KALI_BRIEFING_MORNING_TIME` use safe defaults (`true` and `"08:00"`) when absent — no migration step required.
+
+Tauri notification permission: on first send the plugin auto-requests OS permission (handled by `api/notifications.ts:ensurePermission`). User sees a one-time OS prompt. If denied, all calls become silent no-ops — no crash, no retry storm.
+
+### Rollback / partial-failure plan
+
+The three features are **functionally independent**. If a chunk fails halfway through execution:
+
+- **F1 ships but F2/F3 broken** — `KALI_BRIEFING_MORNING_ENABLED=false` in `.env` disables morning briefing without code changes. F1 disabled, F2/F3 untouched.
+- **F2 ships but F3 breaks** — set `localStorage.setItem("notifications.<agent>", "false")` per agent to mute all toasts client-side. Or revert Chunk 3 commits (skill template publish lines) — they are confined to `_notify` / `_check` and a `set_event_bus` call site.
+- **F3 ships but causes /chat regression** — wrap the `log_intent` call in `_chat_logic` in a try/except that logs and swallows. This is already in the plan (Chunk 5 Task 5.4 Step 3). If still problematic, revert the SuggestionEngine instantiation line in `lifespan`.
+
+**Backout commit pattern:** each chunk's tasks commit as a single feature-named series. To back out F2:
+
+```bash
+git revert <chunk-3-shas> <chunk-4-shas>
+```
+
+The Rust dependency (`tauri-plugin-notification`) stays in Cargo.toml even on F2 revert — harmless, ~150 KB build cost only.
+
+**Feature flag (optional)** — if backout-via-revert feels risky, add `KALI_PROACTIVE_F1_ENABLED` / `KALI_PROACTIVE_F2_ENABLED` / `KALI_PROACTIVE_F3_ENABLED` env vars gating each feature's startup wiring. **Not in v1** by default — adds complexity for a low-probability event. Decide during execution if needed.
+
+### Known plan-defects expected at execution time
+
+Despite the review-loop and verify-pass, expect 3-5 plan-defects to surface during execution (precedent: 8 defects in voice-builder-pilot v2). Likely sources:
+- `aiosqlite` `cursor.description` returning `None` if no rows fetched yet — `SuggestionEngine._all_intent_logs/_all_suggestions` may need defensive `cols = [d[0] for d in (cursor.description or [])]`.
+- Settings nested-dict vs flat-dict serialization edge cases in tests.
+- Tauri capability JSON requires a specific schema field we missed — likely caught by `cargo check` exit non-zero.
+- `cargo check` may pull a `tauri-plugin-notification 2.x` that has a different init signature than `init()` (e.g., needs `Builder::default().build()`) — fix by reading the actual plugin docs at error time.
+- `useBuilderStore.start(request)` second-arg or option-object signature drift if `voice-builder-pilot` post-merge changes anything.
+
+Handle as during execution: read error, read source, patch, re-test. Don't trust the plan's code blocks blindly.
 
 ---
 
