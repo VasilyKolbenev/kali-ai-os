@@ -1,0 +1,19 @@
+name: messenger-hub
+version: "1.0.0"
+description: "Unified messenger hub (Telegram MVP) for reading and sending messages"
+capabilities:
+  - messenger.send
+  - messenger.read
+tools:
+  - name: send_message
+    description: "Send a message via Messenger (Telegram)"
+    parameters:
+      text: { type: string, description: "Message text" }
+      chat_id: { type: string, description: "Optional chat ID to send to. Defaults to main chat." }
+  - name: read_messages
+    description: "Read the latest messages from Messenger (Telegram)"
+    parameters:
+      limit: { type: integer, description: "Number of messages to retrieve (default 10)" }
+protocol: native
+permissions:
+  - network

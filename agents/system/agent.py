@@ -4,6 +4,8 @@ import os
 import platform
 import shutil
 import sys
+import subprocess
+import psutil
 from datetime import datetime
 from typing import Any
 
@@ -44,13 +46,37 @@ class SystemAgent(BaseAgent):
             }
         elif action == "get_system_info":
             total, used, free = shutil.disk_usage("/")
+            
+            # Get RAM info
+            ram = psutil.virtual_memory()
+            ram_total_gb = round(ram.total / (1024**3), 1)
+            ram_used_gb = round(ram.used / (1024**3), 1)
+            ram_percent = ram.percent
+            
+            # Get GPU info (NVIDIA)
+            gpu_info = "N/A"
+            try:
+                # Try nvidia-smi for RTX 5070 / NVIDIA GPUs
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                if result.stdout.strip():
+                    parts = [p.strip() for p in result.stdout.strip().split(",")]
+                    if len(parts) >= 4:
+                        gpu_info = f"{parts[0]} (Load: {parts[1]}%, VRAM: {parts[2]}/{parts[3]} MB)"
+            except Exception:
+                pass
+                
             return {
                 "platform": platform.system(),
-                "platform_version": platform.version(),
                 "python_version": platform.python_version(),
-                "machine": platform.machine(),
                 "processor": platform.processor(),
                 "disk_free_gb": round(free / (1024**3), 1),
+                "ram_total_gb": ram_total_gb,
+                "ram_used_gb": ram_used_gb,
+                "ram_percent": ram_percent,
+                "gpu": gpu_info,
             }
         elif action == "set_timer":
             seconds = args.get("seconds", 60)

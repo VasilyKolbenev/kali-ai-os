@@ -1,0 +1,30 @@
+name: live-canvas
+version: "1.0.0"
+description: "Render dynamic widgets, charts and data cards in KALI UI canvas"
+capabilities:
+  - canvas.render
+  - canvas.clear
+tools:
+  - name: render_widget
+    description: "Render a dynamic widget in the KALI UI canvas"
+    parameters:
+      widget_type:
+        type: string
+        description: "Widget type: stat_card | bar_chart | line_chart | progress | table | markdown"
+      title:
+        type: string
+        description: "Widget title"
+      data:
+        type: object
+        description: "Widget data payload (varies by type)"
+      widget_id:
+        type: string
+        description: "Optional ID for updating existing widget. Auto-generated if omitted."
+  - name: clear_canvas
+    description: "Clear all widgets from the canvas"
+    parameters: {}
+  - name: list_widgets
+    description: "List all active widgets on the canvas"
+    parameters: {}
+protocol: native
+permissions: []

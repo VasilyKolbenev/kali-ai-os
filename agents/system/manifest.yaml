@@ -1,6 +1,6 @@
 name: system
 version: "1.0.0"
-description: "System commands - time, timers, system info"
+description: "System information, RAM, RTX 5070 load, time, and timers."
 capabilities:
   - system.info
   - system.timer
@@ -9,7 +9,7 @@ tools:
     description: "Get current date and time"
     parameters: {}
   - name: get_system_info
-    description: "Get system information (OS, CPU, memory)"
+    description: "Get system platform, disk space, RAM usage, and NVIDIA GPU (RTX 5070) load/VRAM."
     parameters: {}
   - name: set_timer
     description: "Set a countdown timer"
