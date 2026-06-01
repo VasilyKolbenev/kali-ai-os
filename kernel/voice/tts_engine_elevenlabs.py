@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -277,6 +278,35 @@ class ElevenLabsEngine:
         )
         return audio, int(sr)
 
+    async def synthesize_stream(self, text: str, language: str | None = None):
+        """Generate JARVIS voice via ElevenLabs and yield chunks per sentence."""
+        import asyncio
+        del language
+        
+        # Simple sentence splitter
+        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        sentences: list[str] = []
+        buf = ""
+        for p in parts:
+            if len(buf) + len(p) < 300:
+                buf = f"{buf} {p}".strip() if buf else p
+            else:
+                if buf:
+                    sentences.append(buf)
+                buf = p
+        if buf:
+            sentences.append(buf)
+        if not sentences:
+            sentences = [text]
+
+        for sentence in sentences:
+            try:
+                audio, sr = await asyncio.to_thread(self.synthesize, sentence)
+                yield audio, sr
+            except Exception as exc:
+                logger.warning("ElevenLabs failed on %r: %s", sentence[:40], exc)
+                continue
+
     def check_auth(self) -> dict[str, Any]:
         """Verify API key works and has needed permissions."""
         if not self.api_key:
@@ -323,6 +353,12 @@ def is_loaded() -> bool:
 def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, int]:
     """Generate audio via ElevenLabs."""
     return _get_engine().synthesize(text, language)
+
+
+async def generate_audio_stream(text: str, language: str | None = None):
+    """Stream audio via ElevenLabs."""
+    async for chunk in _get_engine().synthesize_stream(text, language):
+        yield chunk
 
 
 def audio_to_wav_bytes(audio: np.ndarray, sr: int) -> bytes:

@@ -59,7 +59,7 @@ class SpeechToText:
 
             # Auto-detect GPU: try CUDA first, fallback to CPU
             device = "cpu"
-            compute_type = "int8"
+            compute_type = "float32"
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -96,11 +96,20 @@ class SpeechToText:
         segments, info = self._model.transcribe(  # type: ignore[union-attr]
             audio,
             beam_size=5,
-            language=None,
+            language="ru",
             vad_filter=True,
+            condition_on_previous_text=False,
         )
         text_parts = [segment.text.strip() for segment in segments]
         text = " ".join(text_parts).strip()
+        
+        # Drop common Whisper hallucinations from silence/noise
+        lower_text = text.lower()
+        if any(phrase in lower_text for phrase in [
+            "субтитр", "редактор", "корректор", "а на этом у меня всё",
+            "спасибо за просмотр"
+        ]):
+            text = ""
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
         logger.info("STT: '%s' (lang=%s, %.0fms)", text, info.language, elapsed_ms)

@@ -86,7 +86,7 @@ def get_or_create_stt(app_state: Any) -> "SpeechToText":
             return existing
         from kernel.voice.stt import SpeechToText
 
-        stt = SpeechToText(model_size="base", device="auto")
+        stt = SpeechToText(model_size="small", device="auto")
         stt.load()
         if not stt.is_loaded:
             raise RuntimeError(

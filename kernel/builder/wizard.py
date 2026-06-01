@@ -106,9 +106,9 @@ def _skill_questions(template: str) -> list[str]:
 def _agent_questions() -> list[str]:
     """Generate questions for agent creation."""
     return [
-        "Что конкретно должен делать агент?",
-        "Какие внешние сервисы или API нужны?",
-        "Как часто выполнять и куда отправлять результат?",
+        "Откуда мне лучше брать эти данные? (Если не знаете — ничего страшного, я постараюсь найти источник сам)",
+        "Как часто нужно это выполнять и куда присылать результат?",
+        "Есть ли какие-то особые условия? (Например, уведомлять только при падении цены)",
     ]
 
 
@@ -143,7 +143,7 @@ def _question_to_key(question: str) -> str:
         return "trigger"
     elif "уведом" in q or "notify" in q or "куда" in q:
         return "notify_channel"
-    elif "url" in q or "сервис" in q:
+    elif "url" in q or "сервис" in q or "источник" in q or "откуда" in q:
         return "target"
     elif "событ" in q or "категор" in q:
         return "categories"

@@ -26,10 +26,20 @@ REQUIRED_MODELS = {
         "size_mb": 345,
         "description": "RMVPE pitch estimator",
     },
+    "f5_russian_v4_winter.safetensors": {
+        "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/f5_russian_v4_winter.safetensors",
+        "size_mb": 1200,
+        "description": "F5-TTS Core Voice Model",
+    },
+    "jarvis_ref_v2.wav": {
+        "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/jarvis_ref_v2.wav",
+        "size_mb": 2,
+        "description": "Voice Reference Audio",
+    },
 }
 
 # These are trained models — shipped with installer, not downloaded
-BUNDLED_MODELS = ["jarvis_v2.onnx", "jarvis_v2.index"]
+BUNDLED_MODELS: list[str] = []
 
 
 def get_missing_models() -> list[dict[str, Any]]:

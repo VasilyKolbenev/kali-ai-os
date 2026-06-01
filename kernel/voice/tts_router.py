@@ -101,6 +101,34 @@ def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, 
         return _active_module.generate_audio(text, language)  # type: ignore[union-attr]
 
 
+async def generate_audio_stream(text: str, language: str | None = None):
+    """Generate audio stream via active provider. Falls back to the other one on failure."""
+    if _active_module is None:
+        set_provider(os.environ.get("KALI_TTS_PROVIDER", PROVIDER_AUTO))
+
+    assert _active_module is not None
+    try:
+        if hasattr(_active_module, "generate_audio_stream"):
+            async for chunk in _active_module.generate_audio_stream(text, language):
+                yield chunk
+        else:
+            import asyncio
+            audio, sr = await asyncio.to_thread(_active_module.generate_audio, text, language)
+            yield audio, sr
+    except Exception as exc:
+        logger.exception("TTS %s stream failed: %s — trying fallback", _active_provider, exc)
+        fallback = PROVIDER_ELEVENLABS if _active_provider == PROVIDER_F5 else PROVIDER_F5
+        set_provider(fallback)
+        _active_module.load_models()  # type: ignore[union-attr]
+        if hasattr(_active_module, "generate_audio_stream"):
+            async for chunk in _active_module.generate_audio_stream(text, language):  # type: ignore[union-attr]
+                yield chunk
+        else:
+            import asyncio
+            audio, sr = await asyncio.to_thread(_active_module.generate_audio, text, language)  # type: ignore[union-attr]
+            yield audio, sr
+
+
 def audio_to_wav_bytes(audio: np.ndarray, sr: int) -> bytes:
     import io
     import soundfile as sf

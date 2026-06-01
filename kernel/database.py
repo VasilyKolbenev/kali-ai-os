@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT,
+    fact TEXT NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -190,3 +198,19 @@ class Database:
         result = dict(row)
         result["data_json"] = json.loads(result["data_json"])
         return result
+
+    async def save_user_fact(self, topic: str, fact: str, confidence: float = 1.0) -> None:
+        """Save a new user fact to long-term memory."""
+        await self._db.execute(
+            "INSERT INTO user_facts (topic, fact, confidence) VALUES (?, ?, ?)",
+            (topic, fact, confidence),
+        )
+        await self._db.commit()
+
+    async def get_user_facts(self) -> list[dict[str, Any]]:
+        """Get all stored user facts."""
+        cursor = await self._db.execute(
+            "SELECT * FROM user_facts ORDER BY timestamp DESC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]

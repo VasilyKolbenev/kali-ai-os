@@ -6,10 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from kernel.event_bus import EventBus
+from kernel.runtime_paths import appdata_dir, is_frozen
 
 logger = logging.getLogger(__name__)
 
-CUSTOM_AGENTS_DIR = Path("agents/custom")
+# In bundled mode write custom agents under %APPDATA%\KALI\agents\custom — the
+# install dir (Program Files\KALI for Lite, %LOCALAPPDATA%\Programs\KALI for
+# Premium) is read-only at runtime and triggers a PermissionError on mkdir.
+# Dev mode keeps the project-relative path so existing tests pass.
+CUSTOM_AGENTS_DIR = (
+    appdata_dir() / "agents" / "custom" if is_frozen() else Path("agents/custom")
+)
 
 AGENT_TEMPLATE = '''"""Auto-generated KALI agent: {name}."""
 

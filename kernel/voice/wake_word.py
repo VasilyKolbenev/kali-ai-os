@@ -1,6 +1,7 @@
 """Wake word detection using OpenWakeWord."""
 
 import logging
+import os
 from dataclasses import dataclass
 
 try:
@@ -25,14 +26,29 @@ class WakeWordDetector:
 
     Buffers small audio chunks to meet OpenWakeWord's 1280-sample minimum.
     Falls back to always-false when model is not loaded.
+
+    Threshold defaults to 0.30 but is overridable via ``KALI_WAKE_THRESHOLD``
+    env var (e.g. ``KALI_WAKE_THRESHOLD=0.15`` for lower-bar testing). The
+    bundled ``hey_jarvis_v0.1`` model is trained on English pronunciation;
+    Russian "Джарвис" scores ~0.02 vs ~0.33 for English "Hey Jarvis".
     """
 
     # OpenWakeWord expects >= 1280 samples (80ms at 16kHz)
     _MIN_SAMPLES = 1280
 
-    def __init__(self, wake_word: str = "jarvis", threshold: float = 0.3) -> None:
+    def __init__(self, wake_word: str = "jarvis", threshold: float | None = None) -> None:
         self.wake_word = wake_word
-        self.threshold = threshold
+        # Env-var override takes priority over the kwarg/default so the
+        # operator can drop the threshold without touching pipeline.py.
+        env_override = os.environ.get("KALI_WAKE_THRESHOLD")
+        if env_override is not None:
+            try:
+                self.threshold = float(env_override)
+            except ValueError:
+                logger.warning("Invalid KALI_WAKE_THRESHOLD=%r, using default", env_override)
+                self.threshold = 0.30 if threshold is None else threshold
+        else:
+            self.threshold = 0.30 if threshold is None else threshold
         self._model: object | None = None
         self._loaded = False
         self._buffer: list[np.ndarray] = []
@@ -92,12 +108,18 @@ class WakeWordDetector:
         audio_int16 = (combined * 32767).astype(np.int16)
         prediction = self._model.predict(audio_int16)  # type: ignore[union-attr]
 
-        # Debug: log top score every ~3 seconds (≈37 calls at 80ms)
+        # Debug: log top score every ~3 seconds (≈37 calls at 80ms).
+        # During Russian-pronunciation debugging sessions we want to *see*
+        # what the model thinks of incoming audio, so anything above 0.05
+        # bumps from DEBUG to INFO.
         self._debug_counter += 1
         if self._debug_counter >= 37:
             self._debug_counter = 0
             top = max(prediction.items(), key=lambda x: x[1]) if prediction else ("?", 0)
-            if top[1] > 0.01:
+            if top[1] > 0.05:
+                logger.info("Wake-word top score: %s=%.3f (threshold=%.2f)",
+                            top[0], top[1], self.threshold)
+            elif top[1] > 0.01:
                 logger.debug("Wake word scores: top=%s (%.3f)", top[0], top[1])
 
         for model_name, score in prediction.items():

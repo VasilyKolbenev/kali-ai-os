@@ -423,13 +423,31 @@ class VoicePipeline:
         await self._set_state(PipelineState.SPEAKING)
         if was_recording:
             await self._recorder.stop()
+        queue: asyncio.Queue[tuple[np.ndarray, int] | None] = asyncio.Queue()
+
+        async def generate_task() -> None:
+            try:
+                async for audio, sr in tts_router.generate_audio_stream(text):
+                    if len(audio) > 0:
+                        await queue.put((audio, sr))
+            except Exception:
+                logger.exception("TTS stream generation failed")
+            finally:
+                await queue.put(None)
+
+        gen_task = asyncio.create_task(generate_task())
+
         try:
-            audio, sr = await asyncio.to_thread(tts_router.generate_audio, text)
-            if len(audio) > 0:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                audio, sr = item
                 await asyncio.to_thread(_play_audio, audio, sr)
         except Exception:
             logger.exception("TTS playback failed")
         finally:
+            await gen_task
             # 500ms buffer — lets speaker audio fully drain before mic resumes.
             # Without this, STT picks up room echo of JARVIS's own voice.
             await asyncio.sleep(0.5)

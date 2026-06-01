@@ -83,8 +83,8 @@ REFERENCE_TEXT = (
 
 # Tuned inference parameters — A/B winner "04_v2ref_aggressive" (2026-04-22)
 SPEED = 1.0           # natural pacing
-CFG_STRENGTH = 3.5    # aggressive adherence — matches JARVIS voice closely
-NFE_STEP = 64         # high quality (default 32, previous 48)
+CFG_STRENGTH = 2.0    # balanced: voice similarity vs speed
+NFE_STEP = 32         # default quality (was 64 — high but slow, 32 is 2x faster)
 REMOVE_SILENCE = False  # preserve natural butler pauses
 
 # Global state
@@ -231,6 +231,42 @@ def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, 
         audio = (audio * 0.7 / peak).astype(np.float32)
 
     return audio, 24000
+
+
+async def generate_audio_stream(text: str, language: str | None = None):
+    """Generate JARVIS voice via F5-TTS and yield chunks per sentence."""
+    import asyncio
+    del language  # F5 auto-detects
+    f5 = _get_f5()
+    text = _fix_text(text)
+
+    sentences = _split_sentences(text)
+
+    for sentence in sentences:
+        t0 = time.perf_counter()
+        try:
+            wav, sr, _ = await asyncio.to_thread(
+                f5.infer,
+                ref_file=str(REFERENCE_AUDIO),
+                ref_text=_get_processed_reference_text(),
+                gen_text=sentence,
+                remove_silence=REMOVE_SILENCE,
+                speed=SPEED,
+                cfg_strength=CFG_STRENGTH,
+                nfe_step=NFE_STEP,
+            )
+            audio = np.asarray(wav, dtype=np.float32)
+            elapsed = time.perf_counter() - t0
+            logger.info("F5-TTS stream: %d chars → %.1fs audio in %.2fs", len(sentence), len(audio) / 24000, elapsed)
+            
+            peak = float(np.max(np.abs(audio)))
+            if peak > 0:
+                audio = (audio * 0.7 / peak).astype(np.float32)
+
+            yield audio, 24000
+        except Exception as exc:
+            logger.warning("F5 failed on %r: %s", sentence[:40], exc)
+            continue
 
 
 def audio_to_wav_bytes(audio: np.ndarray, sr: int) -> bytes:
