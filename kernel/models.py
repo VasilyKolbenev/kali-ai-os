@@ -171,11 +171,22 @@ class VoiceConfig(BaseModel):
     engine: Literal["python", "rust"] = "python"
 
 
+# Default models per cloud provider (used when user switches provider).
+DEFAULT_CLOUD_MODELS: dict[str, str] = {
+    "anthropic": "claude-sonnet-4-20250514",
+    "openai": "gpt-4.1",
+    "google": "gemini-2.5-flash",
+    "deepseek": "deepseek-chat",
+    "groq": "llama-3.3-70b-versatile",
+    "mistral": "mistral-large-latest",
+}
+
+
 class LLMConfig(BaseModel):
     """LLM routing configuration."""
 
-    cloud_provider: str = "anthropic"  # "anthropic" or "openai"
-    cloud_model: str = "claude-sonnet-4-20250514"  # or "gpt-5.4", "gpt-5.4-mini"
+    cloud_provider: str = "anthropic"  # anthropic | openai | google | deepseek | groq | mistral
+    cloud_model: str = "claude-sonnet-4-20250514"
     local_provider: str = "ollama"
     local_model: str = "llama3"
     auto_route: bool = True
