@@ -1,0 +1,15 @@
+{
+  "patterns": [
+    {
+      "rule_name": "hardcoded_llm_or_cloud_key",
+      "substrings": ["sk-proj-", "sk-ant-", "AIzaSy", "AKIA"],
+      "reminder": "Possible hardcoded API key (OpenAI/Anthropic/Google/AWS prefix). KALI loads all provider keys from .env or secure storage — never hardcode or commit a key. Use _mask_key() before surfacing any key value."
+    },
+    {
+      "rule_name": "agent_codegen_dangerous_exec",
+      "regex": "(os\\.system|subprocess\\.(Popen|run|call)|shutil\\.rmtree)\\s*\\(",
+      "paths": ["**/kernel/agent_builder.py", "**/kernel/builder/**"],
+      "reminder": "Dangerous call in the agent code-generation path. Generated agents run in the sandbox from untrusted voice/text input — keep the BLOCKED_PATTERNS gate intact and do not let these reach generated code."
+    }
+  ]
+}
