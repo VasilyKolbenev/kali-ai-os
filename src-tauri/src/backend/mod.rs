@@ -24,7 +24,7 @@ use crate::backend::skills::registry::{default_sources, SkillsRegistry};
 use crate::backend::voice::pipeline::{Pipeline, PipelineDeps};
 
 /// Bind address for the Phase 0 Rust backend. Python backend remains on 3005.
-pub const RUST_BIND_ADDR: &str = "127.0.0.1:3006";
+pub const RUST_BIND_ADDR: &str = "0.0.0.0:3006";
 
 pub async fn serve() -> anyhow::Result<()> {
     let bus = Arc::new(event_bus::EventBus::new());

@@ -37,6 +37,7 @@ RELAYED_TOPIC_GLOBS: tuple[str, ...] = (
     "voice.*",
     "ui.*",
     "dashboard.*",
+    "canvas.*",
     "schedule.*",
     "system.*",
 )

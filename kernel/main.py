@@ -4,6 +4,11 @@ import json
 import logging
 import os
 import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -47,13 +52,7 @@ from kernel.catalog.installer import install_package
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CORS_ORIGINS = [
-    "http://localhost:1420",
-    "http://127.0.0.1:1420",
-    "http://localhost:1421",
-    "http://127.0.0.1:1421",
-    "tauri://localhost",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
+    "*"
 ]
 
 
@@ -306,6 +305,11 @@ def create_app(
         await database.initialize()
         await database.prune_old_conversations()
         memory = ConversationMemory(database)
+        
+        from kernel.long_term_memory import LongTermMemory
+        lt_memory = LongTermMemory(database, config_manager.config.llm)
+        app.state.long_term_memory = lt_memory
+        
         notifications = NotificationManager(event_bus)
         app.state.memory = memory
         app.state.notifications = notifications
@@ -364,6 +368,17 @@ def create_app(
                 )
                 app.state.voice_pipeline = voice_pipeline
                 logger.info("Voice pipeline initialized")
+                
+                from kernel.voice.remote_pipeline import RemoteVoicePipeline
+                remote_pipeline = RemoteVoicePipeline(
+                    event_bus=event_bus,
+                    voice_config=config_manager.config.voice,
+                    llm_config=config_manager.config.llm,
+                    tools=plugin_registry.get_all_tools(),
+                    app_state=app.state,
+                )
+                app.state.remote_pipeline = remote_pipeline
+                logger.info("Remote Voice pipeline initialized")
 
                 # Voice pipeline — auto-start only if user opted in via config.
                 # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
@@ -413,6 +428,7 @@ def create_app(
         event_bus.subscribe("voice.*", ws_forwarder)
         event_bus.subscribe("ui.*", ws_forwarder)
         event_bus.subscribe("dashboard.*", ws_forwarder)
+        event_bus.subscribe("canvas.*", ws_forwarder)
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
@@ -441,7 +457,7 @@ def create_app(
             logger.info("Frozen mode: agents will run in-process (no subprocess)")
 
         # Auto-load essential agents (built-in = auto-approved)
-        builtin_agents = {"system", "weather", "tasks", "calendar"}
+        builtin_agents = {"system", "weather", "tasks", "calendar", "live-canvas"}
         for agent_name in builtin_agents:
             try:
                 await agent_runtime.load_agent(agent_name)
@@ -450,8 +466,8 @@ def create_app(
                     manifest.permissions.user_approved = True
                     permission_enforcer.register_agent(agent_name, manifest)
                 logger.info("Auto-loaded agent: %s", agent_name)
-            except Exception:
-                logger.warning("Failed to auto-load agent: %s", agent_name)
+            except Exception as e:
+                logger.warning("Failed to auto-load agent: %s - %s", agent_name, str(e), exc_info=True)
 
         app.state.builtin_agents = builtin_agents
 
@@ -526,6 +542,62 @@ def create_app(
 
     # --- Routes ---
 
+    @app.get("/models/status")
+    async def get_models_status_api(request: Request) -> dict[str, Any]:
+        from kernel.model_downloader import get_models_status
+        return get_models_status()
+
+    @app.post("/models/download")
+    async def download_models_api(request: Request) -> dict[str, str]:
+        from kernel.model_downloader import get_missing_models, download_model
+        from kernel.models import Event
+        import asyncio
+        import time
+
+        missing = get_missing_models()
+        if not missing:
+            return {"status": "ok", "message": "All models present"}
+
+        async def _download_task() -> None:
+            loop = asyncio.get_running_loop()
+            event_bus = request.app.state.event_bus
+
+            for item in missing:
+                last_emit = 0.0
+
+                def progress_cb(downloaded: int, total: int) -> None:
+                    nonlocal last_emit
+                    now = time.time()
+                    if now - last_emit > 0.1 or downloaded == total:
+                        last_emit = now
+                        asyncio.run_coroutine_threadsafe(
+                            event_bus.publish(Event(
+                                topic="system.models.download_progress",
+                                source="kernel",
+                                payload={
+                                    "filename": item["name"],
+                                    "description": item["description"],
+                                    "downloaded_bytes": downloaded,
+                                    "total_bytes": total
+                                }
+                            )), loop
+                        )
+
+                success = await asyncio.to_thread(download_model, item["name"], item["url"], progress_cb)
+                if not success:
+                    break
+
+            asyncio.run_coroutine_threadsafe(
+                event_bus.publish(Event(
+                    topic="system.models.download_complete",
+                    source="kernel",
+                    payload={}
+                )), loop
+            )
+
+        asyncio.create_task(_download_task())
+        return {"status": "started", "message": "Download task started"}
+
     @app.get("/health")
     async def health(request: Request) -> dict[str, Any]:
         s = request.app.state
@@ -537,6 +609,20 @@ def create_app(
                 "database": {"connected": s.database.is_connected},
                 "scheduler": s.scheduler.get_schedule_info(),
             },
+        }
+
+    @app.get("/dashboard")
+    async def get_dashboard(request: Request) -> dict[str, Any]:
+        s = request.app.state
+        # Fetch the core widgets used by mobile
+        weather = await s.database.get_dashboard_data("weather")
+        budget = await s.database.get_dashboard_data("budget")
+        tasks = await s.database.get_dashboard_data("tasks")
+        
+        return {
+            "weather": weather["data_json"] if weather else {"temp": "+22°C", "condition": "Солнечно"},
+            "budget": budget["data_json"] if budget else {"amount": "₽14,200", "status": "В норме"},
+            "tasks": tasks["data_json"] if tasks else {"active": 5, "completed": 2},
         }
 
     @app.get("/agents")
@@ -800,15 +886,17 @@ def create_app(
                 try:
                     data = json.loads(raw)
                     msg = WSMessage(**data)
-                    if msg.type == "ui.command":
+                    if msg.type in ("ui.command", "voice.state", "voice.audio_stream"):
                         await s.event_bus.publish(
                             Event(
-                                topic="ui.command",
+                                topic=msg.type,
                                 source="websocket",
                                 payload=msg.data,
                             )
                         )
-                        await ws.send_json({"type": "ui.command", "data": {"status": "received"}})
+                        # We don't need to ACK audio streams to save bandwidth
+                        if msg.type == "ui.command":
+                            await ws.send_json({"type": "ui.command", "data": {"status": "received"}})
                     else:
                         await ws.send_json(
                             {"type": "error", "data": {"message": f"Unknown type: {msg.type}"}}
@@ -890,6 +978,17 @@ def create_app(
             payload = dispatch_result.result or {}
             if set(payload.keys()) == {"result"}:
                 payload = payload["result"] if isinstance(payload["result"], dict) else payload
+
+            # Live Canvas: push widget updates to UI via EventBus → WebSocket
+            if name == "live-canvas" and action in ("render_widget", "clear_canvas"):
+                await request.app.state.event_bus.publish(
+                    Event(
+                        topic="canvas.update",
+                        source="live-canvas",
+                        payload={"action": action, **payload},
+                    )
+                )
+
             return payload
 
         # Map denial reason → HTTP status for API clients that care
@@ -910,6 +1009,19 @@ def create_app(
             },
             status_code=http_status,
         )
+
+    @app.get("/canvas/widgets")
+    async def get_canvas_widgets(request: Request) -> dict[str, Any]:
+        """Return current live-canvas widgets for initial UI render."""
+        runtime = request.app.state.agent_runtime
+        try:
+            status = await runtime.get_status("live-canvas")
+            if not status or status.get("status") != "running":
+                return {"widgets": [], "count": 0}
+            result = await runtime.dispatch("live-canvas", "list_widgets", {})
+            return result
+        except Exception:
+            return {"widgets": [], "count": 0}
 
     @app.post("/notifications/send")
     async def send_notification(request: Request) -> dict[str, str]:
@@ -1053,8 +1165,9 @@ def create_app(
         return result
 
     async def _chat_logic(request: Request) -> dict[str, Any]:
-        """Internal chat logic — returns response dict."""
-        import re as _re
+        """Internal chat logic — returns response dict using LLMRouter."""
+        from kernel.llm_router import LLMRouter, LLMRequest
+        import json
 
         body = await request.json()
         text = body.get("text", "")
@@ -1062,304 +1175,69 @@ def create_app(
             return {"response": "Empty message", "source": "system"}
 
         s = request.app.state
-        text_lower = text.lower()
-
-        # Detect user language from input text
-        _cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
-        _is_ru = _cyrillic > len(text) * 0.3
-
-        # Word-boundary match helper — prevents "час" matching inside "часто" or "сейчас"
-        def _has_word(txt: str, words: list[str]) -> bool:
-            for w in words:
-                if _re.search(rf"\b{_re.escape(w)}\b", txt, _re.IGNORECASE | _re.UNICODE):
-                    return True
-            return False
-
-        # --- Automation intent detection (PRIORITY: before keyword routing) ---
-        # Patterns: "проверять каждые N", "уведомляй если", "следи за X", "напоминай каждые"
-        _automation_patterns = [
-            r"\bкажд(ый|ые|ую|ого)\s+(час|минут|день|недел|секунд)",
-            r"\bуведом(ляй|и|лять)\b",
-            r"\bскажи\s+мне\s+(когда|если)",
-            r"\b(следи|отслеживай|мониторь)\b",
-            r"\bнапоминай\b",
-            r"\bесли\s+\w+\s+(изменил|увеличил|уменьшил|станет|будет|превыс)",
-            r"\bevery\s+(hour|minute|day|week)",
-            r"\bnotify\s+me\b",
-            r"\btrack\s+my\b",
-            r"\bremind\s+me\b",
-        ]
-        _is_automation = any(_re.search(p, text_lower) for p in _automation_patterns)
-        if _is_automation:
-            try:
-                intent = classify_intent(text)
-                if _is_ru:
-                    resp = (
-                        f"Отлично, сэр. Похоже на {intent.template or 'автоматизацию'}. "
-                        "Создать для вас навык? Скажите «да» или уточните детали."
+        
+        # 1. Fetch available tools from registry
+        available_tools = s.plugin_registry.get_all_tools()
+        
+        # 2. Setup LLM router
+        router = LLMRouter(s.config_manager.config.llm)
+        
+        # 3. First request
+        req = LLMRequest(
+            text=text,
+            context=s.memory.get_context(),
+            available_tools=available_tools
+        )
+        response = await router.route(req)
+        
+        # 4. Handle tool calls
+        if response.tool_calls:
+            # We process the first tool call (single turn for now to keep it fast)
+            call = response.tool_calls[0]
+            if "__" in call.name:
+                agent_name, action = call.name.split("__", 1)
+                manifest = s.plugin_registry.get(agent_name)
+                
+                try:
+                    # Dispatch to appropriate executor
+                    if manifest and manifest.protocol == "skill":
+                        result = await s.skill_executor.execute(agent_name, action, call.arguments)
+                    else:
+                        result = await s.agent_runtime.dispatch(agent_name, action, call.arguments)
+                        
+                    # Second pass: let LLM format the result
+                    tool_context = req.context.copy()
+                    tool_context.append({"role": "user", "content": text})
+                    # Add tool response as system info to help LLM formulate final answer
+                    system_msg = f"Tool {call.name} returned:\n{json.dumps(result, ensure_ascii=False)}\nPlease summarize this naturally for the user."
+                    
+                    second_req = LLMRequest(
+                        text=system_msg,
+                        context=tool_context,
+                        available_tools=[]
                     )
-                else:
-                    resp = (
-                        f"Right away, sir. Sounds like a {intent.template or 'automation'}. "
-                        "Shall I create this skill? Say 'yes' or add details."
-                    )
-                return {
-                    "response": resp,
-                    "source": "agent-builder",
-                    "data": {"intent": intent.__dict__, "pending_creation": True},
-                }
-            except Exception as e:
-                logger.warning("Automation intent classification failed: %s", e)
-
-        # Morning briefing on first greeting of the day
-        _greet_words = ["привет", "здравствуй", "добр", "hello", "hi", "hey", "good morning", "доброе"]
-        if any(w in text_lower for w in _greet_words):
-            try:
-                briefing = await _build_daily_briefing(s, _is_ru)
-                return {"response": briefing, "source": "daily-briefing"}
-            except Exception:
-                pass
-
-        _WEATHER_RU = {
-            "Clear sky": "ясно", "Mainly clear": "преимущественно ясно",
-            "Partly cloudy": "переменная облачность", "Overcast": "пасмурно",
-            "Fog": "туман", "Light rain": "небольшой дождь",
-            "Moderate rain": "умеренный дождь", "Heavy rain": "сильный дождь",
-            "Light snow": "небольшой снег", "Moderate snow": "умеренный снег",
-            "Heavy snow": "сильный снег", "Thunderstorm": "гроза",
-            "Slight rain": "слабый дождь", "Drizzle": "морось",
-        }
-        _WEEKDAY_RU = {
-            "Monday": "понедельник", "Tuesday": "вторник", "Wednesday": "среда",
-            "Thursday": "четверг", "Friday": "пятница", "Saturday": "суббота",
-            "Sunday": "воскресенье",
-        }
-
-        # Direct agent commands (simple keyword matching for v1)
-        if any(w in text_lower for w in ["weather", "погода", "температура"]):
-            try:
-                result = await s.agent_runtime.dispatch(
-                    "weather", "get_weather", {"city": "Moscow"},
-                )
-                condition = result.get("condition", "")
-                if _is_ru:
-                    condition = _WEATHER_RU.get(condition, condition)
-                    resp = f"Погода в Москве: {result.get('temperature_c')}°C, {condition}"
-                else:
-                    resp = f"Weather in Moscow: {result.get('temperature_c')}°C, {condition}"
-                return {"response": resp, "source": "weather-agent", "data": result}
-            except Exception:
-                pass
-
-        # Strict time query patterns only — avoid false matches on "за всё время", "часто" etc.
-        _time_patterns = [
-            r"\bкотор(ый|ая|ое)\s+час\b",
-            r"\bсколько\s+(сейчас\s+)?времени\b",
-            r"\bкакое\s+(сейчас\s+)?время\b",
-            r"\bтекущ(ее|ий|ая)\s+(врем|час)",
-            r"\bwhat\s+(is\s+)?(the\s+)?time\b",
-            r"\bcurrent\s+time\b",
-            r"\btell\s+me\s+the\s+time\b",
-        ]
-        if any(_re.search(p, text_lower) for p in _time_patterns):
-            try:
-                result = await s.agent_runtime.dispatch("system", "get_time", {})
-                weekday = result.get("weekday", "")
-                if _is_ru:
-                    weekday = _WEEKDAY_RU.get(weekday, weekday)
-                    resp = f"Сейчас {result.get('time', '')}, {weekday}"
-                else:
-                    resp = f"It's {result.get('time', '')}, {weekday}"
-                return {"response": resp, "source": "system-agent", "data": result}
-            except Exception:
-                pass
-
-        if any(w in text_lower for w in ["task", "задач", "todo"]):
-            try:
-                result = await s.agent_runtime.dispatch("tasks", "get_summary", {})
-                done = result.get("done", 0)
-                total = result.get("total", 0)
-                pending = result.get("pending", 0)
-                if _is_ru:
-                    resp = f"Задачи: {done} из {total} выполнено, {pending} в ожидании"
-                else:
-                    resp = f"Tasks: {done} of {total} done, {pending} pending"
-                return {"response": resp, "source": "tasks-agent", "data": result}
-            except Exception:
-                pass
-
-        if any(w in text_lower for w in ["brief", "утро", "morning", "день"]):
-            try:
-                briefing_text = await s.briefing.generate_morning_briefing({})
-                return {"response": briefing_text, "source": "briefing"}
-            except Exception:
-                pass
-
-        if any(w in text_lower for w in ["focus", "фокус", "pomodoro", "помодоро", "таймер"]):
-            try:
-                await s.focus.start(25, "work")
-                if _is_ru:
-                    resp = "Таймер фокусировки запущен. 25 минут. Удачной работы, сэр."
-                else:
-                    resp = "Focus timer started. 25 minutes. Good luck, sir."
-                return {"response": resp, "source": "focus-timer"}
-            except Exception:
-                pass
-
-        if any(
-            w in text_lower
-            for w in ["budget", "бюджет", "расход", "потратил"]
-        ):
-            try:
-                goals = s.budget.get_goals()
-                if goals:
-                    parts = [
-                        f"{cat}: ${info['spent']}/{info['limit']}"
-                        for cat, info in goals.items()
-                    ]
+                    final_response = await router.route(second_req)
+                    
+                    s.memory.add_turn("user", text)
+                    s.memory.add_turn("assistant", final_response.text)
+                    
                     return {
-                        "response": f"Budget: {', '.join(parts)}",
-                        "source": "budget",
+                        "response": final_response.text,
+                        "source": f"agent-{agent_name}",
+                        "data": result,
                     }
-                return {
-                    "response": "No budget goals set. Use /budget/goal to set one.",
-                    "source": "budget",
-                }
-            except Exception:
-                pass
-
-        # Notion routing
-        if any(w in text_lower for w in ["notion", "заметк", "note"]):
-            try:
-                result = await s.agent_runtime.dispatch("notion", "search", {"query": text})
-                count = result.get("count", 0)
-                if _is_ru:
-                    resp = f"Notion: найдено {count} результатов"
-                else:
-                    resp = f"Notion: found {count} results"
-                return {"response": resp, "source": "notion-agent", "data": result}
-            except Exception:
-                pass
-
-        # Todoist routing
-        if any(w in text_lower for w in ["todoist", "задач", "task", "todo"]):
-            try:
-                result = await s.agent_runtime.dispatch("todoist", "get_tasks", {})
-                if "error" not in result:
-                    count = result.get("count", 0)
-                    if _is_ru:
-                        resp = f"Todoist: {count} активных задач"
-                    else:
-                        resp = f"Todoist: {count} active tasks"
-                    return {"response": resp, "source": "todoist-agent", "data": result}
-            except Exception:
-                pass
-
-        # GitHub routing
-        if any(w in text_lower for w in ["github", "гитхаб", "pr", "pull request", "issue"]):
-            try:
-                result = await s.agent_runtime.dispatch("github", "my_repos", {})
-                if "error" not in result:
-                    count = result.get("count", 0)
-                    if _is_ru:
-                        resp = f"GitHub: {count} репозиториев"
-                    else:
-                        resp = f"GitHub: {count} repositories"
-                    return {"response": resp, "source": "github-agent", "data": result}
-            except Exception:
-                pass
-
-        # News routing
-        if any(w in text_lower for w in ["news", "новост", "дайджест"]):
-            try:
-                result = await s.agent_runtime.dispatch("news", "top_headlines", {"country": "ru" if _is_ru else "us"})
-                if "error" not in result:
-                    articles = result.get("articles", [])
-                    headlines = [a["title"] for a in articles[:3] if a.get("title")]
-                    if _is_ru:
-                        resp = "Топ новости: " + " | ".join(headlines)
-                    else:
-                        resp = "Top news: " + " | ".join(headlines)
-                    return {"response": resp, "source": "news-agent", "data": result}
-            except Exception:
-                pass
-
-        # Currency routing
-        if any(w in text_lower for w in ["курс", "валют", "dollar", "евро", "currency", "exchange"]):
-            try:
-                result = await s.agent_runtime.dispatch("currency", "get_rates", {"base": "USD"})
-                if "error" not in result:
-                    rates = result.get("rates", {})
-                    rub = rates.get("RUB", "?")
-                    eur = rates.get("EUR", "?")
-                    if _is_ru:
-                        resp = f"Курс USD: {rub} руб, EUR/USD: {eur}"
-                    else:
-                        resp = f"USD rates — RUB: {rub}, EUR: {eur}"
-                    return {"response": resp, "source": "currency-agent", "data": result}
-            except Exception:
-                pass
-
-        # Agent/skill creation routing
-        _create_words = [
-            "создай агент", "создай навык", "создай скилл",
-            "create agent", "create skill", "make agent",
-            "сделай агент", "сделай навык",
-        ]
-        if any(w in text_lower for w in _create_words):
-            try:
-                intent = classify_intent(text)
-                if _is_ru:
-                    resp = f"Анализирую запрос... Тип: {intent.type}"
-                    if intent.template:
-                        resp += f", шаблон: {intent.template}"
-                    resp += ". Скажите подробнее что именно нужно отслеживать или автоматизировать."
-                else:
-                    resp = f"Analyzing... Type: {intent.type}"
-                    if intent.template:
-                        resp += f", template: {intent.template}"
-                    resp += ". Tell me more about what you want to track or automate."
-                return {
-                    "response": resp,
-                    "source": "agent-builder",
-                    "data": {"intent": intent.__dict__},
-                }
-            except Exception:
-                pass
-
-        # Default: direct OpenAI call with language-aware system prompt
-        try:
-            import openai
-
-            client = openai.AsyncOpenAI()
-            llm_config = s.config_manager.config.llm
-
-            from kernel.jarvis_persona import get_prompt
-            system_msg = get_prompt()
-            messages = [{"role": "system", "content": system_msg}] + s.memory.get_context() + [
-                {"role": "user", "content": text},
-            ]
-
-            completion = await client.chat.completions.create(
-                model=llm_config.cloud_model,
-                messages=messages,
-            )
-
-            response_text = (completion.choices[0].message.content or "").strip()
-            if response_text:
-                s.memory.add_turn("user", text)
-                s.memory.add_turn("assistant", response_text)
-            err_msg = "Не удалось получить ответ." if _is_ru else "Failed to get response."
-            return {
-                "response": response_text or err_msg,
-                "source": f"llm-{llm_config.cloud_provider}",
-            }
-        except Exception as e:
-            logger.warning("LLM call failed: %s", e)
-            return {
-                "response": f"LLM ошибка: {e}",
-                "source": "system",
-            }
+                except Exception as e:
+                    logger.exception(f"Tool execution failed for {call.name}")
+                    return {"response": f"Error executing {agent_name}: {e}", "source": "system"}
+                    
+        # 5. Normal text response
+        s.memory.add_turn("user", text)
+        s.memory.add_turn("assistant", response.text)
+        
+        return {
+            "response": response.text,
+            "source": f"llm-{response.provider_used}",
+        }
 
     @app.get("/skills")
     async def list_skills_route(request: Request) -> list[dict[str, Any]]:
@@ -2154,7 +2032,7 @@ if __name__ == "__main__":
     app = create_app()
     uvicorn.run(
         app,
-        host=os.environ.get("KALI_HOST", "127.0.0.1"),
+        host=os.environ.get("KALI_HOST", "0.0.0.0"),
         port=int(os.environ.get("KALI_PORT", "3005")),
         log_level="info",
     )

@@ -6,7 +6,7 @@ server:
 voice:
   wake_word: "jarvis"
   mode: "wake_word"                   # wake_word | push_to_talk | off
-  stt_model: "base"
+  stt_model: "small"
   tts_voice: "default"
   vad_threshold: 0.5
   auto_start: true                    # If true: pipeline starts with app, Jarvis listens for wake-word in background. Otherwise on-demand.

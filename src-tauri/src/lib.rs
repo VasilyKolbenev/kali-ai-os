@@ -90,27 +90,36 @@ fn wait_for_backend_ready() -> bool {
 }
 
 fn find_backend() -> Option<PathBuf> {
+    // exe_dir = directory containing kali-desktop.exe.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
     let candidates = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|dir| dir.join("kali-backend.exe"))),
-        std::env::current_exe().ok().and_then(|path| {
-            path.parent()
-                .and_then(|dir| dir.parent())
-                .and_then(|dir| dir.parent())
-                .and_then(|dir| dir.parent())
+        // Premium v3 install layout: kali-backend in its own subfolder next to
+        // kali-desktop.exe (PyInstaller onedir bundle stays self-contained).
+        exe_dir
+            .as_ref()
+            .map(|d| d.join("kali-backend").join("kali-backend.exe")),
+        // Lite (NSIS) layout: backend flat next to kali-desktop.exe.
+        exe_dir.as_ref().map(|d| d.join("kali-backend.exe")),
+        // Dev mode: ../../../../dist/kali-backend.exe relative to cargo target.
+        exe_dir.as_ref().and_then(|d| {
+            d.parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
                 .map(|root| root.join("dist").join("kali-backend.exe"))
         }),
+        // Last-resort PATH lookup.
         Some(PathBuf::from("kali-backend.exe")),
-        Some(PathBuf::from(r"C:\Program Files\KALI\kali-backend.exe")),
+        // NOTE: removed the hardcoded C:\Program Files\KALI\ fallback from
+        // earlier revisions — it pulled in stale residue from old dev installs
+        // (Apr 17 backend pre-dating v1) and masked bugs in the real install
+        // paths. If real paths break, fail loud rather than fall back to
+        // whatever happens to sit in Program Files.
     ];
 
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates.into_iter().flatten().find(|p| p.exists())
 }
 
 fn start_backend(app: &AppHandle) {
