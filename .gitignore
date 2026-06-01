@@ -51,6 +51,12 @@ Jarvis Sound Pack*/
 # Brainstorm visual companion (mockups + .events files)
 .superpowers/
 
+# Claude Code worktrees (local, per-session — never commit)
+.claude/worktrees/
+
+# PyInstaller generated spec (regenerated each build)
+/kali-backend.spec
+
 # IDE
 .idea/
 .vscode/

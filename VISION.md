@@ -501,6 +501,9 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 | **shopping** | Покупки | Списки, сравнение цен, заказы |
 | **news** | Информация | Персонализированные новости и дайджесты |
 | **social** | Коммуникации | Telegram, WhatsApp, VK интеграции |
+| **web-surfer** | Инструменты | Автоматизация браузера, парсинг сайтов, заполнение форм (вдохновлено OpenClaw) |
+| **automation-scheduler**| Инструменты | Голосовой Cron для настройки регулярных задач (вдохновлено OpenClaw) |
+| **live-canvas**| Инструменты | Рендеринг динамических виджетов и графиков в UI KALI (вдохновлено OpenClaw) |
 
 ---
 
@@ -708,6 +711,12 @@ Mic → Silero VAD → Wake Word ("Jarvis")
 - [ ] Audio I/O hardware optimization
 - [ ] Starlink / satellite connectivity support
 - [ ] Custom KALI device prototype
+
+### Phase 12: KALI 2.0 (Pure Rust UI) 📋 LONG TERM
+- [ ] Transition from Tauri + React (WebView) to a pure native Rust UI framework (egui, GPUI, or iced).
+- [ ] Eliminate WebView overhead to drastically reduce memory usage and improve render performance.
+- [ ] Re-implement Glassmorphism and animations natively via custom shaders / GPU pipelines.
+- [ ] Achieve "Zed-like" lightning-fast startup and zero latency.
 
 ---
 
