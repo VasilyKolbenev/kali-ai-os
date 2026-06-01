@@ -40,6 +40,8 @@ describe("Onboarding integration", () => {
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("api-key");
     advance();
+    expect(useOnboardingStore.getState().currentStep).toBe("models-download");
+    advance();
     expect(useOnboardingStore.getState().currentStep).toBe("mic-test");
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("first-agent");
