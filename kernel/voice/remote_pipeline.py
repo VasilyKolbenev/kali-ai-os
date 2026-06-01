@@ -16,6 +16,14 @@ from kernel.voice.stt import SpeechToText
 
 logger = logging.getLogger(__name__)
 
+# Cap the per-utterance audio buffer to bound memory from a flooding WS client.
+# 16 kHz int16 PCM is ~32 KB/s, so 50 MB is ~26 min of audio — far beyond any real
+# voice command, but prevents an unbounded buffer from a client that streams
+# 'voice.audio_stream' chunks without ever sending 'voice.state=idle' (OOM DoS
+# over the intentionally LAN-bound /ws endpoint).
+MAX_AUDIO_BUFFER_BYTES = 50 * 1024 * 1024
+
+
 class RemoteVoicePipeline:
     """Handles voice interactions originating from a remote WebSocket client.
     
@@ -40,6 +48,7 @@ class RemoteVoicePipeline:
         self._context: list[dict[str, Any]] = []
         
         self._audio_buffer: list[np.ndarray] = []
+        self._audio_buffer_bytes = 0
         self._state = PipelineState.IDLE
         
         # Subscribe to websocket events
@@ -55,6 +64,7 @@ class RemoteVoicePipeline:
         if state_str == "listening":
             print("DEBUG: Client started listening")
             self._audio_buffer.clear()
+            self._audio_buffer_bytes = 0
             self._state = PipelineState.LISTENING
         elif state_str == "idle" and self._state == PipelineState.LISTENING:
             print("DEBUG: Client stopped listening, processing utterance...")
@@ -69,10 +79,24 @@ class RemoteVoicePipeline:
         if chunk_b64:
             try:
                 raw_bytes = base64.b64decode(chunk_b64)
-                # Keep raw bytes, as web browser sends WebM/Opus chunks
-                self._audio_buffer.append(raw_bytes)
             except Exception as e:
                 print(f"DEBUG: Failed to decode audio chunk: {e}")
+                return
+            # Bound memory: an untrusted LAN /ws client could stream chunks forever
+            # without sending voice.state=idle. Drop the utterance past the cap
+            # instead of growing the buffer until the process OOMs.
+            if self._audio_buffer_bytes + len(raw_bytes) > MAX_AUDIO_BUFFER_BYTES:
+                logger.warning(
+                    "Remote audio buffer exceeded %d bytes — dropping utterance and resetting to IDLE",
+                    MAX_AUDIO_BUFFER_BYTES,
+                )
+                self._audio_buffer.clear()
+                self._audio_buffer_bytes = 0
+                self._state = PipelineState.IDLE
+                return
+            # Keep raw bytes, as web browser sends WebM/Opus chunks
+            self._audio_buffer.append(raw_bytes)
+            self._audio_buffer_bytes += len(raw_bytes)
 
     async def _process_utterance(self) -> None:
         print("DEBUG: _process_utterance called")
