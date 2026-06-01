@@ -10,6 +10,25 @@ from kernel.models import LLMConfig
 logger = logging.getLogger(__name__)
 
 
+def _openai_max_token_param(model: str) -> str:
+    """Return the token-limit kwarg name for an OpenAI model.
+
+    GPT-5 and o-series reasoning models reject ``max_tokens`` and require
+    ``max_completion_tokens``; older chat models still accept ``max_tokens``.
+
+    Args:
+        model: The OpenAI model identifier (e.g. ``"gpt-5.4-mini"``).
+
+    Returns:
+        ``"max_completion_tokens"`` for GPT-5/o-series, else ``"max_tokens"``.
+    """
+    return (
+        "max_completion_tokens"
+        if model.lower().startswith(("gpt-5", "o1", "o3", "o4"))
+        else "max_tokens"
+    )
+
+
 @dataclass
 class LLMRequest:
     """Request to the LLM router."""
@@ -187,7 +206,7 @@ class LLMRouter:
         kwargs: dict[str, Any] = {
             "model": self.config.cloud_model,
             "messages": messages,
-            "max_tokens": 4096,
+            _openai_max_token_param(self.config.cloud_model): 4096,
             "user": "local_desktop",
         }
 
