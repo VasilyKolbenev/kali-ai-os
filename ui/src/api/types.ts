@@ -8,8 +8,11 @@ export type WSMessage =
   | { type: "agent.status"; data: { agents: AgentStatus[] } }
   | { type: "agent.status.update"; data: { agent: string; status: string } }
   | { type: "dashboard.update"; data: { widget: string; data: unknown } }
+  | { type: "canvas.update"; data: { action: string; widget?: CanvasWidget; [key: string]: unknown } }
   | { type: "error"; data: { source: string; message: string; code?: string } }
-  | { type: "ui.command"; data: { command: string; args?: unknown } };
+  | { type: "ui.command"; data: { command: string; args?: unknown } }
+  | { type: "system.models.download_progress"; data: any }
+  | { type: "system.models.download_complete"; data?: any };
 
 export interface AgentStatus {
   name: string;
@@ -127,4 +130,14 @@ export interface SandboxHealth {
   enforcer_enabled: boolean;
   rate_limiter_enabled: boolean;
   audit_sink_enabled: boolean;
+}
+
+// --- Live Canvas ---
+export interface CanvasWidget {
+  id: string;
+  type: "stat_card" | "bar_chart" | "line_chart" | "progress" | "table" | "markdown";
+  title: string;
+  data: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }

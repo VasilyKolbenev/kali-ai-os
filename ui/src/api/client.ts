@@ -44,6 +44,15 @@ export const api = {
   voiceStart: () => fetchJSON<{ status: string }>("/voice/start", { method: "POST" }),
   voiceStop: () => fetchJSON<{ status: string }>("/voice/stop", { method: "POST" }),
 
+  // Models downloading (Onboarding)
+  modelsStatus: () => fetchJSON<{
+    ready: boolean;
+    missing_downloadable: string[];
+    missing_bundled: string[];
+    models_dir: string;
+  }>("/models/status"),
+  modelsDownload: () => fetchJSON<{ status: string; message: string }>("/models/download", { method: "POST" }),
+
   // Legacy Catalog / Store (kept for backward compat)
   skills: () => fetchJSON<any[]>("/skills"),
   catalogSearch: (q: string) =>
@@ -152,6 +161,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, args }),
     }),
+
+  // Live Canvas
+  canvasWidgets: () =>
+    fetchJSON<{ widgets: import("./types").CanvasWidget[]; count: number }>("/canvas/widgets"),
 
   // Skill execution
   executeSkill: (skillName: string, action: string, args: Record<string, unknown> = {}) =>

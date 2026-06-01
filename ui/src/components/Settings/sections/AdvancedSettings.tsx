@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
+import { rustApiUrl } from "../../../api/runtime";
 import { useOnboardingStore } from "../../../stores/onboardingStore";
 import { HexFrame, HudDivider } from "../../hud";
 
@@ -15,7 +16,7 @@ export function AdvancedSettings() {
   const onboardingReset = useOnboardingStore((s) => s.reset);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:3006/version")
+    fetch(rustApiUrl("/version"))
       .then((r) => r.json())
       .then(setVersion)
       .catch(() => setVersion(null));

@@ -3,6 +3,7 @@ import { create } from "zustand";
 export type OnboardingStep =
   | "welcome"
   | "api-key"
+  | "models-download"
   | "mic-test"
   | "first-agent"
   | "landing";
@@ -10,9 +11,17 @@ export type OnboardingStep =
 export type ApiProvider = "openai" | "anthropic" | "google" | "deepseek";
 export type MicPermission = "unknown" | "granted" | "denied";
 
+export interface ModelProgress {
+  filename: string;
+  description: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+}
+
 const STEP_ORDER: OnboardingStep[] = [
   "welcome",
   "api-key",
+  "models-download",
   "mic-test",
   "first-agent",
   "landing",
@@ -25,6 +34,7 @@ interface OnboardingState {
   apiKeyValid: boolean;
   micPermission: MicPermission;
   firstAgentSession: string | null;
+  modelProgress: Record<string, ModelProgress>;
 
   advance: () => void;
   back: () => void;
@@ -34,6 +44,7 @@ interface OnboardingState {
   setApiKeyValid: (valid: boolean) => void;
   setMicPermission: (p: MicPermission) => void;
   setFirstAgentSession: (sessionId: string | null) => void;
+  setModelProgress: (p: ModelProgress) => void;
 }
 
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
@@ -43,6 +54,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   apiKeyValid: false,
   micPermission: "unknown",
   firstAgentSession: null,
+  modelProgress: {},
 
   advance: () => {
     const { currentStep } = get();
@@ -67,9 +79,14 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       apiKeyValid: false,
       micPermission: "unknown",
       firstAgentSession: null,
+      modelProgress: {},
     }),
   setApiProvider: (p) => set({ apiProvider: p }),
   setApiKeyValid: (v) => set({ apiKeyValid: v }),
   setMicPermission: (p) => set({ micPermission: p }),
   setFirstAgentSession: (s) => set({ firstAgentSession: s }),
+  setModelProgress: (p) =>
+    set((state) => ({
+      modelProgress: { ...state.modelProgress, [p.filename]: p },
+    })),
 }));

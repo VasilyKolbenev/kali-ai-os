@@ -11,6 +11,20 @@ import { SpendingWidget } from "./widgets/SpendingWidget";
 import { EnergyWidget } from "./widgets/EnergyWidget";
 import { AgentsWidget } from "./widgets/AgentsWidget";
 import { WeatherWidget } from "./widgets/WeatherWidget";
+import { motion } from "framer-motion";
+
+const container = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.1 }
+  }
+};
+
+const item = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { type: "spring", bounce: 0.4 } }
+};
 
 export function Dashboard() {
   const updateWidget = useDashboardStore((s) => s.updateWidget);
@@ -94,50 +108,62 @@ export function Dashboard() {
           <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>Dashboard</h2>
           <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>В реальном времени</span>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 stagger">
-          <div
+        <motion.div 
+          className="grid grid-cols-2 lg:grid-cols-3 gap-4"
+          variants={container}
+          initial="hidden"
+          animate="show"
+        >
+          <motion.div
+            variants={item}
             onClick={() => openChat("покажи статистику сна")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <SleepWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => openChat("события сегодня")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <CalendarWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => openChat("покажи задачи")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <TasksWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => openChat("покажи расходы")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <SpendingWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => openChat("покажи калории за сегодня")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <EnergyWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => setMode("agents" as AppMode)}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <AgentsWidget />
-          </div>
-          <div
+          </motion.div>
+          <motion.div
+            variants={item}
             onClick={() => openChat("какая погода?")}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <WeatherWidget />
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       </div>
     </div>
   );

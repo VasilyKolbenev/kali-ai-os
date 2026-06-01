@@ -15,6 +15,7 @@ const SOUNDS = {
 };
 
 function playSound(category: keyof typeof SOUNDS) {
+  if (!Object.prototype.hasOwnProperty.call(SOUNDS, category)) return;
   const files = SOUNDS[category];
   const file = files[Math.floor(Math.random() * files.length)];
   const audio = new Audio(file);
@@ -237,23 +238,25 @@ export function ChatInput() {
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className="max-w-[80%] px-3 py-2 rounded-xl text-sm"
+                className="max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed"
                 style={{
                   background:
                     msg.role === "user"
-                      ? "color-mix(in srgb, var(--j-cyan) 10%, transparent)"
-                      : "var(--j-surface)",
+                      ? "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(10,10,15,0.8))"
+                      : "var(--j-gradient-primary)",
                   border: `1px solid ${
                     msg.role === "user"
-                      ? "color-mix(in srgb, var(--j-cyan) 20%, transparent)"
-                      : "var(--j-border)"
+                      ? "rgba(255,255,255,0.08)"
+                      : "transparent"
                   }`,
-                  color: "var(--j-text)",
+                  color: msg.role === "user" ? "var(--j-text)" : "#ffffff",
+                  boxShadow: msg.role === "assistant" ? "0 4px 20px rgba(168, 85, 247, 0.25)" : "0 4px 12px rgba(0,0,0,0.2)",
+                  backdropFilter: "blur(12px)",
                 }}
               >
                 {msg.text}
                 {msg.source && msg.role === "assistant" && (
-                  <span className="mono text-[9px] ml-2 opacity-40">
+                  <span className="mono text-[9px] ml-2 opacity-60 bg-black/20 px-1.5 py-0.5 rounded">
                     {msg.source}
                   </span>
                 )}
@@ -266,8 +269,8 @@ export function ChatInput() {
 
       {/* Input bar */}
       <div
-        className="glass flex items-center gap-2 px-3 py-2"
-        style={{ borderRadius: "14px" }}
+        className="glass flex items-center gap-3 px-4 py-3 relative z-10 mx-2"
+        style={{ borderRadius: "24px", backdropFilter: "blur(40px) saturate(2)", boxShadow: "0 20px 40px rgba(0,0,0,0.8)" }}
       >
         {/* Mic button */}
         <button

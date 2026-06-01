@@ -11,6 +11,8 @@
   --j-amber: #ffb800;
   --j-green: #00e676;
   --j-red: #ff3d57;
+  --j-purple: #A855F7;
+  --j-gradient-primary: linear-gradient(135deg, var(--j-cyan), var(--j-purple));
   --j-text: #e8eaed;
   --j-text-dim: rgba(255, 255, 255, 0.4);
   --j-text-muted: rgba(255, 255, 255, 0.2);

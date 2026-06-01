@@ -5,10 +5,10 @@ export function Sidebar() {
   const kernelConnected = useAppStore((s) => s.kernelConnected);
 
   return (
-    <aside className="w-[60px] h-screen flex flex-col items-center py-5 gap-3 relative z-10"
+    <aside className="w-[68px] h-[calc(100vh-32px)] my-4 ml-4 flex flex-col items-center py-5 gap-3 relative z-10 glass"
       style={{
-        background: "var(--j-surface)",
-        borderRight: "1px solid var(--j-border)",
+        borderRadius: "24px",
+        boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
       }}
     >
       {/* Connection indicator */}

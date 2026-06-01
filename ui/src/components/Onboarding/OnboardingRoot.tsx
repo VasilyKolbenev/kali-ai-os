@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useOnboardingStore } from "../../stores/onboardingStore";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { ApiKeyStep } from "./steps/ApiKeyStep";
+import { ModelsDownloadStep } from "./steps/ModelsDownloadStep";
 import { MicTestStep } from "./steps/MicTestStep";
 import { FirstAgentStep } from "./steps/FirstAgentStep";
 import { LandingStep } from "./steps/LandingStep";
@@ -29,6 +30,7 @@ export function OnboardingRoot() {
     >
       {step === "welcome" && <WelcomeStep />}
       {step === "api-key" && <ApiKeyStep />}
+      {step === "models-download" && <ModelsDownloadStep />}
       {step === "mic-test" && <MicTestStep />}
       {step === "first-agent" && <FirstAgentStep />}
       {step === "landing" && <LandingStep />}

@@ -49,11 +49,15 @@ export function MicTestStep() {
     }
   }, [state, transcript]);
 
+  // NOTE: OpenWakeWord's `hey_jarvis_v0.1` model is English-trained.
+  // Russian "Джарвис" scores ~0.02 vs ~0.33 for English "Hey Jarvis" —
+  // see memory/feedback_wake_word_russian.md for the 2026-05-18 root cause.
+  // Custom Russian model is a separate v4 work item.
   const headline =
     state === "requesting"
       ? "Разрешаю доступ к микрофону..."
       : state === "listening"
-        ? "Скажи: «Джарвис, привет»"
+        ? "Скажи: «Hey Jarvis»"
         : state === "heard"
           ? "Слышу тебя отлично."
           : "Микрофон не разрешён.";

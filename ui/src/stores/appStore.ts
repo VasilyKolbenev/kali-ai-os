@@ -8,6 +8,7 @@ export type AppMode =
   | "store"
   | "activity"
   | "builder"
+  | "canvas"
   | "settings"
   | "showcase";
 

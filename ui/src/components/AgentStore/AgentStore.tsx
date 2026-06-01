@@ -7,6 +7,8 @@ import { api } from "../../api/client";
 import type {
   CatalogSkill, CatalogSource, InstalledSkill,
 } from "../../api/types";
+import { useAppStore } from "../../stores/appStore";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface PublishDialogState {
   skillName: string;
@@ -21,17 +23,17 @@ interface PublishDialogState {
 type TabId = "installed" | string; // source_id or "installed"
 type ToastType = "success" | "error" | "info";
 
-const TRUST_COLORS: Record<string, string> = {
-  official: "var(--j-green)",
-  verified: "var(--j-cyan)",
-  community: "var(--j-amber, #f59e0b)",
-};
+const TRUST_COLORS = new Map<string, string>([
+  ["official", "var(--j-green)"],
+  ["verified", "var(--j-cyan)"],
+  ["community", "var(--j-amber, #f59e0b)"],
+]);
 
-const TRUST_LABELS: Record<string, string> = {
-  official: "Official",
-  verified: "Verified",
-  community: "Community",
-};
+const TRUST_LABELS = new Map<string, string>([
+  ["official", "Official"],
+  ["verified", "Verified"],
+  ["community", "Community"],
+]);
 
 export function AgentStore() {
   const [activeTab, setActiveTab] = useState<TabId>("installed");
@@ -224,6 +226,14 @@ export function AgentStore() {
             {installed.length} installed
           </span>
           <button
+            onClick={() => useAppStore.getState().setMode("builder")}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--j-cyan)]/20 text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30 transition flex items-center gap-1.5 border border-[var(--j-cyan)]/30"
+            title="Create your own skill using Voice Builder"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Создать свой навык
+          </button>
+          <button
             onClick={handleRefreshCatalog}
             disabled={refreshing}
             className="text-white/40 hover:text-white/80 transition disabled:opacity-50"
@@ -234,66 +244,86 @@ export function AgentStore() {
         </div>
 
         {/* Search bar */}
-        <div className="glass p-3 mb-4 flex gap-2 items-center">
-          <Search className="w-4 h-4 text-white/40 shrink-0" />
+        <div className="glass p-4 mb-8 flex gap-3 items-center rounded-2xl relative overflow-hidden group">
+          <div className="absolute inset-0 bg-gradient-to-r from-[var(--j-cyan-glow)] to-transparent opacity-0 group-focus-within:opacity-10 transition-opacity duration-500" />
+          <Search className="w-5 h-5 text-white/40 shrink-0 group-focus-within:text-[var(--j-cyan)] transition-colors" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => handleQueryChange(e.target.value)}
             placeholder="Поиск: weather, notion, telegram…"
-            className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/20"
+            className="flex-1 bg-transparent outline-none text-base placeholder:text-white/20"
           />
           {searchQuery && (
             <button
               onClick={() => handleQueryChange("")}
-              className="text-white/30 hover:text-white/60"
+              className="text-white/30 hover:text-white/60 p-1"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           )}
-          {loading && <Loader2 className="w-4 h-4 text-[var(--j-cyan)] animate-spin" />}
+          {loading && <Loader2 className="w-5 h-5 text-[var(--j-cyan)] animate-spin" />}
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 mb-6 border-b border-white/5">
+        {/* Premium Pill Tabs */}
+        <div className="flex gap-2 mb-6 bg-white/5 p-1.5 rounded-2xl w-fit border border-white/10 shadow-inner">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-2 text-xs tracking-wider uppercase transition relative
+              className={`px-4 py-2 text-xs tracking-wider uppercase font-medium transition-all duration-300 relative rounded-xl
                 ${activeTab === tab.id
-                  ? "text-[var(--j-cyan)]"
-                  : "text-white/40 hover:text-white/60"
+                  ? "text-white"
+                  : "text-white/40 hover:text-white/80 hover:bg-white/5"
                 }`}
             >
-              {tab.label}
-              {tab.count !== undefined && (
-                <span className="ml-1.5 text-white/30">({tab.count})</span>
-              )}
+              <span className="relative z-10 flex items-center gap-1.5">
+                {tab.label}
+                {tab.count !== undefined && (
+                  <span className={`px-1.5 py-0.5 rounded-md text-[10px] ${activeTab === tab.id ? 'bg-white/20' : 'bg-black/30'}`}>
+                    {tab.count}
+                  </span>
+                )}
+              </span>
               {activeTab === tab.id && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--j-cyan)]" />
+                <motion.div
+                  layoutId="activeStoreTab"
+                  className="absolute inset-0 bg-gradient-to-r from-[var(--j-cyan)] to-[var(--j-purple)] rounded-xl opacity-80"
+                  initial={false}
+                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                />
               )}
             </button>
           ))}
         </div>
 
-        {/* Content */}
-        {activeTab === "installed" ? (
-          <InstalledList
-            skills={filteredInstalled}
-            onUninstall={handleUninstall}
-            onPublish={handlePublish}
-          />
-        ) : (
-          <CatalogList
-            skills={catalogSkills}
-            installedNames={installedNames}
-            installingName={installingName}
-            onInstall={handleInstall}
-            loading={loading}
-            activeSource={sources.find((s) => s.id === activeTab)}
-          />
-        )}
+        {/* Content with Animation */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.3 }}
+          >
+            {activeTab === "installed" ? (
+              <InstalledList
+                skills={filteredInstalled}
+                onUninstall={handleUninstall}
+                onPublish={handlePublish}
+              />
+            ) : (
+              <CatalogList
+                skills={catalogSkills}
+                installedNames={installedNames}
+                installingName={installingName}
+                onInstall={handleInstall}
+                loading={loading}
+                activeSource={sources.find((s) => s.id === activeTab)}
+              />
+            )}
+          </motion.div>
+        </AnimatePresence>
 
         {/* Publish dialog */}
         {publishState && (
@@ -341,26 +371,27 @@ function InstalledList({
   return (
     <div className="grid gap-2 stagger">
       {skills.map((skill) => (
-        <div key={skill.name} className="glass p-4 flex items-center gap-3">
-          <Sparkles className="w-4 h-4 text-[var(--j-green)] shrink-0" />
+        <div key={skill.name} className="glass glass-interactive p-5 flex items-center gap-4 relative overflow-hidden group">
+          <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-8 rounded-r-full bg-[var(--j-green)] opacity-50 group-hover:opacity-100 transition-opacity" />
+          <Sparkles className="w-5 h-5 text-[var(--j-green)] shrink-0 drop-shadow-[0_0_8px_var(--j-green)]" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium truncate">{skill.name}</span>
+              <span className="text-base font-medium truncate">{skill.name}</span>
               <SourceBadge source={skill.source} />
             </div>
-            <div className="text-xs text-white/40 truncate mt-0.5">
+            <div className="text-sm text-white/50 truncate mt-1">
               {skill.description}
             </div>
             {skill.compatibility && (
-              <div className="text-[10px] text-white/30 mt-1 flex items-center gap-1">
-                <Shield className="w-3 h-3" />
+              <div className="text-[11px] text-white/40 mt-1.5 flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-white/30" />
                 {skill.compatibility}
               </div>
             )}
           </div>
           <button
             onClick={() => onPublish(skill)}
-            className="text-white/30 hover:text-[var(--j-cyan)] transition p-1"
+            className="text-white/30 hover:text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/10 transition p-2 rounded-lg"
             title="Publish to KALI catalog"
           >
             <Upload className="w-4 h-4" />
@@ -368,14 +399,14 @@ function InstalledList({
           {skill.source !== "builtin" && (
             <button
               onClick={() => onUninstall(skill)}
-              className="text-white/30 hover:text-red-400 transition p-1"
+              className="text-white/30 hover:text-red-400 hover:bg-red-400/10 transition p-2 rounded-lg"
               title="Uninstall"
             >
               <Trash2 className="w-4 h-4" />
             </button>
           )}
           <span
-            className="text-xs px-2 py-0.5 rounded bg-[var(--j-green)]/10 text-[var(--j-green)] shrink-0"
+            className="text-xs px-2.5 py-1 rounded bg-[var(--j-green)]/10 text-[var(--j-green)] shrink-0 border border-[var(--j-green)]/20"
           >
             Active
           </span>
@@ -436,49 +467,51 @@ function CatalogList({
         const installed = installedNames.has(skill.name);
         const isInstalling = installingName === skill.name;
         return (
-          <div key={`${skill.source_id}/${skill.name}`} className="glass p-4 flex items-center gap-3">
+          <div key={`${skill.source_id}/${skill.name}`} className="glass glass-interactive p-5 flex items-center gap-4">
             <TrustBadge trust={skill.trust} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">{skill.name}</span>
+                <span className="text-base font-medium truncate">{skill.name}</span>
+                <span className="text-xs text-white/20">@{skill.repo_owner}</span>
                 <a
                   href={skill.web_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-white/30 hover:text-white/60 shrink-0"
+                  className="text-white/30 hover:text-white/60 shrink-0 ml-1"
                   title="View on GitHub"
                 >
-                  <ExternalLink className="w-3 h-3" />
+                  <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </div>
-              <div className="text-xs text-white/40 truncate mt-0.5">
+              <div className="text-sm text-white/50 truncate mt-1">
                 {skill.description}
               </div>
               {(skill.license || skill.compatibility) && (
-                <div className="text-[10px] text-white/30 mt-1 flex gap-3">
-                  {skill.license && <span>license: {skill.license}</span>}
+                <div className="text-[11px] text-white/40 mt-1.5 flex gap-4">
+                  {skill.license && <span className="flex items-center gap-1"><Shield className="w-3 h-3 opacity-50"/> {skill.license}</span>}
                   {skill.compatibility && <span>compat: {skill.compatibility}</span>}
                 </div>
               )}
             </div>
             {installed ? (
-              <span className="px-3 py-1 text-xs rounded bg-[var(--j-green)]/10 text-[var(--j-green)] flex items-center gap-1 shrink-0">
-                <Check className="w-3 h-3" />
+              <span className="px-3 py-1.5 text-xs rounded-md bg-[var(--j-green)]/10 text-[var(--j-green)] flex items-center gap-1.5 shrink-0 border border-[var(--j-green)]/20 shadow-[0_0_10px_var(--j-green)]/10">
+                <Check className="w-3.5 h-3.5" />
                 Installed
               </span>
             ) : (
               <button
                 disabled={isInstalling}
                 onClick={() => onInstall(skill)}
-                className="px-3 py-1 text-xs rounded bg-[var(--j-cyan)]/20
-                  text-[var(--j-cyan)] hover:bg-[var(--j-cyan)]/30
-                  transition flex items-center gap-1 shrink-0
-                  disabled:opacity-50 disabled:cursor-wait"
+                className="px-4 py-1.5 text-xs font-medium rounded-md bg-gradient-to-r from-[var(--j-cyan)]/20 to-[var(--j-cyan)]/10
+                  text-[var(--j-cyan)] hover:from-[var(--j-cyan)]/30 hover:to-[var(--j-cyan)]/20
+                  transition flex items-center gap-1.5 shrink-0 border border-[var(--j-cyan)]/30
+                  disabled:opacity-50 disabled:cursor-wait
+                  shadow-[0_0_15px_rgba(0,212,255,0.15)] hover:shadow-[0_0_20px_rgba(0,212,255,0.25)]"
               >
                 {isInstalling ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Download className="w-3 h-3" />
+                  <Download className="w-3.5 h-3.5" />
                 )}
                 {isInstalling ? "Installing…" : "Install"}
               </button>
@@ -493,13 +526,20 @@ function CatalogList({
 // -----------------------------------------------------------------------------
 
 function TrustBadge({ trust }: { trust: string }) {
-  const color = TRUST_COLORS[trust] ?? "var(--j-text-muted)";
+  const color = TRUST_COLORS.get(trust) ?? "var(--j-text-muted)";
   return (
     <span
-      className="text-[10px] tracking-widest uppercase px-1.5 py-0.5 rounded shrink-0"
-      style={{ color, backgroundColor: color + "15", borderColor: color + "30", borderWidth: 1 }}
+      className="text-[10px] tracking-widest uppercase px-2 py-1 rounded-md shrink-0 flex items-center gap-1"
+      style={{
+        color,
+        backgroundColor: color + "15",
+        borderColor: color + "40",
+        borderWidth: 1,
+        boxShadow: `0 0 10px ${color}20`
+      }}
     >
-      {TRUST_LABELS[trust] ?? trust}
+      {trust === "official" && <div className="w-1.5 h-1.5 rounded-full bg-current shadow-[0_0_5px_currentColor]" />}
+      {TRUST_LABELS.get(trust) ?? trust}
     </span>
   );
 }

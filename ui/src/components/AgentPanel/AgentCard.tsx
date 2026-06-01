@@ -62,31 +62,32 @@ export function AgentCard({ agent }: Props) {
         : "var(--j-text-muted)";
 
   return (
-    <div className="glass p-4 flex flex-col gap-2">
+    <div className="glass glass-interactive p-5 flex flex-col gap-3 relative overflow-hidden group">
       <div className="flex items-center gap-4">
-        <div className="w-2 h-2 rounded-full flex-shrink-0"
+        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 transition-all duration-500"
           style={{
             background: isRunning ? "var(--j-green)" : "var(--j-surface-soft)",
-            boxShadow: isRunning ? "0 0 8px var(--j-success-glow)" : "none",
+            boxShadow: isRunning ? "0 0 12px var(--j-green), 0 0 24px rgba(0,255,128,0.4)" : "none",
           }}
         />
         <div className="flex-1 min-w-0">
-          <div className="mono text-sm font-medium" style={{ color: "var(--j-text)" }}>{agent.name}</div>
+          <div className="text-base font-medium truncate" style={{ color: "var(--j-text)" }}>{agent.name}</div>
           {agent.description && (
-            <div className="text-xs truncate mt-0.5" style={{ color: "var(--j-text-muted)" }}>{agent.description}</div>
+            <div className="text-sm truncate mt-1" style={{ color: "var(--j-text-muted)" }}>{agent.description}</div>
           )}
           {hint && (
-            <div className="text-[10px] mt-1 italic" style={{ color: "var(--j-cyan-dim)" }}>{hint}</div>
+            <div className="text-xs mt-1.5 italic" style={{ color: "var(--j-cyan-dim)" }}>{hint}</div>
           )}
         </div>
         <button
           onClick={toggle}
           disabled={feedback.kind === "loading"}
-          className="mono text-[10px] tracking-wider uppercase px-3 py-1.5 rounded-lg transition-all duration-300 disabled:opacity-50"
+          className="text-[11px] font-medium tracking-wider uppercase px-4 py-2 rounded-md transition-all duration-300 disabled:opacity-50"
           style={{
             background: isRunning ? "var(--j-danger-wash)" : "var(--j-success-wash)",
             color: isRunning ? "var(--j-red)" : "var(--j-green)",
             border: `1px solid ${isRunning ? "var(--j-danger-soft)" : "var(--j-success-soft)"}`,
+            boxShadow: isRunning ? "0 0 10px rgba(255,50,50,0.15)" : "0 0 10px rgba(0,255,128,0.15)",
           }}
         >
           {feedback.kind === "loading" ? "..." : isRunning ? "Stop" : "Start"}
