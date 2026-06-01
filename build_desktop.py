@@ -37,7 +37,7 @@ def build_kernel() -> bool:
     print("\n=== Building Kernel .exe ===")
 
     # Install PyInstaller if needed
-    run("uv pip install pyinstaller")
+    run(f"{sys.executable} -m pip install pyinstaller")
 
     # Create PyInstaller spec
     spec = """
@@ -51,6 +51,7 @@ a = Analysis(
     datas=[
         ('config/kali.yaml', 'config'),
         ('agents', 'agents'),
+        ('models', 'models'),
     ],
     hiddenimports=[
         'kernel.main',
@@ -95,16 +96,32 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, a.binaries, a.datas,
-    name='kali-kernel',
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='kali-backend',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
     console=True,
     icon=None,
 )
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='kali-backend',
+)
 """
-    spec_path = ROOT / "kali-kernel.spec"
+    spec_path = ROOT / "kali-backend.spec"
     spec_path.write_text(spec)
 
-    return run("uv run pyinstaller kali-kernel.spec --clean --noconfirm")
+    return run(f"{sys.executable} -m PyInstaller kali-backend.spec --clean --noconfirm")
 
 
 def build_tauri() -> bool:
@@ -117,6 +134,12 @@ def build_tauri() -> bool:
         print("[SKIP] Rust toolchain not found. Install from https://rustup.rs")
         print("[SKIP] Tauri build skipped. Use start.bat for now.")
         return False
+
+    # Setup dummy environment variables for Tauri updater signing if not present
+    if "TAURI_PRIVATE_KEY" not in os.environ:
+        print("[INFO] Setting dummy TAURI_PRIVATE_KEY for updater code signing...")
+        os.environ["TAURI_PRIVATE_KEY"] = "dummy_private_key_base64"
+        os.environ["TAURI_KEY_PASSWORD"] = "dummy_password"
 
     return run("cargo tauri build", cwd=ROOT / "src-tauri")
 
@@ -138,9 +161,9 @@ def main() -> None:
         build_tauri()  # Optional, doesn't fail the build
 
     print("\n=== Build Complete ===")
-    print("Kernel: dist/kali-kernel.exe (if built)")
+    print("Kernel: dist/kali-backend.exe (if built)")
     print("UI:     ui/dist/ (static files)")
-    print("\nTo run: start.bat or kali-kernel.exe + serve ui/dist/")
+    print("\nTo run: start.bat or kali-backend.exe + serve ui/dist/")
 
 
 if __name__ == "__main__":

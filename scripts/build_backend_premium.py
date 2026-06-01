@@ -114,6 +114,22 @@ COLLECT_DATA = [
     "faster_whisper",
 ]
 
+# Packages that need EVERYTHING — Python source + data + binaries. Required
+# when the package uses lazy imports (`_LazyModule`) that PyInstaller's
+# static analyzer can't detect at build time.
+#
+# - transformers: f5_tts.infer.utils_infer does `from transformers import
+#   pipeline` at module level; transformers/__init__.py lazy-loads submodules
+#   via _LazyModule which PyInstaller misses. Without --collect-all the v2
+#   build crashed with ModuleNotFoundError on every F5 load attempt
+#   (root cause caught 2026-05-18 during max-confidence debug session).
+# - torch: heavy stack with submodules pulled lazily by transformers/f5_tts.
+#   Belt-and-suspenders even though `torch` is in HIDDEN.
+COLLECT_ALL = [
+    "transformers",
+    "torch",
+]
+
 
 def main() -> None:
     cmd = [
@@ -134,6 +150,8 @@ def main() -> None:
         cmd.extend(["--hidden-import", imp])
     for pkg in COLLECT_DATA:
         cmd.extend(["--collect-data", pkg])
+    for pkg in COLLECT_ALL:
+        cmd.extend(["--collect-all", pkg])
 
     cmd.append(str(ENTRY))
 

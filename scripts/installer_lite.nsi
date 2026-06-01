@@ -5,7 +5,7 @@
 !include "MUI2.nsh"
 
 Name "KALI (Lite)"
-OutFile "..\dist_lite\KALI-Lite-Setup-0.1.0.exe"
+OutFile "..\dist_lite\KALI-Lite-Setup-0.2.0-beta.exe"
 InstallDir "$PROGRAMFILES64\KALI"
 RequestExecutionLevel admin
 
@@ -79,7 +79,7 @@ Section "Install"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KALI" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KALI" "DisplayIcon" "$INSTDIR\kali-desktop.exe"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KALI" "Publisher" "KALI Team"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KALI" "DisplayVersion" "0.1.0-lite"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KALI" "DisplayVersion" "0.2.0-beta-lite"
 SectionEnd
 
 Section "Uninstall"

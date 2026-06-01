@@ -13,6 +13,7 @@ dependencies = [
     "watchfiles>=1.0.0",
     "python-dotenv>=1.0.1",
     "sounddevice>=0.5.1",
+    "psutil>=6.0.0",
     "numpy>=2.0.0",
     "faster-whisper>=1.1.0",
     "anthropic>=0.40.0",
