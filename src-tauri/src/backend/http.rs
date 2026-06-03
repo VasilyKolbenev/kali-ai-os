@@ -551,6 +551,47 @@ fn encode_path_segment(value: &str) -> String {
     out
 }
 
+// ── /dashboard + /agents/* + /chat (proxy to Python) ──────────────
+//
+// These endpoints still live in Python (`kernel.*`); the Rust
+// orchestration migration (Phases 4-8) has not reached them yet.
+// Proxy them so clients hit Rust on `:3006` consistently — a phone on
+// the LAN reaches only the Rust port, and the 127.0.0.1-bound Python
+// backend is not directly reachable. Phase 8 retires these proxies as
+// the routes go native.
+
+pub async fn dashboard() -> Response {
+    proxy_get("/dashboard").await
+}
+
+pub async fn agents_list() -> Response {
+    proxy_get("/agents").await
+}
+
+pub async fn agents_running() -> Response {
+    proxy_get("/agents/running").await
+}
+
+pub async fn agent_load(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    proxy_post_with_body(
+        &format!("/agents/{}/load", encode_path_segment(&name)),
+        &json!({}),
+    )
+    .await
+}
+
+pub async fn agent_unload(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    proxy_post_with_body(
+        &format!("/agents/{}/unload", encode_path_segment(&name)),
+        &json!({}),
+    )
+    .await
+}
+
+pub async fn chat(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response {
+    proxy_post_with_body("/chat", &body).await
+}
+
 /// Full constructor — every backend handle in one call. Tests + serve()
 /// converge on this; the older constructors below are thin wrappers
 /// that pass `None` for the handles they don't care about.
@@ -579,6 +620,12 @@ pub fn router_full(
         .route("/catalog/pack/:name", post(catalog_pack))
         .route("/catalog/install", post(catalog_install))
         .route("/catalog/info", get(catalog_info))
+        .route("/dashboard", get(dashboard))
+        .route("/agents", get(agents_list))
+        .route("/agents/running", get(agents_running))
+        .route("/agents/:name/load", post(agent_load))
+        .route("/agents/:name/unload", post(agent_unload))
+        .route("/chat", post(chat))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",
