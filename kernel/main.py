@@ -1176,6 +1176,21 @@ def create_app(
 
         s = request.app.state
         
+        # Personal memory: prime the system prompt with known user facts so
+        # the assistant "remembers" the user across sessions. Mirrors the
+        # voice path (remote_pipeline) so chat, voice, and the Rust cutover
+        # share one memory. Guarded — degrades to no-facts if unavailable.
+        lt_memory = getattr(s, "long_term_memory", None)
+        system_prompt = None
+        if lt_memory:
+            try:
+                facts_context = await lt_memory.get_user_context_string()
+            except Exception:
+                facts_context = ""
+            if facts_context:
+                from kernel.jarvis_persona import get_prompt
+                system_prompt = get_prompt() + "\n\n" + facts_context
+
         # 1. Fetch available tools from registry
         available_tools = s.plugin_registry.get_all_tools()
         
@@ -1186,9 +1201,18 @@ def create_app(
         req = LLMRequest(
             text=text,
             context=s.memory.get_context(),
-            available_tools=available_tools
+            available_tools=available_tools,
+            system_prompt=system_prompt,
         )
         response = await router.route(req)
+
+        # Personal memory: extract any new permanent facts from this turn
+        # (fire-and-forget; never blocks the reply).
+        if lt_memory:
+            try:
+                await lt_memory.maybe_extract_and_save_facts(text)
+            except Exception as e:
+                logger.warning("Background memory extraction failed: %s", e)
         
         # 4. Handle tool calls
         if response.tool_calls:
