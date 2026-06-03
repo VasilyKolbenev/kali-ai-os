@@ -66,7 +66,7 @@ class _AgentStoreScreenState extends ConsumerState<AgentStoreScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(t.agentStoreTitle, style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 20)),
+          title: Text(t.agentStoreTitle.toUpperCase(), style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 16, letterSpacing: 3)),
           backgroundColor: Colors.transparent,
           elevation: 0,
           centerTitle: true,
@@ -185,14 +185,15 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
-            color: AppTheme.cardColor,
+            color: AppTheme.glassSurface,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: agent.enabled ? AppTheme.primary.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.05)),
+            border: Border.all(color: agent.enabled ? AppTheme.primary.withValues(alpha: 0.3) : AppTheme.glassBorder),
             boxShadow: agent.enabled ? [
               BoxShadow(
                 color: AppTheme.primary.withValues(alpha: 0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+                blurRadius: 24,
+                spreadRadius: -6,
+                offset: const Offset(0, 6),
               )
             ] : null,
           ),
@@ -337,9 +338,9 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
-            color: AppTheme.cardColor,
+            color: AppTheme.glassSurface,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+            border: Border.all(color: AppTheme.glassBorder),
           ),
           child: Padding(
             padding: const EdgeInsets.all(20.0),
@@ -361,8 +362,8 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
                     ),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.accent.withValues(alpha: 0.2),
-                        foregroundColor: AppTheme.accent,
+                        backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
+                        foregroundColor: AppTheme.primary,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         elevation: 0,

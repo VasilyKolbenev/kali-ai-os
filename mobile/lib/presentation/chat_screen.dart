@@ -104,7 +104,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: Text(t.chatTitle, style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 20)),
+        title: Text(t.chatTitle.toUpperCase(), style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 16, letterSpacing: 3)),
         backgroundColor: Colors.transparent,
         centerTitle: true,
       ),
@@ -115,13 +115,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             top: 50,
             left: -50,
             child: Container(
-              width: 250,
-              height: 250,
+              width: 300,
+              height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
                   colors: [
-                    AppTheme.primary.withValues(alpha: 0.1),
+                    AppTheme.primary.withValues(alpha: 0.14),
                     Colors.transparent,
                   ],
                 ),
@@ -158,9 +158,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             margin: const EdgeInsets.only(bottom: 12),
                             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
                             decoration: BoxDecoration(
-                              gradient: msg.isUser 
-                                  ? const LinearGradient(colors: [Color(0xFF0F172A), Color(0xFF1E293B)])
-                                  : AppTheme.primaryGradient,
+                              color: msg.isUser
+                                  ? AppTheme.glassSurface
+                                  : AppTheme.primary.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.only(
                                 topLeft: const Radius.circular(20),
                                 topRight: const Radius.circular(20),
@@ -168,15 +168,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 bottomRight: Radius.circular(msg.isUser ? 4 : 20),
                               ),
                               border: Border.all(
-                                color: msg.isUser ? Colors.white.withValues(alpha: 0.1) : Colors.transparent,
+                                color: msg.isUser
+                                    ? AppTheme.glassBorder
+                                    : AppTheme.primary.withValues(alpha: 0.3),
                                 width: 1,
                               ),
                               boxShadow: [
                                 if (!msg.isUser)
                                   BoxShadow(
-                                    color: AppTheme.primary.withValues(alpha: 0.2),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
+                                    color: AppTheme.primary.withValues(alpha: 0.12),
+                                    blurRadius: 18,
+                                    spreadRadius: -4,
+                                    offset: const Offset(0, 6),
                                   )
                               ],
                             ),
@@ -217,10 +220,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
-                    padding: const EdgeInsets.all(16).copyWith(bottom: 16 + MediaQuery.of(context).padding.bottom),
+                    padding: const EdgeInsets.all(16).copyWith(bottom: 96 + MediaQuery.of(context).padding.bottom),
                     decoration: BoxDecoration(
                       color: AppTheme.background.withValues(alpha: 0.7),
-                      border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
+                      border: Border(top: BorderSide(color: AppTheme.glassBorder)),
                     ),
                     child: Row(
                       children: [
@@ -231,7 +234,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               hintText: t.chatInputHint,
                               hintStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white38),
                               filled: true,
-                              fillColor: AppTheme.cardColor,
+                              fillColor: AppTheme.glassSurface,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(24),
                                 borderSide: BorderSide.none,

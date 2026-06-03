@@ -135,7 +135,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Text(
             title.toUpperCase(),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: AppTheme.primary,
+              color: AppTheme.textDim,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.5,
             ),
@@ -156,9 +156,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       padding: const EdgeInsets.only(bottom: 16.0),
       child: Container(
         decoration: BoxDecoration(
-          color: AppTheme.cardColor,
+          color: AppTheme.glassSurface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+          border: Border.all(color: AppTheme.glassBorder),
         ),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
@@ -170,9 +170,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.3),
+                  color: Colors.black.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                  border: Border.all(color: AppTheme.glassBorder),
                 ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
@@ -206,7 +206,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: Text(t.settingsTitle, style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 20)),
+        title: Text(t.settingsTitle.toUpperCase(), style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 16, letterSpacing: 3)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,

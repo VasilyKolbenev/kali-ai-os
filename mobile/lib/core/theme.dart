@@ -3,12 +3,17 @@ import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
   // Colors
-  static const Color background = Color(0xFF0F0F13); // Deep dark background
-  static const Color cardColor = Color(0x801A1A24); // Semi-transparent card
-  static const Color primary = Color(0xFF00D4FF); // Cyan accent
-  static const Color accent = Color(0xFFB400FF); // Purple accent
+  static const Color background = Color(0xFF08080B); // Refined Futurism: deeper near-black
+  static const Color cardColor = Color(0x801A1A24); // Semi-transparent card (legacy)
+  static const Color primary = Color(0xFF00D4FF); // Cyan accent (the one dominant accent)
+  static const Color accent = Color(0xFFB400FF); // Purple — rare secondary micro-accent
   static const Color textPrimary = Colors.white;
   static const Color textSecondary = Color(0xFFA0A0AB);
+
+  // Refined Futurism tokens (2026-06): frosted glass + hairline borders + dim text
+  static const Color glassSurface = Color(0x0DFFFFFF); // white ~5% frosted fill
+  static const Color glassBorder = Color(0x14FFFFFF); // white ~8% hairline
+  static const Color textDim = Color(0x66FFFFFF); // white 40% — micro-labels
 
   // Gradients
   static const LinearGradient primaryGradient = LinearGradient(

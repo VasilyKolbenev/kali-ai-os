@@ -50,14 +50,14 @@ class _MainScreenState extends ConsumerState<MainScreen> {
                 child: Container(
                   height: 70,
                   decoration: BoxDecoration(
-                    color: AppTheme.cardColor,
+                    color: AppTheme.glassSurface,
                     borderRadius: BorderRadius.circular(30),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    border: Border.all(color: AppTheme.glassBorder),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                        color: Colors.black.withValues(alpha: 0.25),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
                       )
                     ],
                   ),

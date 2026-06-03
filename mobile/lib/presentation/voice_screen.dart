@@ -72,8 +72,8 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
     switch (_voiceState) {
       case 'listening': return AppTheme.primary;
       case 'thinking': return AppTheme.accent;
-      case 'speaking': return const Color(0xFF22C55E);
-      default: return Colors.white38;
+      case 'speaking': return const Color(0xFF2DD4BF);
+      default: return AppTheme.primary;
     }
   }
 
@@ -103,7 +103,7 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   colors: [
-                    stateColor.withValues(alpha: isIdle ? 0.05 : 0.25),
+                    stateColor.withValues(alpha: isIdle ? 0.09 : 0.28),
                     Colors.transparent,
                   ],
                   radius: isIdle ? 1.0 : 1.5,
@@ -179,7 +179,7 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
                                   ),
                               ],
                               border: Border.all(
-                                color: isIdle ? Colors.white24 : stateColor.withValues(alpha: 0.8), 
+                                color: isIdle ? AppTheme.primary.withValues(alpha: 0.25) : stateColor.withValues(alpha: 0.8),
                                 width: isIdle ? 1 : 2
                               ),
                             ),
@@ -229,9 +229,9 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
                     margin: const EdgeInsets.symmetric(horizontal: 40),
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: BoxDecoration(
-                      color: AppTheme.cardColor,
+                      color: AppTheme.glassSurface,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                      border: Border.all(color: AppTheme.glassBorder),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,

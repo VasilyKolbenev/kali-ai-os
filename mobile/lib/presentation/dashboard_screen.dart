@@ -61,24 +61,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-          // Ambient background glow
+          // Ambient background glow — single soft cyan (Refined Futurism)
           Positioned(
-            top: -100,
-            right: -50,
+            top: -150,
+            right: -90,
             child: Container(
-              width: 300,
-              height: 300,
+              width: 440,
+              height: 440,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
                   colors: [
-                    AppTheme.accent.withValues(alpha: 0.15),
+                    AppTheme.primary.withValues(alpha: 0.16),
                     Colors.transparent,
                   ],
                 ),
               ),
             ),
-          ).animate().fadeIn(duration: 1000.ms).scale(duration: 1000.ms),
+          ).animate().fadeIn(duration: 1200.ms).scale(duration: 1200.ms),
           
           SafeArea(
             child: ListView(
@@ -92,10 +92,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _getGreeting(t),
+                          _getGreeting(t).toUpperCase(),
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            fontSize: 16,
-                            letterSpacing: 1.1,
+                            fontSize: 13,
+                            letterSpacing: 2.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textSecondary,
                           ),
                         ),
                         Text(
@@ -131,14 +133,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 // Proactive Insight (Smart Timeline)
                 Container(
                   decoration: BoxDecoration(
-                    gradient: AppTheme.subtleGradient,
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3), width: 1.5),
+                    color: AppTheme.glassSurface,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.22)),
                     boxShadow: [
                       BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.1),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                        color: AppTheme.primary.withValues(alpha: 0.12),
+                        blurRadius: 34,
+                        spreadRadius: -8,
+                        offset: const Offset(0, 8),
                       )
                     ],
                   ),
@@ -187,9 +190,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   decoration: BoxDecoration(
-                    color: AppTheme.cardColor,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                    color: AppTheme.glassSurface,
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(color: AppTheme.glassBorder),
                   ),
                   child: Row(
                     children: [
@@ -246,8 +249,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
                 // Widgets Grid
                 Text(
-                  t.lifeGlance,
-                  style: Theme.of(context).textTheme.displayMedium?.copyWith(fontSize: 22),
+                  t.lifeGlance.toUpperCase(),
+                  style: Theme.of(context).textTheme.displayMedium?.copyWith(
+                    fontSize: 15,
+                    letterSpacing: 2,
+                    color: AppTheme.textDim,
+                  ),
                 ).animate().fadeIn(delay: 500.ms),
                 const SizedBox(height: 20),
                 Row(
@@ -311,16 +318,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppTheme.cardColor,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
+        color: AppTheme.glassSurface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppTheme.glassBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -330,16 +330,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
+                  color: AppTheme.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: color, size: 20),
+                child: Icon(icon, color: AppTheme.primary, size: 20),
               ),
               const SizedBox(width: 12),
               Text(
-                title, 
+                title.toUpperCase(),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                  letterSpacing: 1.5,
+                  color: AppTheme.textDim,
                 ),
               ),
             ],
@@ -356,6 +359,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             subtitle,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               fontSize: 13,
+              color: AppTheme.textDim,
             ),
           ),
         ],

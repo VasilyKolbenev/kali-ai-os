@@ -104,7 +104,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                   errorText: _error,
                   border: const OutlineInputBorder(),
                   filled: true,
-                  fillColor: const Color(0xFF16161B),
+                  fillColor: AppTheme.glassSurface,
                   prefixIcon: const Icon(Icons.computer, color: AppTheme.textSecondary),
                 ),
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -135,9 +135,9 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: AppTheme.cardColor,
+                  color: AppTheme.glassSurface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.15)),
+                  border: Border.all(color: AppTheme.glassBorder),
                 ),
                 child: Row(
                   children: [
