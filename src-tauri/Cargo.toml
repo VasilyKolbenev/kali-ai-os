@@ -37,6 +37,11 @@ ndarray = "0.17"
 # input). Plan called for 0.16 but latest stable on 2026-04-28 is 0.17;
 # minor bump, no API breakage in our usage.
 cpal = "0.17"
+# rubato — pure-Rust sample-rate conversion. recorder.rs resamples the
+# device's native capture rate (often 48 kHz, and frequently the only
+# format a laptop mic array exposes) down to the 16 kHz mono the
+# VAD/wake/STT path needs — anti-aliased (FFT), NOT naive decimation.
+rubato = "0.15"
 # rodio — built on cpal, used by `playback.rs` (TTS waveforms +
 # jarvis_sounds/*.wav). Default features include WAV via symphonia which
 # we want; leaving MP3/FLAC/Vorbis on for forward-compat with future
