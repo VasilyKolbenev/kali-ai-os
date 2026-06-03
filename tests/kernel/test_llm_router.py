@@ -49,7 +49,7 @@ class TestLLMRouter:
         assert provider == "cloud"
 
     @pytest.mark.xfail(
-        reason="Finding 2: select_provider hardcodes cloud-first; provider-routing rework pending (tracked chip)",
+        reason="auto_route=true intentionally defaults to cloud (non-tech users rarely run a local model); local is reached via explicit selection (auto_route=false). Auto no-tools->local routing deferred until startup Ollama-availability detection exists.",
         strict=False,
     )
     def test_should_use_local_without_tools(self, router: LLMRouter) -> None:
@@ -62,6 +62,14 @@ class TestLLMRouter:
         req = LLMRequest(text="test", context=[], available_tools=tools, force_provider="local")
         provider = router.select_provider(req)
         assert provider == "local"
+
+    def test_explicit_local_when_auto_route_off(self) -> None:
+        """Picking a local provider (auto_route disabled) must route local, not
+        cloud — the privacy contract behind the provider dropdown."""
+        config = LLMConfig(auto_route=False, local_provider="ollama")
+        router = LLMRouter(config)
+        req = LLMRequest(text="hello", context=[], available_tools=[])
+        assert router.select_provider(req) == "local"
 
     async def test_route_returns_response(self, router: LLMRouter) -> None:
         req = LLMRequest(text="hello", context=[], available_tools=[])

@@ -79,8 +79,12 @@ class LLMRouter:
         if request.force_provider:
             return request.force_provider
 
+        # auto_route disabled = the user has explicitly opted out of
+        # cloud-first routing to keep generation local (privacy). The
+        # mobile/desktop provider dropdown encodes a "use local" pick as
+        # auto_route=false; honour it instead of silently using cloud.
         if not self.config.auto_route:
-            return "cloud"
+            return "local"
 
         if not self._local_available and (time.time() - self._local_last_fail > 300):
             self._local_available = True
@@ -263,7 +267,11 @@ class LLMRouter:
                     "messages": [{"role": "user", "content": request.text}],
                     "stream": False,
                 },
-                timeout=3.0,
+                # Short connect timeout so a missing Ollama daemon fails
+                # fast (→ cloud fallback), but a long read timeout so slow
+                # local generation isn't spuriously killed and bounced to
+                # cloud — which would defeat an explicit local choice.
+                timeout=httpx.Timeout(60.0, connect=3.0),
             )
             resp.raise_for_status()
             data = resp.json()
