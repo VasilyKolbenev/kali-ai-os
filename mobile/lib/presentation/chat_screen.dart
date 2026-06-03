@@ -220,7 +220,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
-                    padding: const EdgeInsets.all(16).copyWith(bottom: 96 + MediaQuery.of(context).padding.bottom),
+                    padding: const EdgeInsets.all(16).copyWith(bottom: 132 + MediaQuery.of(context).padding.bottom),
                     decoration: BoxDecoration(
                       color: AppTheme.background.withValues(alpha: 0.7),
                       border: Border(top: BorderSide(color: AppTheme.glassBorder)),
