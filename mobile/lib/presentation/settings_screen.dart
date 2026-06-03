@@ -64,7 +64,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
 
     try {
-      final response = await _dio.get('http://$ip:3005/config');
+      final response = await _dio.get('http://$ip:3006/config');
       if (response.statusCode == 200) {
         final data = response.data;
         setState(() {
@@ -97,7 +97,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final t = L10n.of(ref);
     try {
       await _dio.patch(
-        'http://$ip:3005/config',
+        'http://$ip:3006/config',
         data: {
           category: {
             key: value

@@ -117,8 +117,8 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
     if (ip == null) return;
 
     try {
-      final allResponse = await _dio.get('http://$ip:3005/agents');
-      final runningResponse = await _dio.get('http://$ip:3005/agents/running');
+      final allResponse = await _dio.get('http://$ip:3006/agents');
+      final runningResponse = await _dio.get('http://$ip:3006/agents/running');
 
       if (allResponse.statusCode == 200 && runningResponse.statusCode == 200) {
         final List<dynamic> allData = allResponse.data;
@@ -153,7 +153,7 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
 
     try {
       final endpoint = value ? 'load' : 'unload';
-      final response = await _dio.post('http://$ip:3005/agents/${agent.name}/$endpoint');
+      final response = await _dio.post('http://$ip:3006/agents/${agent.name}/$endpoint');
       
       if (response.statusCode != 200) {
         setState(() => agent.enabled = !value);
@@ -270,7 +270,7 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
     if (ip == null) return;
 
     try {
-      final response = await _dio.get('http://$ip:3005/skills/catalog');
+      final response = await _dio.get('http://$ip:3006/skills/catalog');
       if (response.statusCode == 200) {
         final data = response.data['results'] as List<dynamic>;
         setState(() {
@@ -295,7 +295,7 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
 
     try {
       final response = await _dio.post(
-        'http://$ip:3005/skills/install',
+        'http://$ip:3006/skills/install',
         data: {
           'source_id': skill.sourceId,
           'name': skill.name,
