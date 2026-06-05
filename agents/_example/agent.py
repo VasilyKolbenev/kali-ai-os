@@ -41,7 +41,14 @@ def handle_request(request: dict) -> dict:
 
 
 def main() -> None:
-    for line in sys.stdin:
+    # readline() rather than `for line in sys.stdin` — the iterator form
+    # read-aheads, which can stall a line-oriented request/response pipe
+    # protocol (the parent sends one line and waits). readline() returns
+    # each line as soon as its newline arrives.
+    while True:
+        line = sys.stdin.readline()
+        if not line:  # EOF — parent closed stdin
+            break
         line = line.strip()
         if not line:
             continue
