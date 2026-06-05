@@ -205,34 +205,33 @@ class RemoteVoicePipeline:
         self._state = PipelineState.IDLE
 
     async def _stream_tts(self, text: str) -> None:
-        """Synthesize TTS and stream back to client as Base64."""
+        """Synthesize TTS sentence-by-sentence and stream to the client as Base64.
+
+        Splitting into sentences (P1) lets the client start playing sentence 1
+        while later sentences are still synthesizing. F5 otherwise synthesizes
+        the whole response in one ~3 s block — the dominant voice latency.
+        """
         self._state = PipelineState.SPEAKING
         logger.info("Remote pipeline: Streaming TTS...")
-        
+
         try:
             import io
             import scipy.io.wavfile as wavfile
-            
-            async for audio, sr in tts_router.generate_audio_stream(text):
+
+            async for audio, sr in tts_router.generate_audio_by_sentence(text):
                 if len(audio) > 0:
-                    # Create a proper WAV file in memory so the client player can decode it
+                    # Proper in-memory WAV so the client player can decode it.
                     wav_io = io.BytesIO()
                     wavfile.write(wav_io, sr, audio)
-                    wav_bytes = wav_io.getvalue()
-                    
-                    # Convert to base64
-                    chunk_b64 = base64.b64encode(wav_bytes).decode("utf-8")
+                    chunk_b64 = base64.b64encode(wav_io.getvalue()).decode("utf-8")
                     await self._bus.publish(
                         Event(
                             topic="voice.tts_chunk",
                             source="remote-pipeline",
-                            payload={
-                                "audio": chunk_b64,
-                                "sample_rate": sr,
-                            }
+                            payload={"audio": chunk_b64, "sample_rate": sr},
                         )
                     )
         except Exception:
             logger.exception("Remote pipeline: TTS stream generation failed")
-            
+
         logger.info("Remote pipeline: TTS stream finished")

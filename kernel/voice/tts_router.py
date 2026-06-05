@@ -129,6 +129,24 @@ async def generate_audio_stream(text: str, language: str | None = None):
             yield audio, sr
 
 
+async def generate_audio_by_sentence(text: str, language: str | None = None):
+    """Yield (audio, sr) one sentence at a time so callers can start playback on
+    sentence 1 while later sentences are still synthesizing — this cuts
+    time-to-first-audio, the dominant voice latency (P1). Text without sentence
+    boundaries is synthesized as a single unit.
+    """
+    from kernel.voice.sentence_buffer import SentenceBuffer
+
+    sb = SentenceBuffer()
+    sentences = sb.feed(text)
+    tail = sb.flush()
+    if tail:
+        sentences.append(tail)
+    for sentence in sentences:
+        async for audio, sr in generate_audio_stream(sentence, language):
+            yield audio, sr
+
+
 def audio_to_wav_bytes(audio: np.ndarray, sr: int) -> bytes:
     import io
     import soundfile as sf

@@ -427,7 +427,7 @@ class VoicePipeline:
 
         async def generate_task() -> None:
             try:
-                async for audio, sr in tts_router.generate_audio_stream(text):
+                async for audio, sr in tts_router.generate_audio_by_sentence(text):
                     if len(audio) > 0:
                         await queue.put((audio, sr))
             except Exception:

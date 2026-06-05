@@ -1139,12 +1139,17 @@ def create_app(
                 await asyncio.to_thread(play_reaction, clip)
                 return
 
-            # Generate TTS for custom responses
-            from kernel.voice.tts_router import generate_audio, is_loaded, load_models
+            # Generate TTS for custom responses — sentence by sentence so the
+            # first sentence starts playing while the rest synthesizes (P1).
+            from kernel.voice.tts_router import (
+                generate_audio_by_sentence,
+                is_loaded,
+                load_models,
+            )
             if not is_loaded():
                 await asyncio.to_thread(load_models)
-            audio, sr = await asyncio.to_thread(generate_audio, text)
-            await asyncio.to_thread(_play_audio, audio, sr)
+            async for audio, sr in generate_audio_by_sentence(text):
+                await asyncio.to_thread(_play_audio, audio, sr)
         except Exception as e:
             logger.warning("Auto-speak failed: %s", e)
         finally:
