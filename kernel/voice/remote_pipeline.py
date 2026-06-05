@@ -169,7 +169,22 @@ class RemoteVoicePipeline:
             available_tools=self._tools,
             system_prompt=system_prompt,
         )
-        response = await self._llm.route(request)
+        # Stream the reply: synthesize + emit each sentence as soon as it closes,
+        # so the client hears sentence 1 while the LLM is still generating the
+        # rest (P1b). route_streaming also returns the full response (text +
+        # tool_calls) for the context/memory/tool flow below.
+        from kernel.voice.sentence_buffer import SentenceBuffer
+
+        sb = SentenceBuffer()
+
+        async def _on_delta(delta: str) -> None:
+            for sentence in sb.feed(delta):
+                await self._emit_tts_for(sentence)
+
+        response = await self._llm.route_streaming(request, _on_delta)
+        tail = sb.flush()
+        if tail:
+            await self._emit_tts_for(tail)
 
         tool_calls_payload = (
             [{"name": tc.name, "args": tc.arguments} for tc in response.tool_calls]
@@ -192,9 +207,7 @@ class RemoteVoicePipeline:
 
         self._context.append({"role": "user", "content": stt_result.text})
         self._context.append({"role": "assistant", "content": response.text})
-
-        if response.text:
-            await self._stream_tts(response.text)
+        # (TTS already streamed sentence-by-sentence during route_streaming above.)
 
         if lt_memory:
             try:
@@ -204,21 +217,19 @@ class RemoteVoicePipeline:
 
         self._state = PipelineState.IDLE
 
-    async def _stream_tts(self, text: str) -> None:
-        """Synthesize TTS sentence-by-sentence and stream to the client as Base64.
+    async def _emit_tts_for(self, text: str) -> None:
+        """Synthesize one text unit (a sentence) and publish it as a tts_chunk.
 
-        Splitting into sentences (P1) lets the client start playing sentence 1
-        while later sentences are still synthesizing. F5 otherwise synthesizes
-        the whole response in one ~3 s block — the dominant voice latency.
+        The atom of incremental TTS: callers that stream the LLM call this per
+        sentence as sentences complete, so the client plays sentence 1 while the
+        rest is still being generated + synthesized.
         """
+        import io
+        import scipy.io.wavfile as wavfile
+
         self._state = PipelineState.SPEAKING
-        logger.info("Remote pipeline: Streaming TTS...")
-
         try:
-            import io
-            import scipy.io.wavfile as wavfile
-
-            async for audio, sr in tts_router.generate_audio_by_sentence(text):
+            async for audio, sr in tts_router.generate_audio_stream(text):
                 if len(audio) > 0:
                     # Proper in-memory WAV so the client player can decode it.
                     wav_io = io.BytesIO()
@@ -232,6 +243,19 @@ class RemoteVoicePipeline:
                         )
                     )
         except Exception:
-            logger.exception("Remote pipeline: TTS stream generation failed")
+            logger.exception("Remote pipeline: TTS chunk generation failed")
 
-        logger.info("Remote pipeline: TTS stream finished")
+    async def _stream_tts(self, text: str) -> None:
+        """Split a full text into sentences and synthesize each (P1) — for
+        callers that already have the whole reply. Streaming callers feed deltas
+        through a SentenceBuffer and call `_emit_tts_for` per sentence directly.
+        """
+        from kernel.voice.sentence_buffer import SentenceBuffer
+
+        sb = SentenceBuffer()
+        sentences = sb.feed(text)
+        tail = sb.flush()
+        if tail:
+            sentences.append(tail)
+        for sentence in sentences:
+            await self._emit_tts_for(sentence)

@@ -311,6 +311,44 @@ class LLMRouter:
                 if delta and getattr(delta, "content", None):
                     yield delta.content
 
+    async def route_streaming(self, request: LLMRequest, on_delta) -> LLMResponse:
+        """Stream text deltas to ``on_delta`` as they arrive AND return the full
+        LLMResponse (accumulated text + any tool_calls) for context, memory, and
+        tool handling — the method a voice pipeline uses to start TTS on
+        sentence 1 before the full reply is ready (P1b).
+
+        Streams from cloud OpenAI; other providers emit the full text as a single
+        delta. An empty stream means the model issued a tool call, which is
+        recovered via a non-streaming ``route()``.
+        """
+        streamable = (
+            self.select_provider(request) == "cloud"
+            and self.config.cloud_provider == "openai"
+        )
+        if not streamable:
+            resp = await self.route(request)
+            if resp.text:
+                await on_delta(resp.text)
+            return resp
+
+        parts: list[str] = []
+        try:
+            async for delta in self._stream_openai(request):
+                if delta:
+                    parts.append(delta)
+                    await on_delta(delta)
+        except Exception:
+            logger.exception("LLM streaming failed — falling back to non-streaming")
+            return await self.route(request)
+
+        text = "".join(parts)
+        if text:
+            return LLMResponse(
+                text=text, tool_calls=None, provider_used="openai", latency_ms=0
+            )
+        # Empty stream → the model chose a tool call; recover it non-streamed.
+        return await self.route(request)
+
     async def _call_local(self, request: LLMRequest) -> LLMResponse:
         import httpx
 

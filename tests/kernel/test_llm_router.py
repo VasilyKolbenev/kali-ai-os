@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from kernel.llm_router import LLMRequest, LLMResponse, LLMRouter
+from kernel.llm_router import LLMRequest, LLMResponse, LLMRouter, ToolCall
 from kernel.models import LLMConfig
 
 
@@ -157,3 +157,57 @@ class TestLLMRouter:
         with patch.object(router, "_stream_openai", fake_stream):
             out = [d async for d in router.route_stream(req)]
         assert out == ["При", "вет", ", сэр."]
+
+    async def test_route_streaming_streams_and_returns_full(self) -> None:
+        """route_streaming feeds deltas to the callback and returns the full text."""
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o", auto_route=True)
+        router = LLMRouter(config)
+        req = LLMRequest(text="hi", context=[], available_tools=[])
+
+        async def fake_stream(_req):
+            for delta in ["При", "вет."]:
+                yield delta
+
+        deltas: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            deltas.append(d)
+
+        with patch.object(router, "_stream_openai", fake_stream):
+            resp = await router.route_streaming(req, on_delta)
+
+        assert deltas == ["При", "вет."]
+        assert resp.text == "Привет."
+        assert resp.tool_calls is None
+
+    async def test_route_streaming_empty_falls_back_for_tool_call(self) -> None:
+        """An empty stream (the model chose a tool call) recovers via route()."""
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o", auto_route=True)
+        router = LLMRouter(config)
+        tools = [{"type": "function", "function": {"name": "t", "description": "t"}}]
+        req = LLMRequest(text="hi", context=[], available_tools=tools)
+
+        async def empty_stream(_req):
+            for _ in []:
+                yield _
+
+        tool_resp = LLMResponse(
+            text="",
+            tool_calls=[ToolCall(name="t", arguments={})],
+            provider_used="openai",
+            latency_ms=0,
+        )
+        deltas: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            deltas.append(d)
+
+        with patch.object(router, "_stream_openai", empty_stream), patch.object(
+            router, "route", new_callable=AsyncMock
+        ) as mock_route:
+            mock_route.return_value = tool_resp
+            resp = await router.route_streaming(req, on_delta)
+
+        assert deltas == []
+        assert resp.tool_calls is not None
+        mock_route.assert_awaited_once()

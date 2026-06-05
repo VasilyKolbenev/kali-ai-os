@@ -65,3 +65,33 @@ async def test_generate_audio_by_sentence_helper_splits() -> None:
 
     assert calls == ["А.", "Б.", "В."]
     assert len(out) == 3
+
+
+async def test_streaming_deltas_emit_per_sentence_as_they_complete() -> None:
+    """P1b wiring: LLM deltas fed through a SentenceBuffer emit a tts_chunk the
+    moment each sentence closes — not after the whole reply arrives."""
+    from kernel.voice.sentence_buffer import SentenceBuffer
+
+    pipe = _pipeline()
+    synth_calls: list[str] = []
+
+    async def fake_stream(text, language=None):
+        synth_calls.append(text)
+        yield (np.array([0.1], dtype=np.float32), 24000)
+
+    sb = SentenceBuffer()
+
+    async def on_delta(delta: str) -> None:
+        for sentence in sb.feed(delta):
+            await pipe._emit_tts_for(sentence)
+
+    with patch("kernel.voice.tts_router.generate_audio_stream", fake_stream):
+        await on_delta("Привет, ")  # no boundary yet
+        await on_delta("сэр. Как ")  # closes sentence 1
+        await on_delta("дела? ")  # closes sentence 2
+        tail = sb.flush()
+        if tail:
+            await pipe._emit_tts_for(tail)
+
+    assert synth_calls == ["Привет, сэр.", "Как дела?"]
+    assert pipe._bus.publish.await_count == 2
