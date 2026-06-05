@@ -256,6 +256,61 @@ class LLMRouter:
             latency_ms=0,
         )
 
+    async def route_stream(self, request: LLMRequest):
+        """Yield the response as text deltas so callers can start TTS before the
+        full reply is ready (P1b — cuts the LLM-wait on top of P1a's TTS-wait).
+
+        Falls back to a single delta (the full ``route()`` text) for cases that
+        aren't plain-text-streamable: tool requests, or any provider/route other
+        than cloud OpenAI. The caller still accumulates the full text for
+        conversation context + long-term memory.
+        """
+        streamable = (
+            not request.available_tools
+            and self.select_provider(request) == "cloud"
+            and self.config.cloud_provider == "openai"
+        )
+        if not streamable:
+            resp = await self.route(request)
+            if resp.text:
+                yield resp.text
+            return
+        try:
+            async for delta in self._stream_openai(request):
+                if delta:
+                    yield delta
+        except Exception:
+            logger.exception("LLM stream failed — falling back to non-streaming")
+            resp = await self.route(request)
+            if resp.text:
+                yield resp.text
+
+    async def _stream_openai(self, request: LLMRequest):
+        """Stream text deltas from the OpenAI chat completions API."""
+        import openai
+        from kernel.jarvis_persona import get_prompt
+
+        client = openai.AsyncOpenAI()
+        system_prompt = request.system_prompt or get_prompt()
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        for ctx in request.context:
+            messages.append(ctx)
+        messages.append({"role": "user", "content": request.text})
+
+        kwargs: dict[str, Any] = {
+            "model": self.config.cloud_model,
+            "messages": messages,
+            _openai_max_token_param(self.config.cloud_model): 4096,
+            "user": "local_desktop",
+            "stream": True,
+        }
+        stream = await client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    yield delta.content
+
     async def _call_local(self, request: LLMRequest) -> LLMResponse:
         import httpx
 

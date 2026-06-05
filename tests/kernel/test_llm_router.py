@@ -130,3 +130,30 @@ class TestLLMRouter:
         kwargs = mock_create.call_args.kwargs
         assert "max_completion_tokens" in kwargs
         assert "max_tokens" not in kwargs
+
+    async def test_route_stream_falls_back_to_full_text_with_tools(self) -> None:
+        """Tool requests aren't plain-text-streamable → one delta = full route()."""
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o")
+        router = LLMRouter(config)
+        tools = [{"type": "function", "function": {"name": "t", "description": "t"}}]
+        req = LLMRequest(text="hi", context=[], available_tools=tools)
+        with patch.object(router, "route", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = LLMResponse(
+                text="full answer", tool_calls=None, provider_used="openai", latency_ms=0
+            )
+            out = [d async for d in router.route_stream(req)]
+        assert out == ["full answer"]
+
+    async def test_route_stream_yields_openai_deltas(self) -> None:
+        """No tools + cloud OpenAI → stream deltas verbatim."""
+        config = LLMConfig(cloud_provider="openai", cloud_model="gpt-4o", auto_route=True)
+        router = LLMRouter(config)
+        req = LLMRequest(text="hi", context=[], available_tools=[])
+
+        async def fake_stream(_req):
+            for delta in ["При", "вет", ", сэр."]:
+                yield delta
+
+        with patch.object(router, "_stream_openai", fake_stream):
+            out = [d async for d in router.route_stream(req)]
+        assert out == ["При", "вет", ", сэр."]
