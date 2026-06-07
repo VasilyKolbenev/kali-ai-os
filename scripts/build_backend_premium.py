@@ -6,6 +6,7 @@ For users with NVIDIA GPU (RTX 20+ series) who want fully offline JARVIS voice.
 Distribution: Google Drive / Yandex.Disk link (too big for Telegram).
 """
 
+import importlib.util as _ilu
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,21 @@ DATAS = [
     (str(ROOT / "config"), "config"),
     (str(ROOT / "resources" / "sounds"), "resources/sounds"),
 ]
+
+# torchcodec ships native libs (libtorchcodec_core/_custom_ops/_pybind_ops {4..8})
+# that F5 loads at synth time via a FileFinder on the torchcodec package dir; they
+# MUST land in _internal/torchcodec/. We locate them via find_spec (which does NOT
+# execute torchcodec — `import torchcodec` raises when its FFmpeg DLL deps aren't on
+# the path) and add each as data into the torchcodec/ subdir. This mirrors the dev
+# env where torchcodec is fully present (and F5 still synthesizes — it tolerates a
+# torchcodec that can't load and falls back to soundfile).
+_tc_spec = _ilu.find_spec("torchcodec")
+if _tc_spec is not None and _tc_spec.origin:
+    _tc_dir = Path(_tc_spec.origin).parent
+    for _lib in sorted(_tc_dir.glob("libtorchcodec_*.dll")) + sorted(
+        _tc_dir.glob("libtorchcodec_*.pyd")
+    ):
+        DATAS.append((str(_lib), "torchcodec"))
 
 HIDDEN = [
     "kernel.runtime_paths",
@@ -128,6 +144,10 @@ COLLECT_DATA = [
 COLLECT_ALL = [
     "transformers",
     "torch",
+    # NOTE: do NOT --collect-all torchcodec — PyInstaller would import it to analyze
+    # submodules, and `import torchcodec` raises (its native libs need FFmpeg DLLs on
+    # the path, absent at build time). torchcodec's .py + metadata come via HIDDEN +
+    # COPY_METADATA; its native .pyd/.dll come via the explicit DATAS block below.
 ]
 
 
@@ -142,6 +162,12 @@ def main() -> None:
         "--specpath", str(ROOT / "build"),
         "--noconfirm",
         "--icon", str(ROOT / "src-tauri" / "icons" / "icon.ico"),
+        # Custom hooks (e.g. x_transformers -> source mode for torch.jit.script).
+        "--additional-hooks-dir", str(ROOT / "scripts" / "pyinstaller_hooks"),
+        # Stub wandb at runtime (training-only dep pulled by f5_tts.model.trainer;
+        # its vendored sub-deps wandb_gql/graphql/promise are un-bundleable).
+        "--runtime-hook", str(ROOT / "scripts" / "pyinstaller_hooks" / "rthook_stub_wandb.py"),
+        "--exclude-module", "wandb",
     ]
 
     for src, dst in DATAS:
@@ -152,6 +178,13 @@ def main() -> None:
         cmd.extend(["--collect-data", pkg])
     for pkg in COLLECT_ALL:
         cmd.extend(["--collect-all", pkg])
+    # Bundle dist-info METADATA for packages that transformers version-checks at
+    # import time via importlib.metadata.version(). Code is bundled (HIDDEN) but
+    # without the metadata version() raises PackageNotFoundError and aborts the
+    # whole transformers.pipelines import (root-caused 2026-06-06: torchcodec,
+    # checked unconditionally in transformers/audio_utils.py:55).
+    for pkg in ("torchcodec",):
+        cmd.extend(["--copy-metadata", pkg])
 
     cmd.append(str(ENTRY))
 
