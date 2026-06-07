@@ -1,0 +1,57 @@
+@startuml kali-2.0-containers
+title KALI 2.0 - Containers (the generative loop) [North-Star]
+
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam ArrowColor #4A4A4A
+skinparam actor { BackgroundColor #08427B ; BorderColor #052C54 ; FontColor #FFFFFF }
+skinparam rectangle { roundCorner 12 ; FontColor #FFFFFF }
+skinparam rectangle<<c>> { BackgroundColor #438DD5 ; BorderColor #2E6295 }
+skinparam rectangle<<ext>> { BackgroundColor #8C8C8C ; BorderColor #5E5E5E }
+skinparam rectangle<<bnd>> { BackgroundColor #FFFFFF ; BorderColor #08427B ; FontColor #08427B }
+skinparam database<<c>> { BackgroundColor #438DD5 ; BorderColor #2E6295 ; FontColor #FFFFFF }
+
+actor "Non-tech\ncreator" as user
+actor "Friends /\naudience" as friends
+
+rectangle "KALI OS (Jarvis)" <<bnd>> {
+  rectangle "Voice Gateway\nwake / VAD / STT / TTS, Jarvis\n[EXISTS] F5 local + EL fallback" <<c>> as voice
+  rectangle "Generative core (compiler)\nintent -> declarations;\nvalidate / dry-run; escalate to code\n[PARTIAL: builder]" <<c>> as core
+  rectangle "Reasoner Router\nlocal + cloud LLMs, one abstraction\n[EXISTS] COMMODITY SEAM + DIAL" <<c>> as router
+  rectangle "UI Composer\nintent + context -> adaptive surface\n[FUTURE: rung B]" <<c>> as composer
+  rectangle "Capability Sandbox\nruns declarations + code in bounds\n[PARTIAL: sandbox]" <<c>> as runtime
+  rectangle "Capability Catalog\ncurated / signed blocks + user skills\n[PARTIAL: catalog]" <<c>> as catalog
+  rectangle "Consent Broker\nplain-language permissions\n[PARTIAL: permission_enforcer]" <<c>> as consent
+  database "Local memory & data\nhierarchical memory + agents, SQLite\n[EXISTS] data ownership" <<c>> as memory
+  rectangle "Surface / Shell\nTauri+React -> gen shell -> device\n[EXISTS -> A] evolves A-B-C" <<c>> as surface
+  rectangle "Share & Install (UGC)\nagent -> reel / link -> install\n[PARTIAL: package]" <<c>> as dist
+}
+
+rectangle "Cloud reasoners\n[commodity]" <<ext>> as reasoners
+rectangle "Life services\n[capability-gated]" <<ext>> as lifesvc
+rectangle "UGC channels\nTikTok / Reels" <<ext>> as ugc
+
+user --> voice : voice
+voice --> core : recognized intent
+core --> router : reasoning request
+router --> reasoners : heavy (opt-in) [DIAL -> local]
+core --> runtime : validate (dry-run)\nthen install
+runtime --> catalog : pulls blocks / skills
+runtime --> consent : access request
+consent --> user : grant access to X?\n(plain language)
+runtime --> lifesvc : actions (capability)
+core --> composer : what to show
+composer --> surface : UI composition
+surface --> user : adaptive UI + voice
+runtime --> memory : state
+core --> memory : context / personalization
+user --> dist : shares agent
+dist --> ugc : reel / link
+ugc --> friends : watch
+friends --> dist : install shared agent
+
+legend right
+Blue = container.  Grey = external (commodity).  White box = KALI boundary.
+[EXISTS]/[PARTIAL]/[FUTURE] = maturity.  [DIAL] = slides as AI advances.
+endlegend
+@enduml

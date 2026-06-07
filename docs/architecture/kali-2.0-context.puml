@@ -1,0 +1,35 @@
+@startuml kali-2.0-context
+title KALI 2.0 - System Context [North-Star]
+
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam ArrowColor #4A4A4A
+skinparam actor { BackgroundColor #08427B ; BorderColor #052C54 ; FontColor #FFFFFF }
+skinparam rectangle { roundCorner 14 ; FontColor #FFFFFF }
+skinparam rectangle<<sys>> { BackgroundColor #1168BD ; BorderColor #0B4884 }
+skinparam rectangle<<ext>> { BackgroundColor #8C8C8C ; BorderColor #5E5E5E }
+
+actor "Non-tech creator\n(voice)" as user
+actor "Friends /\naudience" as friends
+
+rectangle "KALI OS (Jarvis)\nGenerative local-first OS:\nvoice -> a personal system.\nDeclarative + sandbox, capability-trust." <<sys>> as kali
+
+rectangle "Cloud reasoners\nClaude / OpenAI / Google / DeepSeek\n[COMMODITY - swappable]" <<ext>> as reasoners
+rectangle "Cloud TTS fallback\nElevenLabs (no local GPU)" <<ext>> as voicecloud
+rectangle "User life services\ncalendar / messengers / home\n(opt-in, capability-gated)" <<ext>> as lifesvc
+rectangle "UGC channels\nTikTok / Reels" <<ext>> as ugc
+
+user --> kali : voice / intent
+kali --> user : Jarvis voice + adaptive UI
+kali --> reasoners : heavy reasoning (opt-in)\n[DIAL -> local]
+kali --> voicecloud : TTS fallback
+kali --> lifesvc : acts on behalf\n(capability + consent)
+user --> ugc : shares agent reel
+friends --> ugc : watch
+ugc --> kali : agent install
+
+legend right
+KALI (blue) = the moat.  External (grey) = commodity / channels.
+[DIAL] = slides as AI advances, no rewrite.
+endlegend
+@enduml
