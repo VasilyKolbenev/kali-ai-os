@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,10 @@ def _register_ffmpeg_dll_path() -> None:
     """Add bundled FFmpeg DLL directory to search path (for torchcodec)."""
     if hasattr(sys, "_MEIPASS"):
         exe_dir = Path(sys.executable).parent
-        candidates = [exe_dir / "models" / "ffmpeg"]
+        candidates = [
+            exe_dir / "models" / "ffmpeg",          # legacy: models next to exe
+            exe_dir.parent / "models" / "ffmpeg",   # InnoSetup install: one level up
+        ]
     else:
         candidates = [Path(__file__).parent.parent.parent / "models" / "ffmpeg"]
 
@@ -90,6 +94,7 @@ REMOVE_SILENCE = False  # preserve natural butler pauses
 # Global state
 _f5_instance: Any = None
 _loaded = False
+_load_lock = threading.Lock()
 
 
 def _checkpoint_paths() -> tuple[Path, Path]:
@@ -121,22 +126,31 @@ def _get_f5() -> Any:
     if _f5_instance is not None:
         return _f5_instance
 
-    import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        logger.warning("F5-TTS on CPU is very slow — GPU recommended")
+    # Serialize first-load across threads: the TTS prewarm and the voice-pipeline
+    # auto-start both reach here in worker threads; without the lock they race on
+    # torch's first import in the frozen bundle ("partially initialized module
+    # 'torch' ... circular import"). One thread imports torch + builds F5 while the
+    # others wait and reuse the cached instance.
+    with _load_lock:
+        if _f5_instance is not None:
+            return _f5_instance
 
-    ckpt, vocab = _checkpoint_paths()
-    logger.info("Loading F5-TTS Russian (%s)...", device)
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            logger.warning("F5-TTS on CPU is very slow — GPU recommended")
 
-    from f5_tts.api import F5TTS
-    _f5_instance = F5TTS(
-        model="F5TTS_v1_Base",
-        ckpt_file=str(ckpt),
-        vocab_file=str(vocab),
-        device=device,
-    )
-    logger.info("F5-TTS ready")
+        ckpt, vocab = _checkpoint_paths()
+        logger.info("Loading F5-TTS Russian (%s)...", device)
+
+        from f5_tts.api import F5TTS
+        _f5_instance = F5TTS(
+            model="F5TTS_v1_Base",
+            ckpt_file=str(ckpt),
+            vocab_file=str(vocab),
+            device=device,
+        )
+        logger.info("F5-TTS ready")
     return _f5_instance
 
 

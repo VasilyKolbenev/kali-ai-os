@@ -380,6 +380,27 @@ def create_app(
                 app.state.remote_pipeline = remote_pipeline
                 logger.info("Remote Voice pipeline initialized")
 
+                # Pre-import torch ONCE, in a worker thread, awaited, BEFORE the
+                # auto-start task and the TTS/STT prewarm spawn their own load
+                # threads. Two subtleties in the frozen bundle:
+                #   1) `import torch` on the MAIN thread crashes in torch's custom-op
+                #      registration (pyi_rth_inspect mishandles the main-thread frame);
+                #      the same import on a worker thread is fine.
+                #   2) concurrent first-imports of torch from multiple load threads
+                #      race ("partially initialized module 'torch'").
+                # Importing it here via to_thread (single, awaited) satisfies both:
+                # worker-thread import (no crash) + serialized (no race); later loads
+                # then see torch already imported and skip the racey first-import.
+                if hasattr(sys, "_MEIPASS"):
+                    def _preimport_torch() -> None:
+                        import torch  # noqa: F401
+
+                    try:
+                        await asyncio.to_thread(_preimport_torch)
+                        logger.info("torch pre-imported (single-threaded)")
+                    except Exception:
+                        logger.exception("torch pre-import failed")
+
                 # Voice pipeline — auto-start only if user opted in via config.
                 # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
                 voice_cfg = config_manager.config.voice
@@ -509,7 +530,10 @@ def create_app(
                     await asyncio.to_thread(load_models)
                     logger.info("TTS prewarm: ready")
             except Exception as e:
-                logger.warning("TTS prewarm failed (non-fatal): %s", e)
+                import traceback as _tb
+                logger.warning(
+                    "TTS prewarm failed (non-fatal): %s\n%s", e, _tb.format_exc()
+                )
 
             try:
                 from kernel.voice.transcribe_helper import get_or_create_stt
