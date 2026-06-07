@@ -271,10 +271,14 @@ def create_app(
         plugin_registry = PluginRegistry(resolved_agents_dir)
         plugin_registry.discover()
 
-        # Initialize skill executor
+        # Initialize skill executor. Only agents with a skill.yaml are YAML-template
+        # skills (tracker/reminder/etc.); SKILL.md-only agents are served by the
+        # plugin_registry, so skip them here instead of logging a misleading warning.
         skill_executor = SkillExecutor(data_dir=resolved_db_path.parent)
         for manifest in plugin_registry.list_skills():
             skill_dir = resolved_agents_dir / manifest.name
+            if not (skill_dir / "skill.yaml").exists():
+                continue
             try:
                 skill_executor.load_skill(skill_dir)
                 logger.info("Loaded skill: %s", manifest.name)
