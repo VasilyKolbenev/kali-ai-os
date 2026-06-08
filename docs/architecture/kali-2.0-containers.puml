@@ -4,12 +4,34 @@ title KALI 2.0 - Containers (the generative loop) [North-Star]
 skinparam shadowing false
 skinparam defaultTextAlignment center
 skinparam ArrowColor #4A4A4A
-skinparam actor { BackgroundColor #08427B ; BorderColor #052C54 ; FontColor #FFFFFF }
-skinparam rectangle { roundCorner 12 ; FontColor #FFFFFF }
-skinparam rectangle<<c>> { BackgroundColor #438DD5 ; BorderColor #2E6295 }
-skinparam rectangle<<ext>> { BackgroundColor #8C8C8C ; BorderColor #5E5E5E }
-skinparam rectangle<<bnd>> { BackgroundColor #FFFFFF ; BorderColor #08427B ; FontColor #08427B }
-skinparam database<<c>> { BackgroundColor #438DD5 ; BorderColor #2E6295 ; FontColor #FFFFFF }
+
+skinparam actor {
+  BackgroundColor #08427B
+  BorderColor #052C54
+  FontColor #FFFFFF
+}
+skinparam rectangle {
+  FontColor #FFFFFF
+  roundCorner 12
+}
+skinparam rectangle<<c>> {
+  BackgroundColor #438DD5
+  BorderColor #2E6295
+}
+skinparam rectangle<<ext>> {
+  BackgroundColor #8C8C8C
+  BorderColor #5E5E5E
+}
+skinparam rectangle<<bnd>> {
+  BackgroundColor #FFFFFF
+  BorderColor #08427B
+  FontColor #08427B
+}
+skinparam database<<c>> {
+  BackgroundColor #438DD5
+  BorderColor #2E6295
+  FontColor #FFFFFF
+}
 
 actor "Non-tech\ncreator" as user
 actor "Friends /\naudience" as friends

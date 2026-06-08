@@ -4,10 +4,24 @@ title KALI 2.0 - System Context [North-Star]
 skinparam shadowing false
 skinparam defaultTextAlignment center
 skinparam ArrowColor #4A4A4A
-skinparam actor { BackgroundColor #08427B ; BorderColor #052C54 ; FontColor #FFFFFF }
-skinparam rectangle { roundCorner 14 ; FontColor #FFFFFF }
-skinparam rectangle<<sys>> { BackgroundColor #1168BD ; BorderColor #0B4884 }
-skinparam rectangle<<ext>> { BackgroundColor #8C8C8C ; BorderColor #5E5E5E }
+
+skinparam actor {
+  BackgroundColor #08427B
+  BorderColor #052C54
+  FontColor #FFFFFF
+}
+skinparam rectangle {
+  FontColor #FFFFFF
+  roundCorner 14
+}
+skinparam rectangle<<sys>> {
+  BackgroundColor #1168BD
+  BorderColor #0B4884
+}
+skinparam rectangle<<ext>> {
+  BackgroundColor #8C8C8C
+  BorderColor #5E5E5E
+}
 
 actor "Non-tech creator\n(voice)" as user
 actor "Friends /\naudience" as friends
