@@ -27,19 +27,51 @@ but bypasses whitelist + rate limit enforcement.
 
 from __future__ import annotations
 
+import ipaddress
 import json as json_mod
 import logging
+import socket
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode, urlparse
 
 logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024   # 10 MB
 MAX_TIMEOUT_SECONDS = 30
+
+
+def _resolves_to_private(host: str) -> bool:
+    """Return True if ``host`` resolves to a loopback/link-local/private address.
+
+    Blocks SSRF to internal infrastructure (127.0.0.0/8, 169.254.0.0/16,
+    10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ::1, etc.). A host that cannot
+    be resolved is treated as private (fail closed).
+
+    Args:
+        host: Hostname or IP literal to evaluate.
+
+    Returns:
+        True if any resolved address is private/loopback/link-local.
+    """
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return True
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return True
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return True
+    return False
 
 
 class SandboxHttpError(RuntimeError):
@@ -52,6 +84,30 @@ class DomainBlockedError(SandboxHttpError):
 
 class RateLimitError(SandboxHttpError):
     """Raised when the per-agent rate limit is exceeded."""
+
+
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-runs the whitelist + private-IP checks on every 30x redirect target.
+
+    urllib follows redirects transparently, so a whitelisted URL could redirect
+    to an arbitrary host (SSRF). This handler validates each hop's destination
+    before allowing urllib to follow it.
+    """
+
+    def __init__(self, host_allowed: Callable[[str], bool]) -> None:
+        self._host_allowed = host_allowed
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        host = (urlparse(newurl).hostname or "").lower()
+        if not self._host_allowed(host):
+            raise DomainBlockedError(
+                f"Redirect to non-whitelisted host '{host}' blocked"
+            )
+        if _resolves_to_private(host):
+            raise DomainBlockedError(
+                f"Redirect to private/loopback host '{host}' blocked"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 @dataclass
@@ -155,6 +211,15 @@ class SandboxHttpClient:
                 f"Add it to 'permissions: network: domains: [...]' in SKILL.md."
             )
 
+        if _resolves_to_private(host):
+            self._emit_audit(
+                status="denied", reason="domain_blocked",
+                url=req.url, duration_ms=0, error=f"host '{host}' resolves to private range",
+            )
+            raise DomainBlockedError(
+                f"Host '{host}' resolves to a private/loopback address — blocked."
+            )
+
         if self._rate_limiter is not None and not self._rate_limiter.check(self._agent):
             self._emit_audit(
                 status="denied", reason="rate_limit",
@@ -175,9 +240,12 @@ class SandboxHttpClient:
             data = json_mod.dumps(req.json_body).encode("utf-8")
             py_req.add_header("Content-Type", "application/json")
 
+        opener = urllib.request.build_opener(
+            _ValidatingRedirectHandler(self._host_allowed)
+        )
         start = time.perf_counter()
         try:
-            with urllib.request.urlopen(py_req, data=data, timeout=timeout) as resp:
+            with opener.open(py_req, data=data, timeout=timeout) as resp:
                 body = resp.read(MAX_RESPONSE_BYTES + 1)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise SandboxHttpError(

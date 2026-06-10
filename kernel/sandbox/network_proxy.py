@@ -1,16 +1,68 @@
 """Network proxy — handles 'network.request' JSON-RPC from agents."""
 
 import asyncio
+import ipaddress
 import json as json_mod
 import logging
 import re
+import socket
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from kernel.sandbox.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+def _resolves_to_private(host: str) -> bool:
+    """Return True if ``host`` resolves to a loopback/link-local/private address.
+
+    Blocks SSRF to internal infrastructure (127.0.0.0/8, 169.254.0.0/16,
+    10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ::1, etc.). An unresolvable
+    host is treated as private (fail closed).
+
+    Args:
+        host: Hostname or IP literal to evaluate.
+
+    Returns:
+        True if any resolved address is private/loopback/link-local.
+    """
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return True
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return True
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return True
+    return False
+
+
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-runs the domain whitelist + private-IP checks on every 30x redirect.
+
+    urllib follows redirects transparently, so an allowed URL could be redirected
+    to an arbitrary host (SSRF). This handler validates each redirect target
+    before urllib follows it.
+    """
+
+    def __init__(self, is_allowed: Callable[[str], bool]) -> None:
+        self._is_allowed = is_allowed
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        host = (urlparse(newurl).hostname or "").lower()
+        if not self._is_allowed(host):
+            raise ValueError(f"Redirect to non-whitelisted host '{host}' blocked")
+        if _resolves_to_private(host):
+            raise ValueError(f"Redirect to private/loopback host '{host}' blocked")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class NetworkProxy:
@@ -71,6 +123,12 @@ class NetworkProxy:
             logger.warning("Agent '%s' blocked from domain '%s'", agent_name, domain)
             return {"error": f"Blocked: {domain} not in whitelist"}
 
+        if _resolves_to_private(domain):
+            logger.warning(
+                "Agent '%s' blocked from private/loopback host '%s'", agent_name, domain
+            )
+            return {"error": f"Blocked: {domain} resolves to a private address"}
+
         if not self._rate_limiter.check(agent_name):
             return {"error": "Rate limit exceeded"}
 
@@ -79,9 +137,12 @@ class NetworkProxy:
         json_body = params.get("json")
         timeout = min(int(params.get("timeout", 30)), 30)
 
+        def _allowed(host: str) -> bool:
+            return self.is_domain_allowed(agent_name, host)
+
         try:
             return await asyncio.to_thread(
-                self._sync_request, url, method, headers, json_body, timeout
+                self._sync_request, url, method, headers, json_body, timeout, _allowed
             )
         except Exception as exc:
             logger.error(
@@ -99,6 +160,7 @@ class NetworkProxy:
         headers: dict[str, str],
         json_body: Any,
         timeout: int,
+        is_allowed: Callable[[str], bool],
     ) -> dict[str, Any]:
         """Perform the blocking HTTP request synchronously.
 
@@ -108,6 +170,7 @@ class NetworkProxy:
             headers: Request headers dict.
             json_body: Optional JSON-serialisable body.
             timeout: Request timeout in seconds.
+            is_allowed: Predicate re-applied to every redirect target host.
 
         Returns:
             Dict with 'status' and 'body', or 'error' on failure.
@@ -119,7 +182,8 @@ class NetworkProxy:
         if json_body is not None:
             data = json_mod.dumps(json_body).encode()
             req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+        opener = urllib.request.build_opener(_ValidatingRedirectHandler(is_allowed))
+        with opener.open(req, data=data, timeout=timeout) as resp:
             body = resp.read().decode(errors="replace")
             return {"status": resp.status, "body": body}
 

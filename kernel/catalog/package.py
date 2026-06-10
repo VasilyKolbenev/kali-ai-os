@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 import zipfile
 from pathlib import Path
 
@@ -94,14 +95,18 @@ def unpack(package_path: Path, target_dir: Path) -> Path:
             raise FileNotFoundError(f"{_CHECKSUMS_FILE} missing from package")
 
         checksums: dict[str, str] = json.loads(zf.read(_CHECKSUMS_FILE))
-        agent_dir_resolved = target_dir.resolve()
+        base = target_dir.resolve()
         for info in zf.infolist():
             if info.filename == _CHECKSUMS_FILE:
                 continue
-            # Zip slip protection
-            target = (target_dir / info.filename).resolve()
-            if not str(target).startswith(str(agent_dir_resolved)):
-                raise ValueError(f"Zip slip detected: {info.filename}")
+            # Zip slip protection: reject absolute or traversal member names,
+            # then require the resolved target to be contained in target_dir.
+            member = info.filename
+            if Path(member).is_absolute() or os.path.isabs(member) or ".." in Path(member).parts:
+                raise ValueError(f"Zip slip detected: {member}")
+            target = (target_dir / member).resolve()
+            if os.path.commonpath([str(target), str(base)]) != str(base):
+                raise ValueError(f"Zip slip detected: {member}")
             zf.extract(info, target_dir)
 
     for rel_path, expected in checksums.items():
