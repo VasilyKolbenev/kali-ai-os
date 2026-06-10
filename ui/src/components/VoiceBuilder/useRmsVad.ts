@@ -19,6 +19,11 @@ interface UseRmsVadResult {
  * RMS-threshold VAD with a silence-duration timer. Stateless wrt audio
  * (no buffer); the consumer feeds chunks as they're produced and the
  * hook tracks how long the recent RMS has been below threshold.
+ *
+ * onSilence fires only AFTER at least one above-threshold (speech) frame has
+ * been seen — otherwise the timer would arm on the initial pre-speech silence
+ * and submit empty audio before the user even starts answering (which read as
+ * "voice not recognized"). `reset()` clears the speech flag for the next turn.
  */
 export function useRmsVad({
   threshold = 0.01,
@@ -27,6 +32,7 @@ export function useRmsVad({
 }: UseRmsVadOptions): UseRmsVadResult {
   const silenceStartRef = useRef<number | null>(null);
   const firedRef = useRef(false);
+  const hadSpeechRef = useRef(false);
 
   const feed = useCallback(
     (chunk: Float32Array) => {
@@ -38,6 +44,7 @@ export function useRmsVad({
       if (rms < threshold) {
         if (silenceStartRef.current === null) silenceStartRef.current = now;
         if (
+          hadSpeechRef.current &&
           !firedRef.current &&
           now - silenceStartRef.current >= silenceMs
         ) {
@@ -45,6 +52,7 @@ export function useRmsVad({
           onSilence();
         }
       } else {
+        hadSpeechRef.current = true;
         silenceStartRef.current = null;
         firedRef.current = false;
       }
@@ -55,6 +63,7 @@ export function useRmsVad({
   const reset = useCallback(() => {
     silenceStartRef.current = null;
     firedRef.current = false;
+    hadSpeechRef.current = false;
   }, []);
 
   return { feed, reset };
