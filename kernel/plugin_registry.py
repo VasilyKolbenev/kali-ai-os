@@ -212,10 +212,25 @@ class PluginRegistry:
         """Return manifests that are not pure skills (have executable code)."""
         return [m for m in self._agents.values() if m.protocol != "skill"]
 
+    def _is_callable(self, agent: AgentManifest) -> bool:
+        """Whether the agent's tools can actually be dispatched at runtime.
+
+        Native/manifest.yaml agents dispatch through agent_runtime. Pure
+        SKILL.md skills (protocol="skill") are only executable when a
+        ``skill.yaml`` template backs them (SkillExecutor.load_skill); without
+        one, invoking the tool yields "Skill not found", so it must not be
+        advertised to the LLM in the first place.
+        """
+        if agent.protocol != "skill":
+            return True
+        return (self._agents_dir / agent.name / "skill.yaml").is_file()
+
     def get_all_tools(self) -> list[dict[str, Any]]:
         """Get all agent tools formatted for LLM function calling (OpenAI/Anthropic)."""
         tools: list[dict[str, Any]] = []
         for agent in self._agents.values():
+            if not self._is_callable(agent):
+                continue
             for tool in agent.tools:
                 tools.append({
                     "type": "function",
