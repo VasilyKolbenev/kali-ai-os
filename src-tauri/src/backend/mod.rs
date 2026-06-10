@@ -14,8 +14,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::http::{header, HeaderValue, Method};
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
@@ -47,7 +48,7 @@ pub async fn serve() -> anyhow::Result<()> {
     let skills = build_skills_registry();
     let catalog = build_catalog_client();
     let app = http::router_full(bus, pipeline, skills, catalog)
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         .layer(TraceLayer::new_for_http());
 
     let addr: SocketAddr = RUST_BIND_ADDR.parse().context("parse bind address")?;
@@ -62,6 +63,40 @@ pub async fn serve() -> anyhow::Result<()> {
     .await
     .context("axum server terminated unexpectedly")?;
     Ok(())
+}
+
+/// Allowed cross-origin sources — kept in lockstep with the Tauri
+/// shell's `BACKEND_CORS_ORIGINS` (see `lib.rs`) so the Rust backend on
+/// `:3006` honours the same origins as the Python backend on `:3005`.
+const CORS_ALLOWED_ORIGINS: [&str; 7] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:1421",
+    "http://127.0.0.1:1421",
+];
+
+/// Build the CORS layer for the backend.
+///
+/// audit SEC-2: CORS locked to known origins; LAN-host token-auth on
+/// mutating routes (/chat, PATCH /config, /agents/*, /skills/install,
+/// /catalog/install) is a tracked follow-up.
+///
+/// The bind stays `0.0.0.0:3006` so the mobile app can reach the
+/// backend over the LAN, but cross-origin reads are now restricted to
+/// the Tauri shell and the Vite dev server instead of `permissive()`,
+/// which let any website call `/chat` and `/dashboard`.
+fn build_cors_layer() -> CorsLayer {
+    let origins: Vec<HeaderValue> = CORS_ALLOWED_ORIGINS
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_headers([header::CONTENT_TYPE])
 }
 
 /// Construct the local skills registry from the default source list
