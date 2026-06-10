@@ -58,6 +58,9 @@ export default function App() {
       <Sidebar />
 
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+        {/* mode="wait" deadlocks if a mode view contains a shared `layoutId`
+            element that has moved (exit never completes -> blank screen), so
+            keep layoutId out of the views below. */}
         <AnimatePresence mode="wait">
           <motion.div
             key={mode}

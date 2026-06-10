@@ -286,11 +286,8 @@ export function AgentStore() {
                 )}
               </span>
               {activeTab === tab.id && (
-                <motion.div
-                  layoutId="activeStoreTab"
+                <div
                   className="absolute inset-0 bg-gradient-to-r from-[var(--j-cyan)] to-[var(--j-purple)] rounded-xl opacity-80"
-                  initial={false}
-                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                 />
               )}
             </button>
