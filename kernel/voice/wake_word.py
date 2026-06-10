@@ -123,6 +123,11 @@ class WakeWordDetector:
                 logger.debug("Wake word scores: top=%s (%.3f)", top[0], top[1])
 
         for model_name, score in prediction.items():
+            # Only the configured wake word may trigger — OpenWakeWord's
+            # default Model() loads all bundled models ("alexa", "hey_mycroft",
+            # …), so without this guard any of them would wake Jarvis.
+            if self.wake_word.lower() not in model_name.lower():
+                continue
             if score >= self.threshold:
                 logger.info("Wake word detected: %s (score=%.2f)", model_name, score)
                 return WakeWordResult(detected=True, word=model_name, confidence=float(score))

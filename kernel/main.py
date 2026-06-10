@@ -539,14 +539,22 @@ def create_app(
                     "TTS prewarm failed (non-fatal): %s\n%s", e, _tb.format_exc()
                 )
 
-            try:
-                from kernel.voice.transcribe_helper import get_or_create_stt
+            # STT prewarm runs in the background so lifespan yields immediately:
+            # first-run Whisper download (~480MB) must not block /health. The
+            # on-demand load path (get_or_create_stt in /tts and /voice/transcribe)
+            # covers requests that arrive before the model is warm.
+            async def _prewarm_stt() -> None:
+                try:
+                    from kernel.voice.transcribe_helper import get_or_create_stt
 
-                logger.info("STT prewarm: loading Whisper model...")
-                await asyncio.to_thread(get_or_create_stt, app.state)
-                logger.info("STT prewarm: ready")
-            except Exception as e:
-                logger.warning("STT prewarm failed (non-fatal): %s", e)
+                    logger.info("STT prewarm: loading Whisper model...")
+                    await asyncio.to_thread(get_or_create_stt, app.state)
+                    logger.info("STT prewarm: ready")
+                except Exception as e:
+                    logger.warning("STT prewarm failed (non-fatal): %s", e)
+
+            # Strong reference prevents the task from being GC-cancelled.
+            app.state._prewarm_task = asyncio.create_task(_prewarm_stt())
 
         logger.info("KALI kernel started (v%s)", __version__)
         yield
@@ -1156,7 +1164,8 @@ def create_app(
 
         # Anti-echo: stop voice pipeline mic before speaking
         vp = getattr(app.state, "voice_pipeline", None)
-        if vp and vp._recorder.is_recording:
+        was_recording = bool(vp and vp._recorder.is_recording)
+        if was_recording:
             await vp._recorder.stop()
 
         try:
@@ -1181,9 +1190,11 @@ def create_app(
         except Exception as e:
             logger.warning("Auto-speak failed: %s", e)
         finally:
-            # Anti-echo: 500ms buffer lets audio fully drain before mic resumes
+            # Anti-echo: 500ms buffer lets audio fully drain before mic resumes.
+            # Only resume the mic if it was recording before we spoke — otherwise
+            # we would turn voice on when it was off and orphan the stream.
             await asyncio.sleep(0.5)
-            if vp:
+            if was_recording:
                 await vp._recorder.start()
                 vp._wake_word.reset()
                 vp._vad.reset()
