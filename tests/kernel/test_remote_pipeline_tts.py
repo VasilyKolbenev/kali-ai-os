@@ -15,7 +15,7 @@ def _pipeline() -> RemoteVoicePipeline:
     return RemoteVoicePipeline(bus, VoiceConfig(), LLMConfig(), tools=[])
 
 
-async def test_stream_tts_synthesizes_per_sentence() -> None:
+async def test_stream_tts_synthesizes_long_sentences_individually() -> None:
     pipe = _pipeline()
     synth_calls: list[str] = []
 
@@ -23,15 +23,37 @@ async def test_stream_tts_synthesizes_per_sentence() -> None:
         synth_calls.append(text)
         yield (np.array([0.1, 0.2, 0.1], dtype=np.float32), 24000)
 
+    s1 = "Первое предложение получилось достаточно длинным."
+    s2 = "Второе предложение получилось достаточно длинным."
+    s3 = "Третье предложение получилось достаточно длинным."
+    with patch(
+        "kernel.voice.tts_router.generate_audio_stream", fake_stream
+    ):
+        await pipe._stream_tts(f"{s1} {s2} {s3}")
+
+    # One synthesis call per sentence — NOT one big call for the whole text.
+    assert synth_calls == [s1, s2, s3]
+    # One tts_chunk published per sentence (first reaches the client fast).
+    assert pipe._bus.publish.await_count == 3
+
+
+async def test_stream_tts_merges_short_sentences_into_one_chunk() -> None:
+    """Sub-min_chars sentences merge: F5's fixed per-call cost makes tiny
+    chunks synthesize slower than they play, gapping the voice at periods."""
+    pipe = _pipeline()
+    synth_calls: list[str] = []
+
+    async def fake_stream(text, language=None):
+        synth_calls.append(text)
+        yield (np.array([0.1], dtype=np.float32), 24000)
+
     with patch(
         "kernel.voice.tts_router.generate_audio_stream", fake_stream
     ):
         await pipe._stream_tts("Один. Два. Три.")
 
-    # One synthesis call per sentence — NOT one big call for the whole text.
-    assert synth_calls == ["Один.", "Два.", "Три."]
-    # One tts_chunk published per sentence (first reaches the client fast).
-    assert pipe._bus.publish.await_count == 3
+    assert synth_calls == ["Один. Два. Три."]
+    assert pipe._bus.publish.await_count == 1
 
 
 async def test_stream_tts_handles_unterminated_text() -> None:
@@ -60,10 +82,16 @@ async def test_generate_audio_by_sentence_helper_splits() -> None:
         calls.append(text)
         yield (np.array([0.1], dtype=np.float32), 24000)
 
+    s1 = "Первое предложение получилось достаточно длинным."
+    s2 = "Второе предложение получилось достаточно длинным."
+    s3 = "Третье предложение получилось достаточно длинным."
     with patch("kernel.voice.tts_router.generate_audio_stream", fake_stream):
-        out = [pair async for pair in tts_router.generate_audio_by_sentence("А. Б. В.")]
+        out = [
+            pair
+            async for pair in tts_router.generate_audio_by_sentence(f"{s1} {s2} {s3}")
+        ]
 
-    assert calls == ["А.", "Б.", "В."]
+    assert calls == [s1, s2, s3]
     assert len(out) == 3
 
 
@@ -86,12 +114,15 @@ async def test_streaming_deltas_emit_per_sentence_as_they_complete() -> None:
             await pipe._emit_tts_for(sentence)
 
     with patch("kernel.voice.tts_router.generate_audio_stream", fake_stream):
-        await on_delta("Привет, ")  # no boundary yet
-        await on_delta("сэр. Как ")  # closes sentence 1
-        await on_delta("дела? ")  # closes sentence 2
+        await on_delta("Привет, сэр, рад снова ")  # no boundary yet
+        await on_delta("вас слышать сегодня. Чем я могу ")  # closes sentence 1
+        await on_delta("помочь вам прямо сейчас, сэр? ")  # closes sentence 2
         tail = sb.flush()
         if tail:
             await pipe._emit_tts_for(tail)
 
-    assert synth_calls == ["Привет, сэр.", "Как дела?"]
+    assert synth_calls == [
+        "Привет, сэр, рад снова вас слышать сегодня.",
+        "Чем я могу помочь вам прямо сейчас, сэр?",
+    ]
     assert pipe._bus.publish.await_count == 2
