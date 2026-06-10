@@ -115,13 +115,27 @@ class LLMRouter:
                 if self._local_fails >= 2:
                     self._local_available = False
                     self._local_last_fail = time.time()
-                    
-                response = await self._call_cloud(request) if self._cloud_available else LLMResponse(
-                    text="I'm sorry, I couldn't process that request.",
-                    tool_calls=None,
-                    provider_used="error",
-                    latency_ms=0,
-                )
+
+                # auto_route=false is an explicit local-only (privacy) choice:
+                # never silently send the user's content to cloud as a fallback.
+                if not self.config.auto_route:
+                    response = LLMResponse(
+                        text="Local LLM unavailable and cloud fallback is "
+                        "disabled (local-only mode). Please start the local "
+                        "model or enable auto-routing.",
+                        tool_calls=None,
+                        provider_used="error",
+                        latency_ms=0,
+                    )
+                elif self._cloud_available:
+                    response = await self._call_cloud(request)
+                else:
+                    response = LLMResponse(
+                        text="I'm sorry, I couldn't process that request.",
+                        tool_calls=None,
+                        provider_used="error",
+                        latency_ms=0,
+                    )
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         response.latency_ms = elapsed_ms
