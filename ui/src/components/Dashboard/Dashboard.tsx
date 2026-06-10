@@ -72,7 +72,9 @@ export function Dashboard() {
 
       // Weather widget
       try {
-        const wx = await api.executeAgentTool("weather", "get_weather", { city: "Moscow" }) as {
+        // City is intentionally omitted — the weather agent applies its own
+        // server-side default rather than hardcoding a location in the UI.
+        const wx = await api.executeAgentTool("weather", "get_weather") as {
           temperature_c?: number; condition?: string;
         };
         updateWidget("weather", { temp_c: wx.temperature_c, condition: wx.condition });
@@ -89,7 +91,7 @@ export function Dashboard() {
           total_calories?: number;
         };
         updateWidget("sleep", { hours: lifeData.sleep_hours ?? null, hrv: lifeData.sleep_hrv ?? null });
-        updateWidget("spending", { amount: lifeData.total_spending ?? 0, currency: "₽" });
+        updateWidget("spending", { amount: lifeData.total_spending ?? 0 });
         updateWidget("energy", { calories: lifeData.total_calories ?? 0 });
       } catch {
         // life-dashboard not running — keep previous data

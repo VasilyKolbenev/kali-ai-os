@@ -84,7 +84,7 @@ export function MicTestStep() {
             {transcript}
           </div>
         )}
-        {state === "denied" && (
+        {(state === "denied" || state === "listening") && (
           <button
             onClick={() => advance()}
             style={{

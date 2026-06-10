@@ -28,8 +28,15 @@ export function ApiKeyStep() {
       if (res.ok) {
         setStatus("valid");
         setValid(true);
-        await api.updateSettings({ [`api_key_${selected}`]: key });
-        setTimeout(() => advance(), 600);
+        const saved = await api.updateSettings({
+          provider: selected,
+          [`${selected}_key`]: key,
+        });
+        const keys = saved["keys"];
+        // Only advance once the backend confirms it persisted the key.
+        if (Array.isArray(keys) && keys.length > 0) {
+          setTimeout(() => advance(), 600);
+        }
       } else {
         setStatus("invalid");
         setError(res.error ?? "Ключ не подошёл. Проверь ещё раз.");

@@ -23,6 +23,12 @@ function playSound(category: keyof typeof SOUNDS) {
   audio.play().catch(() => {});
 }
 
+// Web Speech API is unavailable in WebView2 (the Tauri shell). Feature-detect
+// once so the mic button and push-to-talk hotkey are hidden/no-op there.
+const speechRecognitionSupported =
+  typeof window !== "undefined" &&
+  Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
 export function ChatInput() {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
@@ -48,7 +54,7 @@ export function ChatInput() {
     api.voiceStatus()
       .then((status) => {
         if (!cancelled) {
-          setVoiceActive(Boolean(status.available));
+          setVoiceActive(Boolean(status.started));
         }
       })
       .catch(() => {
@@ -102,6 +108,7 @@ export function ChatInput() {
     const inputFocused = () => document.activeElement?.tagName === "INPUT";
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!speechRecognitionSupported) return;
       if (e.code === "Space" && !inputFocused() && !listening && !isLoading) {
         e.preventDefault();
         toggleMic();
@@ -143,14 +150,8 @@ export function ChatInput() {
   const toggleMic = () => {
     const SpeechRecognitionCtor =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionCtor) {
-      addMessage(
-        "assistant",
-        "Speech recognition not supported in this browser. Use Chrome.",
-        "error",
-      );
-      return;
-    }
+    // No Web Speech API (e.g. WebView2): the mic button is hidden, so just bail.
+    if (!SpeechRecognitionCtor) return;
 
     if (listening) {
       recognitionRef.current?.stop();
@@ -209,7 +210,7 @@ export function ChatInput() {
         await api.voiceStart();
       }
       const status = await api.voiceStatus();
-      setVoiceActive(Boolean(status.available));
+      setVoiceActive(Boolean(status.started));
     } catch {
       // Voice pipeline not available
       setVoiceActive(false);
@@ -272,25 +273,27 @@ export function ChatInput() {
         className="glass flex items-center gap-3 px-4 py-3 relative z-10 mx-2"
         style={{ borderRadius: "24px", backdropFilter: "blur(40px) saturate(2)", boxShadow: "0 20px 40px rgba(0,0,0,0.8)" }}
       >
-        {/* Mic button */}
-        <button
-          onClick={toggleMic}
-          className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all flex-shrink-0"
-          style={{
-            background: listening
-              ? "color-mix(in srgb, var(--j-red) 15%, transparent)"
-              : "color-mix(in srgb, var(--j-cyan) 8%, transparent)",
-            color: listening ? "var(--j-red)" : "var(--j-cyan)",
-            border: `1px solid ${
-              listening
-                ? "color-mix(in srgb, var(--j-red) 20%, transparent)"
-                : "var(--j-border-glow)"
-            }`,
-          }}
-          title={listening ? "Stop listening" : "Start voice input"}
-        >
-          {listening ? "\u25FC" : "\uD83C\uDFA4"}
-        </button>
+        {/* Mic button \u2014 hidden when the Web Speech API is unavailable (WebView2) */}
+        {speechRecognitionSupported && (
+          <button
+            onClick={toggleMic}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg transition-all flex-shrink-0"
+            style={{
+              background: listening
+                ? "color-mix(in srgb, var(--j-red) 15%, transparent)"
+                : "color-mix(in srgb, var(--j-cyan) 8%, transparent)",
+              color: listening ? "var(--j-red)" : "var(--j-cyan)",
+              border: `1px solid ${
+                listening
+                  ? "color-mix(in srgb, var(--j-red) 20%, transparent)"
+                  : "var(--j-border-glow)"
+              }`,
+            }}
+            title={listening ? "Stop listening" : "Start voice input"}
+          >
+            {listening ? "\u25FC" : "\uD83C\uDFA4"}
+          </button>
+        )}
 
         {/* JARVIS backend voice toggle */}
         <button
