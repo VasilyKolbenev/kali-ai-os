@@ -10,6 +10,38 @@ multiprocessing.freeze_support()
 import os
 import sys
 
+
+def _acquire_single_instance_lock(lock_path: str) -> int | None:
+    """Hold an exclusive OS lock on ``lock_path`` for the process lifetime.
+
+    The returned fd is kept open forever: the OS releases the lock on ANY
+    process death (crash, TerminateProcess), so stale locks cannot exist and
+    the PID-reuse lottery of the old liveness check is gone. The file content
+    (our PID) is informational only — the lock itself is the byte-range lock.
+
+    Args:
+        lock_path: Path to the lock file (created if missing).
+
+    Returns:
+        The open fd holding the lock, or None if another live instance
+        already holds it.
+    """
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
+
 # Prevent torch/OMP/MKL from spawning worker threads in frozen mode
 if hasattr(sys, "_MEIPASS"):
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -37,34 +69,34 @@ if hasattr(sys, "_MEIPASS"):
     os.environ["HF_HOME"] = os.path.normpath(_hf_cache)
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
-    # Lock file to prevent multiple instances
+    # Single instance: exclusive lock held for the whole process lifetime.
     _lock_path = os.path.join(
         os.environ.get("APPDATA", os.path.dirname(sys.executable)),
         "KALI", "kali-backend.lock",
     )
-    os.makedirs(os.path.dirname(_lock_path), exist_ok=True)
-    try:
-        # Try to create lock file exclusively
-        _lock_fd = os.open(_lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(_lock_fd, str(os.getpid()).encode())
-        os.close(_lock_fd)
-    except FileExistsError:
-        # Lock exists — check if the other process is alive
+    _lock_fd = _acquire_single_instance_lock(_lock_path)
+    if _lock_fd is None:
+        # Logging isn't configured this early — leave a breadcrumb in the
+        # usual log file so a refused start is diagnosable, then exit.
         try:
-            with open(_lock_path) as f:
-                old_pid = int(f.read().strip())
-            # Check if process with that PID is running
-            os.kill(old_pid, 0)
-            # Process alive — exit silently
-            sys.exit(0)
-        except (ValueError, OSError, ProcessLookupError):
-            # Stale lock — overwrite it
-            with open(_lock_path, "w") as f:
-                f.write(str(os.getpid()))
+            from datetime import datetime
+            _log_dir = os.path.join(os.environ.get("APPDATA", "."), "KALI", "logs")
+            os.makedirs(_log_dir, exist_ok=True)
+            with open(
+                os.path.join(_log_dir, "kali-backend.log"), "a", encoding="utf-8"
+            ) as _f:
+                _f.write(
+                    f"{datetime.now():%Y-%m-%d %H:%M:%S,000} [WARNING] "
+                    f"kernel.entry: another instance holds {_lock_path}; exiting\n"
+                )
+        except OSError:
+            pass
+        sys.exit(0)
 
     import atexit
     def _remove_lock() -> None:
         try:
+            os.close(_lock_fd)
             os.unlink(_lock_path)
         except OSError:
             pass
