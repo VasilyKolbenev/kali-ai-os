@@ -20,16 +20,20 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
   String _voiceState = "idle";
   String _transcript = "";
   late AnimationController _pulseController;
+  // Captured in initState so dispose() can stop recording without touching
+  // `ref` after the widget is gone.
+  late final AudioRecorderService _recorder;
 
   @override
   void initState() {
     super.initState();
-    
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
 
+    _recorder = ref.read(audioRecorderProvider);
     final wsClient = ref.read(wsClientProvider);
     final audioPlayer = ref.read(audioPlayerProvider);
 
@@ -50,21 +54,34 @@ class _VoiceScreenState extends ConsumerState<VoiceScreen> with SingleTickerProv
 
   @override
   void dispose() {
+    // The recorder is a singleton — stop it so it doesn't keep streaming the
+    // mic after the user leaves the Voice tab. Use the ref captured in
+    // initState; touching `ref` here would be unsafe.
+    _recorder.stopRecording();
+    _voiceState = "idle";
     _pulseController.dispose();
     super.dispose();
   }
 
   void _toggleMic() async {
-    final recorder = ref.read(audioRecorderProvider);
     if (_voiceState == "idle") {
-      recorder.startRecording();
+      final started = await _recorder.startRecording();
+      if (!mounted) return;
+      if (!started) {
+        // Mic permission denied — keep the orb idle and tell the user.
+        final t = L10n.of(ref);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.micPermissionRequired)),
+        );
+        return;
+      }
       ref.read(wsClientProvider).send('voice.state', {'state': 'listening'});
       setState(() => _voiceState = "listening");
     } else {
-      await recorder.stopRecording();
+      await _recorder.stopRecording();
       ref.read(audioPlayerProvider).stop();
       ref.read(wsClientProvider).send('voice.state', {'state': 'idle'});
-      setState(() => _voiceState = "idle");
+      if (mounted) setState(() => _voiceState = "idle");
     }
   }
 

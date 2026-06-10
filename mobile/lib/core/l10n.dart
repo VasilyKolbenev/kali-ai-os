@@ -115,6 +115,8 @@ class L10n {
   // ── Generic ──
   String get share => _t({'ru': '\u041f\u043e\u0434\u0435\u043b\u0438\u0442\u044c\u0441\u044f', 'en': 'Share', 'es': 'Compartir', 'zh': '\u5206\u4eab', 'de': 'Teilen'});
   String error(String e) => _t({'ru': '\u041e\u0448\u0438\u0431\u043a\u0430: $e', 'en': 'Error: $e', 'es': 'Error: $e', 'zh': '\u9519\u8bef: $e', 'de': 'Fehler: $e'});
+  String get retry => _t({'ru': '\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c', 'en': 'Retry', 'es': 'Reintentar', 'zh': '\u91cd\u8bd5', 'de': 'Wiederholen'});
+  String get micPermissionRequired => _t({'ru': '\u041d\u0443\u0436\u0435\u043d \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443', 'en': 'Microphone permission is required', 'es': 'Se requiere permiso del micr\u00f3fono', 'zh': '\u9700\u8981\u9ea6\u514b\u98ce\u6743\u9650', 'de': 'Mikrofonberechtigung erforderlich'});
 
   // ── Internal ──
   String _t(Map<String, String> map) => map[_locale] ?? map['en'] ?? '';

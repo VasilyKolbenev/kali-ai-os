@@ -13,16 +13,31 @@ class WebSocketClient {
 
   bool get isConnected => _channel != null;
 
-  void connect(String ipAddress) {
-    if (_channel != null) return;
-    
+  /// Opens a WebSocket to the Desktop KALI (Rust proxy on port 3006).
+  ///
+  /// Awaits the real handshake ([WebSocketChannel.ready]) with a 5s timeout so
+  /// callers learn whether the server is actually reachable.
+  ///
+  /// Returns `true` on a confirmed connection, `false` otherwise.
+  Future<bool> connect(String ipAddress) async {
+    // Already connected to the same address — nothing to do.
+    if (_channel != null && _serverIp == ipAddress) return true;
+    // Connected to a different address — drop the old socket first.
+    if (_channel != null) {
+      _channel!.sink.close();
+      _channel = null;
+    }
+
     _serverIp = ipAddress;
-    
+
     // Default to port 3006 for Desktop KALI (Rust proxy)
     final wsUrl = Uri.parse('ws://$ipAddress:3006/ws');
-    
+
     try {
-      _channel = WebSocketChannel.connect(wsUrl);
+      final channel = WebSocketChannel.connect(wsUrl);
+      // Wait for the actual handshake before reporting success.
+      await channel.ready.timeout(const Duration(seconds: 5));
+      _channel = channel;
       _channel!.stream.listen(
         (message) {
           if (onMessage != null) {
@@ -47,11 +62,12 @@ class WebSocketClient {
       );
       log("WS Connected to $wsUrl", name: 'WebSocketClient');
       _reconnectAttempts = 0; // reset on successful connection
+      return true;
     } catch (e) {
       log("WS Connection failed: $e", name: 'WebSocketClient');
       _channel = null;
       _scheduleReconnect();
-      rethrow;
+      return false;
     }
   }
 
@@ -62,10 +78,10 @@ class WebSocketClient {
     final delay = (1 << _reconnectAttempts).clamp(1, 10);
     log("Scheduling WS reconnect in $delay seconds...", name: 'WebSocketClient');
     
-    Future.delayed(Duration(seconds: delay), () {
+    Future.delayed(Duration(seconds: delay), () async {
       if (_serverIp != null && _channel == null) {
         _reconnectAttempts++;
-        connect(_serverIp!);
+        await connect(_serverIp!);
       }
     });
   }

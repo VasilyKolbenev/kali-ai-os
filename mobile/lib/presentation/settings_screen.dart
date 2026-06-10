@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:dio/dio.dart';
 import 'dart:ui';
 import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/l10n.dart';
+import '../core/http_client.dart';
+import '../core/websocket_client.dart';
 import 'connection_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -16,7 +17,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  final Dio _dio = Dio();
   bool _isLoading = true;
   String? _error;
   
@@ -64,7 +64,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
 
     try {
-      final response = await _dio.get('http://$ip:3006/config');
+      final response = await ref.read(dioProvider).get('http://$ip:3006/config');
       if (response.statusCode == 200) {
         final data = response.data;
         setState(() {
@@ -96,7 +96,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (ip == null) return;
     final t = L10n.of(ref);
     try {
-      await _dio.patch(
+      await ref.read(dioProvider).patch(
         'http://$ip:3006/config',
         data: {
           category: {
@@ -283,6 +283,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     const SizedBox(height: 48),
                     ElevatedButton.icon(
                       onPressed: () {
+                        ref.read(wsClientProvider).disconnect();
                         ref.read(serverIpProvider.notifier).state = null;
                         Navigator.of(context).pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const ConnectionScreen()),

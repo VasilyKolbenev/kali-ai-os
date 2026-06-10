@@ -15,9 +15,13 @@ class AudioRecorderService {
 
   AudioRecorderService(this.ref);
 
-  Future<void> startRecording() async {
-    if (_isRecording) return;
-    
+  /// Starts streaming microphone audio to KALI over the WebSocket.
+  ///
+  /// Returns `true` once capture is running, or `false` if the microphone
+  /// permission was denied (the caller should surface this to the user).
+  Future<bool> startRecording() async {
+    if (_isRecording) return true;
+
     if (await _audioRecorder.hasPermission()) {
       _isRecording = true;
       final stream = await _audioRecorder.startStream(RecordConfig(
@@ -25,9 +29,9 @@ class AudioRecorderService {
         sampleRate: 16000,
         numChannels: 1,
       ));
-      
+
       final wsClient = ref.read(wsClientProvider);
-      
+
       _audioStreamSub = stream.listen((data) {
         if (wsClient.isConnected) {
           final base64Audio = base64Encode(data);
@@ -35,8 +39,10 @@ class AudioRecorderService {
         }
       });
       log("Started streaming audio to KALI.", name: 'AudioRecorder');
+      return true;
     } else {
       log("Microphone permission denied.", name: 'AudioRecorder');
+      return false;
     }
   }
 

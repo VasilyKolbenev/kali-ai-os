@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:dio/dio.dart';
 import 'dart:ui';
 import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/l10n.dart';
+import '../core/http_client.dart';
 
 class AgentModel {
   final String name;
@@ -101,7 +101,6 @@ class _InstalledTab extends ConsumerStatefulWidget {
 }
 
 class _InstalledTabState extends ConsumerState<_InstalledTab> {
-  final Dio _dio = Dio();
   List<AgentModel> _agents = [];
   bool _isLoading = true;
   String? _error;
@@ -114,11 +113,23 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
 
   Future<void> _fetchAgents() async {
     final ip = ref.read(serverIpProvider);
-    if (ip == null) return;
+    if (ip == null) {
+      setState(() {
+        _error = "not_connected";
+        _isLoading = false;
+      });
+      return;
+    }
 
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    final dio = ref.read(dioProvider);
     try {
-      final allResponse = await _dio.get('http://$ip:3006/agents');
-      final runningResponse = await _dio.get('http://$ip:3006/agents/running');
+      final allResponse = await dio.get('http://$ip:3006/agents');
+      final runningResponse = await dio.get('http://$ip:3006/agents/running');
 
       if (allResponse.statusCode == 200 && runningResponse.statusCode == 200) {
         final List<dynamic> allData = allResponse.data;
@@ -153,7 +164,7 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
 
     try {
       final endpoint = value ? 'load' : 'unload';
-      final response = await _dio.post('http://$ip:3006/agents/${agent.name}/$endpoint');
+      final response = await ref.read(dioProvider).post('http://$ip:3006/agents/${agent.name}/$endpoint');
       
       if (response.statusCode != 200) {
         setState(() => agent.enabled = !value);
@@ -174,7 +185,10 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
     final t = L10n.of(ref);
 
     if (_isLoading) return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
-    if (_error != null) return Center(child: Text(t.error(_error!), style: const TextStyle(color: Colors.redAccent)));
+    if (_error != null) {
+      final message = _error == "not_connected" ? t.notConnected : t.error(_error!);
+      return _ErrorRetry(message: message, onRetry: _fetchAgents);
+    }
     if (_agents.isEmpty) return Center(child: Text(t.noAgents, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: AppTheme.textSecondary)));
 
     return ListView.builder(
@@ -254,7 +268,6 @@ class _DiscoverTab extends ConsumerStatefulWidget {
 }
 
 class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
-  final Dio _dio = Dio();
   List<CatalogEntryModel> _catalog = [];
   bool _isLoading = true;
   String? _error;
@@ -267,10 +280,21 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
 
   Future<void> _fetchCatalog() async {
     final ip = ref.read(serverIpProvider);
-    if (ip == null) return;
+    if (ip == null) {
+      setState(() {
+        _error = "not_connected";
+        _isLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
 
     try {
-      final response = await _dio.get('http://$ip:3006/skills/catalog');
+      final response = await ref.read(dioProvider).get('http://$ip:3006/skills/catalog');
       if (response.statusCode == 200) {
         final data = response.data['results'] as List<dynamic>;
         setState(() {
@@ -294,7 +318,7 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t.installing(skill.name))));
 
     try {
-      final response = await _dio.post(
+      final response = await ref.read(dioProvider).post(
         'http://$ip:3006/skills/install',
         data: {
           'source_id': skill.sourceId,
@@ -325,7 +349,10 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
     final t = L10n.of(ref);
 
     if (_isLoading) return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
-    if (_error != null) return Center(child: Text(t.error(_error!), style: const TextStyle(color: Colors.redAccent)));
+    if (_error != null) {
+      final message = _error == "not_connected" ? t.notConnected : t.error(_error!);
+      return _ErrorRetry(message: message, onRetry: _fetchCatalog);
+    }
     if (_catalog.isEmpty) return Center(child: Text(t.noCatalog, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: AppTheme.textSecondary)));
 
     return ListView.builder(
@@ -409,6 +436,40 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
           ),
         ).animate().fadeIn(delay: Duration(milliseconds: 100 * index)).slideY(begin: 0.1);
       },
+    );
+  }
+}
+
+/// Centered error message with a retry button, shared by the store tabs.
+class _ErrorRetry extends ConsumerWidget {
+  const _ErrorRetry({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = L10n.of(ref);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.redAccent),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary),
+            label: Text(t.retry, style: const TextStyle(color: AppTheme.primary)),
+          ),
+        ],
+      ),
     );
   }
 }

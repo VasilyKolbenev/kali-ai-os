@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -15,7 +16,10 @@ class ConnectionScreen extends ConsumerStatefulWidget {
 }
 
 class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
-  final TextEditingController _ipController = TextEditingController(text: '10.0.2.2');
+  // Prefill the emulator loopback only in debug; on a real phone the user
+  // enters their Desktop's LAN IP (e.g. 192.168.x.x).
+  final TextEditingController _ipController =
+      TextEditingController(text: kDebugMode ? '10.0.2.2' : '');
   bool _isConnecting = false;
   String? _error;
 
@@ -36,12 +40,10 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     ref.read(serverIpProvider.notifier).state = ip;
 
     try {
-      wsClient.connect(ip);
-      
-      // Give it a moment to connect
-      await Future.delayed(const Duration(milliseconds: 500));
-      
-      if (wsClient.isConnected && mounted) {
+      final connected = await wsClient.connect(ip);
+
+      if (!mounted) return;
+      if (connected) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const MainScreen()),
         );
@@ -101,6 +103,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 decoration: InputDecoration(
                   labelText: t.connectHint,
                   labelStyle: const TextStyle(color: AppTheme.textSecondary),
+                  hintText: '192.168.x.x',
+                  hintStyle: const TextStyle(color: AppTheme.textDim),
                   errorText: _error,
                   border: const OutlineInputBorder(),
                   filled: true,
