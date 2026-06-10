@@ -8,10 +8,10 @@ type AgentState = "idle" | "creating" | "ready" | "error";
 
 const STARTER_EXAMPLES = [
   "напомни пить воду каждые 2 часа",
-  "дневник настроения вечером",
-  "трекер трат по скринам чеков",
-  "погода утром в 8:00",
-  "список продуктов по фото холодильника",
+  "веди дневник настроения вечером",
+  "считай выпитые чашки кофе за день",
+  "напоминай делать зарядку каждое утро",
+  "уведоми, когда пора сделать перерыв",
 ];
 
 export function FirstAgentStep() {
@@ -33,7 +33,12 @@ export function FirstAgentStep() {
       setTimeout(() => advance(), 1500);
     } catch (e) {
       setState("error");
-      setMessage(e instanceof Error ? e.message : "unknown error");
+      const raw = e instanceof Error ? e.message : "";
+      setMessage(
+        raw.includes("pilot scope") || raw.includes("intent: agent")
+          ? "Пока я делаю простые навыки — напоминания, трекеры, дневники. Опиши задачу попроще или нажми «Пропустить»."
+          : "Не получилось создать прямо сейчас. Попробуй другой пример или пропусти.",
+      );
     }
   }
 
