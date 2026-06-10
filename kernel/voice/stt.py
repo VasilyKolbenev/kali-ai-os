@@ -47,9 +47,9 @@ class SpeechToText:
         import os
 
         # Use project-local HF cache to avoid Windows symlink issues
-        hf_cache = os.path.join(
+        hf_cache = os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "..", ".hf_cache",
-        )
+        ))
         os.makedirs(hf_cache, exist_ok=True)
         os.environ.setdefault("HF_HOME", hf_cache)
         os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"

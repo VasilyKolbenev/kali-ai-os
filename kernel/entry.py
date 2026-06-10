@@ -19,6 +19,24 @@ if hasattr(sys, "_MEIPASS"):
     # Tell torch to use single thread for intra-op parallelism
     os.environ.setdefault("TORCH_NUM_THREADS", "1")
 
+    # HuggingFace cache: a NORMALIZED absolute path under _internal (no ".."
+    # segments). Frozen Python raises [Errno 22] traversing HF snapshot symlinks
+    # when the cache path contains ".." (as the old __file__-relative path did),
+    # which silently broke the F5 vocoder (vocos) and Whisper STT. Set it here,
+    # before any HF-using import, so every code path agrees. Fall back to a
+    # per-user dir if the install dir is read-only (all-users install).
+    _hf_cache = os.path.join(sys._MEIPASS, ".hf_cache")
+    try:
+        os.makedirs(_hf_cache, exist_ok=True)
+    except OSError:
+        _hf_cache = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.dirname(sys.executable)),
+            "KALI", ".hf_cache",
+        )
+        os.makedirs(_hf_cache, exist_ok=True)
+    os.environ["HF_HOME"] = os.path.normpath(_hf_cache)
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
     # Lock file to prevent multiple instances
     _lock_path = os.path.join(
         os.environ.get("APPDATA", os.path.dirname(sys.executable)),
