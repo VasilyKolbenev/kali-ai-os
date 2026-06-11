@@ -19,10 +19,10 @@ MODELS_DIR = models_dir()
 # RVC-stack remnants (RVC retired 2026-04-22): 706 MB of dead first-run
 # downloads, and the HuBERT URL 404s at every startup with a missing file.
 REQUIRED_MODELS = {
-    "f5_russian_v4_winter.safetensors": {
-        "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/f5_russian_v4_winter.safetensors",
-        "size_mb": 1200,
-        "description": "F5-TTS Core Voice Model",
+    "f5_russian_accent_tune.safetensors": {
+        "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/F5TTS_v1_Base_accent_tune/model_last_inference.safetensors",
+        "size_mb": 1350,
+        "description": "F5-TTS Core Voice Model (accent-tuned: honors stress marks)",
     },
     "jarvis_ref_v2.wav": {
         "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/jarvis_ref_v2.wav",

@@ -105,7 +105,10 @@ def _checkpoint_paths() -> tuple[Path, Path]:
     the models dir) — used for A/B-testing alternative fine-tunes, e.g. the
     accent_tune variant that honors RUAccent '+' stress marks.
     """
-    ckpt_name = os.environ.get("KALI_F5_CHECKPOINT", "f5_russian_v4_winter.safetensors")
+    # accent_tune is the default since 2026-06-11: it honors RUAccent '+'
+    # stress marks (A/B confirmed by ear: «гот+ов» vs «г+отов» differ, timbre
+    # unchanged), while v4_winter ignored them («гОтов» complaints).
+    ckpt_name = os.environ.get("KALI_F5_CHECKPOINT", "f5_russian_accent_tune.safetensors")
     local_ckpt = MODELS_DIR / ckpt_name
     local_vocab = MODELS_DIR / "f5_russian_vocab.txt"
     if local_ckpt.exists() and local_vocab.exists():
@@ -115,7 +118,7 @@ def _checkpoint_paths() -> tuple[Path, Path]:
     from huggingface_hub import hf_hub_download
     ckpt = hf_hub_download(
         repo_id="Misha24-10/F5-TTS_RUSSIAN",
-        filename="F5TTS_v1_Base_v4_winter/model_212000.safetensors",
+        filename="F5TTS_v1_Base_accent_tune/model_last_inference.safetensors",
     )
     vocab = hf_hub_download(
         repo_id="Misha24-10/F5-TTS_RUSSIAN",
