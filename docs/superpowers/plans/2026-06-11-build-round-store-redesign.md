@@ -78,6 +78,8 @@
 | 10 | **Single-source version** (read app version from tauri config at build) | Prevents BLD-4 recurring | S |
 | 11 | **DEV-1**: isolate ML/audio tests into subprocess (pytest native AV) | Unblocks full-suite CI | M |
 | 12 | Audit batch D leftovers (KER-4/5, UI-6..9, MOB-7..12, RUS-1..4, BLD-5/6/7/9) | Hygiene | M–L |
+| 13 | **Memory dedup/supersede + «Джарвис знает обо мне»**: contradictions currently coexist (Moscow-vs-Samara), facts append-only; Settings page to view/delete facts (trust+privacy) | Correctness of the memory moat | M |
+| 14 | **Multi-user memory / Speaker-ID (семейный сценарий)** — NEW VERSION item per Vasily 2026-06-11: one install currently = one shared context; distinguish household voices → individual fact stores. Builds on #13 schema migration | Family scenario; trust moat extension | L |
 
 Recommended next round: 1 + 2 + 4 (one coherent UX continuation), with 5 + 6
 as the parallel «friend-install hardening» round.
