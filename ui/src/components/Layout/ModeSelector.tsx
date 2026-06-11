@@ -1,15 +1,15 @@
 import { useAppStore, type AppMode } from "../../stores/appStore";
 
 const modes: { id: AppMode; label: string; icon: string; devOnly?: boolean }[] = [
-  { id: "focus", label: "Focus", icon: "\u29BF" },
-  { id: "dashboard", label: "Dash", icon: "\u25EB" },
-  { id: "agents", label: "Agents", icon: "\u2B21" },
-  { id: "nightstand", label: "Night", icon: "\u263E" },
-  { id: "store", label: "Store", icon: "\u25A6" },
-  { id: "activity", label: "Activity", icon: "\u25F0" },
-  { id: "builder", label: "Builder", icon: "\u2756" },
-  { id: "canvas", label: "Canvas", icon: "\u25A3" }, // unicode square with cross or similar (e.g., 🎨 "\uD83C\uDFA8" but we use monochrome symbols, so let's use "\u25A3" square with dot or similar)
-  { id: "settings", label: "Settings", icon: "\u2699" },
+  { id: "focus", label: "Джарвис", icon: "\u29BF" },
+  { id: "dashboard", label: "Сводка", icon: "\u25EB" },
+  { id: "agents", label: "Агенты", icon: "\u2B21" },
+  { id: "nightstand", label: "Ночной режим", icon: "\u263E" },
+  { id: "store", label: "Магазин", icon: "\u25A6" },
+  { id: "activity", label: "Активность", icon: "\u25F0" },
+  { id: "builder", label: "Создать голосом", icon: "\u2756" },
+  { id: "canvas", label: "Канвас", icon: "\u25A3" }, // unicode square with cross or similar (e.g., 🎨 "\uD83C\uDFA8" but we use monochrome symbols, so let's use "\u25A3" square with dot or similar)
+  { id: "settings", label: "Настройки", icon: "\u2699" },
   { id: "showcase", label: "Showcase", icon: "\u25C8", devOnly: true },
 ];
 

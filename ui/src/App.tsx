@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useAppStore } from "./stores/appStore";
 import { useWebSocket } from "./api/websocket";
 import { useOnboardingGate } from "./hooks/useOnboardingGate";
@@ -17,10 +18,27 @@ import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
 import { AnimatePresence, motion } from "framer-motion";
 
+/** True only after the kernel has been unreachable for a few seconds —
+    avoids flashing the banner during normal startup/reconnect blips. */
+function useKernelOffline(graceMs = 3000): boolean {
+  const connected = useAppStore((s) => s.kernelConnected);
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    if (connected) {
+      setOffline(false);
+      return;
+    }
+    const timer = setTimeout(() => setOffline(true), graceMs);
+    return () => clearTimeout(timer);
+  }, [connected, graceMs]);
+  return offline;
+}
+
 export default function App() {
   const mode = useAppStore((s) => s.mode);
   useWebSocket();
   const { loading: onboardingLoading, gated: onboardingGated } = useOnboardingGate();
+  const kernelOffline = useKernelOffline();
 
   if (onboardingLoading) {
     return (
@@ -56,6 +74,22 @@ export default function App() {
       />
 
       <Sidebar />
+
+      {/* Kernel connectivity — plain words instead of raw fetch errors */}
+      {kernelOffline && (
+        <div
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl
+            text-sm flex items-center gap-2 border backdrop-blur-md"
+          style={{
+            color: "var(--j-amber, #f59e0b)",
+            borderColor: "color-mix(in srgb, var(--j-amber, #f59e0b) 40%, transparent)",
+            background: "rgba(0,0,0,0.6)",
+          }}
+        >
+          <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
+          Джарвис просыпается — восстанавливаю связь… Если это надолго, перезапусти приложение.
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         {/* mode="wait" deadlocks if a mode view contains a shared `layoutId`
