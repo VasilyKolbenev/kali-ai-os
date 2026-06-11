@@ -4,11 +4,35 @@ import { useAppStore } from "../../stores/appStore";
 import { CATEGORIES, searchCurated, type CategoryId, type CuratedEntry } from "./curated";
 import { StoreCard, type CardState } from "./StoreCards";
 
-/** Default storefront: hero + life categories + human cards. */
+/** Hero tile — creation is the headline action of the Мастерская. */
+export function CreateByVoiceHero() {
+  return (
+    <button
+      onClick={() => useAppStore.getState().setMode("builder")}
+      className="w-full mb-6 p-6 rounded-2xl text-left relative overflow-hidden group
+        border border-[var(--j-cyan)]/30 bg-gradient-to-r from-[var(--j-cyan)]/15 to-[var(--j-purple)]/10
+        hover:from-[var(--j-cyan)]/25 hover:to-[var(--j-purple)]/15 transition-all"
+    >
+      <div className="flex items-center gap-4">
+        <div className="w-12 h-12 rounded-full bg-[var(--j-cyan)]/20 flex items-center justify-center
+          group-hover:scale-110 transition-transform">
+          <Mic className="w-6 h-6 text-[var(--j-cyan)]" />
+        </div>
+        <div>
+          <div className="text-lg font-medium text-white">Создай своего помощника голосом</div>
+          <div className="text-sm text-white/50 mt-0.5">
+            Расскажи, что нужно — Джарвис соберёт это сам. Без программирования.
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/** «Витрина» — life categories over human cards. */
 export function CuratedStore({
   category, onCategory, searchQuery,
   entries, entryState, onPrimary, onSetup,
-  community, communityLoading, installedNames, installingName, onInstallCommunity,
 }: {
   category: CategoryId;
   onCategory: (id: CategoryId) => void;
@@ -17,11 +41,6 @@ export function CuratedStore({
   entryState: (entry: CuratedEntry) => CardState;
   onPrimary: (entry: CuratedEntry) => void;
   onSetup: (entry: CuratedEntry) => void;
-  community: CatalogSkill[];
-  communityLoading: boolean;
-  installedNames: Set<string>;
-  installingName: string | null;
-  onInstallCommunity: (skill: CatalogSkill) => void;
 }) {
   const searched = searchCurated(entries, searchQuery);
   const visible = category === "all"
@@ -30,28 +49,8 @@ export function CuratedStore({
 
   return (
     <div>
-      {/* Hero: creation is the headline action of the store */}
-      <button
-        onClick={() => useAppStore.getState().setMode("builder")}
-        className="w-full mb-6 p-6 rounded-2xl text-left relative overflow-hidden group
-          border border-[var(--j-cyan)]/30 bg-gradient-to-r from-[var(--j-cyan)]/15 to-[var(--j-purple)]/10
-          hover:from-[var(--j-cyan)]/25 hover:to-[var(--j-purple)]/15 transition-all"
-      >
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-[var(--j-cyan)]/20 flex items-center justify-center
-            group-hover:scale-110 transition-transform">
-            <Mic className="w-6 h-6 text-[var(--j-cyan)]" />
-          </div>
-          <div>
-            <div className="text-lg font-medium text-white">Создай своего помощника голосом</div>
-            <div className="text-sm text-white/50 mt-0.5">
-              Расскажи, что нужно — Джарвис соберёт это сам. Без программирования.
-            </div>
-          </div>
-        </div>
-      </button>
+      <CreateByVoiceHero />
 
-      {/* Life categories */}
       <div className="flex flex-wrap gap-2 mb-6">
         {CATEGORIES.map((c) => (
           <button
@@ -68,16 +67,7 @@ export function CuratedStore({
         ))}
       </div>
 
-      {category === "community" ? (
-        <CommunityList
-          skills={community}
-          loading={communityLoading}
-          installedNames={installedNames}
-          installingName={installingName}
-          onInstall={onInstallCommunity}
-          searchQuery={searchQuery}
-        />
-      ) : visible.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="glass p-8 text-center rounded-2xl text-sm text-white/40">
           Ничего не нашлось. Попробуй другое слово — или просто скажи Джарвису,
           что нужно, и он создаст это голосом.
@@ -99,8 +89,8 @@ export function CuratedStore({
   );
 }
 
-/** Community skills — published by KALI users, shared openly. */
-function CommunityList({
+/** «Сообщество» — skills published by KALI users, shared openly. */
+export function CommunitySection({
   skills, loading, installedNames, installingName, onInstall, searchQuery,
 }: {
   skills: CatalogSkill[];

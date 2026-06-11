@@ -18,8 +18,7 @@ export type CategoryId =
   | "money"
   | "news"
   | "chat"
-  | "docs"
-  | "community";
+  | "docs";
 
 export interface Category {
   id: CategoryId;
@@ -36,7 +35,6 @@ export const CATEGORIES: Category[] = [
   { id: "news", label: "Новости и погода", emoji: "🌤" },
   { id: "chat", label: "Общение", emoji: "💬" },
   { id: "docs", label: "Документы", emoji: "📄" },
-  { id: "community", label: "Сообщество", emoji: "🤝" },
 ];
 
 export interface SetupGuide {
@@ -54,7 +52,7 @@ export interface CuratedEntry {
   /** One line: what the user GETS, not what the tech does. */
   benefit: string;
   emoji: string;
-  category: Exclude<CategoryId, "all" | "community">;
+  category: Exclude<CategoryId, "all">;
   kind: "agent" | "skill";
   /** kind=agent: name in /agents (built-in, works offline). */
   agentName?: string;

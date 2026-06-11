@@ -1,19 +1,17 @@
 import { useAppStore, type AppMode } from "../../stores/appStore";
-
-const modes: { id: AppMode; label: string; icon: string; devOnly?: boolean }[] = [
-  { id: "focus", label: "Джарвис", icon: "\u29BF" },
-  { id: "dashboard", label: "Сводка", icon: "\u25EB" },
-  { id: "agents", label: "Агенты", icon: "\u2B21" },
-  { id: "nightstand", label: "Ночной режим", icon: "\u263E" },
-  { id: "store", label: "Магазин", icon: "\u25A6" },
-  { id: "activity", label: "Активность", icon: "\u25F0" },
-  { id: "builder", label: "Создать голосом", icon: "\u2756" },
-  { id: "canvas", label: "Канвас", icon: "\u25A3" }, // unicode square with cross or similar (e.g., 🎨 "\uD83C\uDFA8" but we use monochrome symbols, so let's use "\u25A3" square with dot or similar)
-  { id: "settings", label: "Настройки", icon: "\u2699" },
-  { id: "showcase", label: "Showcase", icon: "\u25C8", devOnly: true },
-];
-
 import { motion } from "framer-motion";
+
+// Deliberately minimal for the non-tech audience — everything removed from
+// here stays reachable from inside these surfaces or by voice: Сводка absorbs
+// Активность + живые виджеты Канваса; Мастерская (Мои · Витрина · Сообщество)
+// absorbs Агенты and hosts «Создать голосом»; Ночной режим becomes a state.
+const modes: { id: AppMode; label: string; icon: string; devOnly?: boolean }[] = [
+  { id: "focus", label: "Джарвис", icon: "⦿" },
+  { id: "dashboard", label: "Сводка", icon: "◫" },
+  { id: "store", label: "Мастерская", icon: "▦" },
+  { id: "settings", label: "Настройки", icon: "⚙" },
+  { id: "showcase", label: "Showcase", icon: "◈", devOnly: true },
+];
 
 export function ModeSelector() {
   const current = useAppStore((s) => s.mode);

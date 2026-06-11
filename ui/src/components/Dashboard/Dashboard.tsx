@@ -11,6 +11,8 @@ import { SpendingWidget } from "./widgets/SpendingWidget";
 import { EnergyWidget } from "./widgets/EnergyWidget";
 import { AgentsWidget } from "./widgets/AgentsWidget";
 import { WeatherWidget } from "./widgets/WeatherWidget";
+import { ActivityWidget } from "./widgets/ActivityWidget";
+import { CanvasSection } from "../Canvas/Canvas";
 import { motion } from "framer-motion";
 
 const container = {
@@ -107,7 +109,7 @@ export function Dashboard() {
     <div className="w-full h-full p-8 overflow-auto">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-baseline gap-3 mb-8">
-          <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>Dashboard</h2>
+          <h2 className="text-lg font-medium" style={{ color: "var(--j-text)" }}>Сводка</h2>
           <span className="mono text-[10px] tracking-widest uppercase" style={{ color: "var(--j-text-muted)" }}>В реальном времени</span>
         </div>
         <motion.div 
@@ -153,7 +155,7 @@ export function Dashboard() {
           </motion.div>
           <motion.div
             variants={item}
-            onClick={() => setMode("agents" as AppMode)}
+            onClick={() => setMode("store" as AppMode)}
             className="cursor-pointer hover:scale-[1.02] transition-transform duration-200"
           >
             <AgentsWidget />
@@ -165,7 +167,16 @@ export function Dashboard() {
           >
             <WeatherWidget />
           </motion.div>
+          <motion.div variants={item}>
+            <ActivityWidget />
+          </motion.div>
         </motion.div>
+
+        {/* Живые виджеты Джарвиса (бывший Канвас) — появляются по голосовой
+            команде, напр. «покажи расходы графиком» */}
+        <div className="mt-8">
+          <CanvasSection hideWhenEmpty />
+        </div>
       </div>
     </div>
   );

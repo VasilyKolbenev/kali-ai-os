@@ -60,7 +60,8 @@ function gridClass(type: string): string {
   return "";
 }
 
-export function Canvas() {
+/** Live widget grid — embeddable (Сводка hosts it below the fixed widgets). */
+export function CanvasSection({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean }) {
   const widgets = useCanvasStore((s) => s.widgets);
   const setWidgets = useCanvasStore((s) => s.setWidgets);
 
@@ -75,6 +76,61 @@ export function Canvas() {
         /* kernel not running — keep empty */
       });
   }, [setWidgets]);
+
+  if (widgets.length === 0 && hideWhenEmpty) return null;
+
+  return (
+    <>
+      {/* Empty state */}
+      {widgets.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass p-12 flex flex-col items-center gap-4"
+        >
+          <div className="text-4xl opacity-40">🎨</div>
+          <div className="mono text-sm text-center" style={{ color: "var(--j-text-dim)" }}>
+            Пока пусто
+          </div>
+          <div
+            className="mono text-[11px] text-center max-w-md leading-relaxed"
+            style={{ color: "var(--j-text-muted)" }}
+          >
+            Скажите <strong style={{ color: "var(--j-cyan)" }}>«Jarvis, покажи расходы за неделю графиком»</strong> или{" "}
+            <strong style={{ color: "var(--j-cyan)" }}>«нарисуй статистику задач»</strong> — и виджеты появятся здесь.
+          </div>
+        </motion.div>
+      )}
+
+      {/* Widget grid */}
+      {widgets.length > 0 && (
+        <motion.div
+          className="grid grid-cols-2 lg:grid-cols-3 gap-4"
+          variants={container}
+          initial="hidden"
+          animate="show"
+        >
+          <AnimatePresence mode="popLayout">
+            {widgets.map((w) => (
+              <motion.div
+                key={w.id}
+                variants={item}
+                layout
+                exit={item.exit}
+                className={`${gridClass(w.type)} hover:scale-[1.01] transition-transform duration-200`}
+              >
+                <WidgetRenderer widget={w} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </motion.div>
+      )}
+    </>
+  );
+}
+
+export function Canvas() {
+  const widgets = useCanvasStore((s) => s.widgets);
 
   return (
     <div className="w-full h-full p-8 overflow-auto">
@@ -104,50 +160,7 @@ export function Canvas() {
           )}
         </div>
 
-        {/* Empty state */}
-        {widgets.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass p-12 flex flex-col items-center gap-4"
-          >
-            <div className="text-4xl opacity-40">🎨</div>
-            <div className="mono text-sm text-center" style={{ color: "var(--j-text-dim)" }}>
-              Canvas пуст
-            </div>
-            <div
-              className="mono text-[11px] text-center max-w-md leading-relaxed"
-              style={{ color: "var(--j-text-muted)" }}
-            >
-              Скажите <strong style={{ color: "var(--j-cyan)" }}>«Jarvis, покажи расходы за неделю графиком»</strong> или{" "}
-              <strong style={{ color: "var(--j-cyan)" }}>«нарисуй статистику задач»</strong> — и виджеты появятся здесь.
-            </div>
-          </motion.div>
-        )}
-
-        {/* Widget grid */}
-        {widgets.length > 0 && (
-          <motion.div
-            className="grid grid-cols-2 lg:grid-cols-3 gap-4"
-            variants={container}
-            initial="hidden"
-            animate="show"
-          >
-            <AnimatePresence mode="popLayout">
-              {widgets.map((w) => (
-                <motion.div
-                  key={w.id}
-                  variants={item}
-                  layout
-                  exit={item.exit}
-                  className={`${gridClass(w.type)} hover:scale-[1.01] transition-transform duration-200`}
-                >
-                  <WidgetRenderer widget={w} />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </motion.div>
-        )}
+        <CanvasSection />
       </div>
     </div>
   );
