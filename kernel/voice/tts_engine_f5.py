@@ -100,9 +100,13 @@ _load_lock = threading.Lock()
 def _checkpoint_paths() -> tuple[Path, Path]:
     """Locate Russian fine-tune checkpoint + vocab.
 
-    Priority: local models dir, then HuggingFace cache.
+    Priority: local models dir, then HuggingFace cache. The checkpoint
+    filename can be overridden via ``KALI_F5_CHECKPOINT`` (filename inside
+    the models dir) — used for A/B-testing alternative fine-tunes, e.g. the
+    accent_tune variant that honors RUAccent '+' stress marks.
     """
-    local_ckpt = MODELS_DIR / "f5_russian_v4_winter.safetensors"
+    ckpt_name = os.environ.get("KALI_F5_CHECKPOINT", "f5_russian_v4_winter.safetensors")
+    local_ckpt = MODELS_DIR / ckpt_name
     local_vocab = MODELS_DIR / "f5_russian_vocab.txt"
     if local_ckpt.exists() and local_vocab.exists():
         return local_ckpt, local_vocab

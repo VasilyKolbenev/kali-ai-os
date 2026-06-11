@@ -15,17 +15,10 @@ logger = logging.getLogger(__name__)
 
 MODELS_DIR = models_dir()
 
+# NOTE: HuBERT (vec-768) and RMVPE entries removed 2026-06-11 — they were
+# RVC-stack remnants (RVC retired 2026-04-22): 706 MB of dead first-run
+# downloads, and the HuBERT URL 404s at every startup with a missing file.
 REQUIRED_MODELS = {
-    "vec-768-layer-12.onnx": {
-        "url": "https://huggingface.co/MidFord327/Hubert-Base-ONNX/resolve/main/vec-768-layer-12.onnx",
-        "size_mb": 361,
-        "description": "HuBERT feature extractor",
-    },
-    "rmvpe.onnx": {
-        "url": "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.onnx",
-        "size_mb": 345,
-        "description": "RMVPE pitch estimator",
-    },
     "f5_russian_v4_winter.safetensors": {
         "url": "https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/resolve/main/f5_russian_v4_winter.safetensors",
         "size_mb": 1200,

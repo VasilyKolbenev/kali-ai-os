@@ -533,6 +533,27 @@ def create_app(
                     logger.info("TTS prewarm: loading F5 models...")
                     await asyncio.to_thread(load_models)
                     logger.info("TTS prewarm: ready")
+
+                # CUDA warmup: the first real synth pays ~2x for kernel
+                # compilation (6.3 s vs 2.9 s for the same-size text in the
+                # live log) — a throwaway micro-synth in the background moves
+                # that cost off the user's first answer. F5 module called
+                # directly so a warmup failure can never trigger the router's
+                # cloud (ElevenLabs) fallback.
+                from kernel.voice.tts_router import PROVIDER_F5, get_provider
+
+                if get_provider() == PROVIDER_F5:
+                    async def _warmup_synth() -> None:
+                        try:
+                            from kernel.voice import tts_engine_f5
+                            await asyncio.to_thread(
+                                tts_engine_f5.generate_audio, "Готов."
+                            )
+                            logger.info("TTS warmup synth: done (first answer is hot)")
+                        except Exception as e:
+                            logger.warning("TTS warmup synth failed (non-fatal): %s", e)
+
+                    app.state._tts_warmup_task = asyncio.create_task(_warmup_synth())
             except Exception as e:
                 import traceback as _tb
                 logger.warning(

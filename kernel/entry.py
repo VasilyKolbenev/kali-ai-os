@@ -69,6 +69,21 @@ if hasattr(sys, "_MEIPASS"):
     os.environ["HF_HOME"] = os.path.normpath(_hf_cache)
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
+    # If the cache already holds the voice-model snapshots, run fully
+    # offline: otherwise every start pings huggingface.co (HEAD/GET version
+    # checks) which slows startup and breaks no-network first runs.
+    _hub_dir = os.path.join(os.environ["HF_HOME"], "hub")
+    _required_snapshots = [
+        os.path.join(_hub_dir, "models--charactr--vocos-mel-24khz", "snapshots"),
+        os.path.join(_hub_dir, "models--Systran--faster-whisper-small", "snapshots"),
+    ]
+    try:
+        if all(os.path.isdir(p) and os.listdir(p) for p in _required_snapshots):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    except OSError:
+        pass  # cache unreadable — stay online, downloads may still work
+
     # Single instance: exclusive lock held for the whole process lifetime.
     _lock_path = os.path.join(
         os.environ.get("APPDATA", os.path.dirname(sys.executable)),
