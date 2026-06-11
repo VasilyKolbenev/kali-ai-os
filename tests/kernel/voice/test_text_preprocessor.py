@@ -30,6 +30,26 @@ class TestPunctuation:
         assert tp._normalize_punctuation("привет!") == "привет!"
 
 
+class TestDecapSentenceStarts:
+    def test_lowercases_text_start(self) -> None:
+        # Capitalized «Готов» reads as the surname Г+отов in the accent
+        # dictionary (гОтов bug); sentence-initial caps carry no meaning
+        # for speech.
+        assert tp._decap_sentence_starts("Готов, сэр.") == "готов, сэр."
+
+    def test_lowercases_after_period(self) -> None:
+        assert tp._decap_sentence_starts("Конечно. Готов помочь.") == "конечно. готов помочь."
+
+    def test_lowercases_after_question_and_exclaim(self) -> None:
+        assert tp._decap_sentence_starts("Да! Хорошо? Понял.") == "да! хорошо? понял."
+
+    def test_keeps_mid_sentence_proper_names(self) -> None:
+        assert tp._decap_sentence_starts("Погода в Самаре хорошая.") == "погода в Самаре хорошая."
+
+    def test_latin_untouched(self) -> None:
+        assert tp._decap_sentence_starts("Open the door.") == "Open the door."
+
+
 class TestAbbreviations:
     def test_te_expansion(self) -> None:
         assert "то есть" in tp._expand_abbreviations("т.е. хорошо")

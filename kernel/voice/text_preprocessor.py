@@ -72,6 +72,23 @@ def _expand_abbreviations(text: str) -> str:
     return text
 
 
+def _decap_sentence_starts(text: str) -> str:
+    """Lowercase ONLY grammatical capitals (sentence-initial letters).
+
+    The accent dictionary is case-sensitive and reads a capitalized
+    sentence-start as a proper name: «Готов, сэр» got marked as the surname
+    Г+отов (гОтов) while «готов» marks correctly as гот+ов. Sentence-initial
+    capitalization carries no meaning for speech, and TTS itself is
+    case-insensitive, so the lowercased text ships to the engine as-is.
+    Mid-sentence capitals (real proper names: Самара, Вася) are untouched.
+    """
+    return re.sub(
+        r"(^|[.!?…]\s+)([А-ЯЁ])",
+        lambda m: m.group(1) + m.group(2).lower(),
+        text,
+    )
+
+
 # Russian number words (0-999)
 _ONES = [
     "", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять",
@@ -152,7 +169,7 @@ def preprocess(text: str) -> str:
         accenter = _get_accenter()
         if accenter is not None:
             try:
-                text = accenter.process_all(text)
+                text = accenter.process_all(_decap_sentence_starts(text))
             except Exception:
                 logger.debug("RUAccent failed mid-text, using pre-accent input")
         return text
