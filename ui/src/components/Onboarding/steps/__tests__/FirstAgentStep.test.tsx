@@ -24,13 +24,15 @@ describe("FirstAgentStep", () => {
     });
   });
 
-  it("renders 5 starter example chips", () => {
+  it("renders 5 skill-template starter chips", () => {
+    // Chips must stay within the skill-only builder pilot scope (reminders /
+    // trackers / diaries) — non-skill requests used to throw a raw error.
     render(<FirstAgentStep />);
     expect(screen.getByText(/напомни пить воду/i)).toBeInTheDocument();
     expect(screen.getByText(/дневник настроения/i)).toBeInTheDocument();
-    expect(screen.getByText(/трекер трат/i)).toBeInTheDocument();
-    expect(screen.getByText(/погода утром/i)).toBeInTheDocument();
-    expect(screen.getByText(/список продуктов/i)).toBeInTheDocument();
+    expect(screen.getByText(/чашки кофе/i)).toBeInTheDocument();
+    expect(screen.getByText(/зарядку/i)).toBeInTheDocument();
+    expect(screen.getByText(/перерыв/i)).toBeInTheDocument();
   });
 
   it("starts builder flow on chip click and stores session id", async () => {
@@ -51,14 +53,15 @@ describe("FirstAgentStep", () => {
     );
   });
 
-  it("shows error when builder rejects", async () => {
+  it("shows a human RU message when builder rejects (no raw errors)", async () => {
     vi.mocked(builderApi.start).mockRejectedValue(new Error("builder offline"));
     const user = userEvent.setup();
     render(<FirstAgentStep />);
     await user.click(screen.getByText(/дневник настроения/i));
     await waitFor(() =>
-      expect(screen.getByText(/builder offline/i)).toBeInTheDocument(),
+      expect(screen.getByText(/не получилось создать/i)).toBeInTheDocument(),
     );
+    expect(screen.queryByText(/builder offline/i)).not.toBeInTheDocument();
   });
 
   it("skip button advances without creating agent", async () => {

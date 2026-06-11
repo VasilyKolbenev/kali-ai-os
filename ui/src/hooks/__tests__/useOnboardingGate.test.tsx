@@ -11,6 +11,7 @@ vi.mock("../../api/client", () => ({
 describe("useOnboardingGate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     useOnboardingStore.setState({
       currentStep: "welcome",
       completed: false,
@@ -29,17 +30,39 @@ describe("useOnboardingGate", () => {
     expect(result.current.gated).toBe(false);
   });
 
-  it("gated=true when onboarding_completed is false or absent", async () => {
+  it("gated=true when a live backend says onboarding incomplete", async () => {
     vi.mocked(api.settings).mockResolvedValue({});
     const { result } = renderHook(() => useOnboardingGate());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.gated).toBe(true);
   });
 
-  it("falls back to gated=true on fetch failure (safer default)", async () => {
+  it("keeps loading on fetch failure instead of re-gating a booting kernel", async () => {
+    // A cold backend boots models for 40-60s; falling back to the wizard
+    // re-asks a returning user for their API key against a dead kernel.
     vi.mocked(api.settings).mockRejectedValue(new Error("net"));
     const { result } = renderHook(() => useOnboardingGate());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.gated).toBe(true);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(result.current.loading).toBe(true);
+  });
+
+  it("recovers from early failures once the backend comes up", async () => {
+    vi.mocked(api.settings)
+      .mockRejectedValueOnce(new Error("booting"))
+      .mockResolvedValue({ onboarding_completed: true });
+    const { result } = renderHook(() => useOnboardingGate());
+    await waitFor(
+      () => expect(result.current.loading).toBe(false),
+      { timeout: 4000 },
+    );
+    expect(result.current.gated).toBe(false);
+  });
+
+  it("skips the gate for a returning user even while the kernel is down", async () => {
+    useOnboardingStore.setState({ completed: true });
+    vi.mocked(api.settings).mockRejectedValue(new Error("net"));
+    const { result } = renderHook(() => useOnboardingGate());
+    expect(result.current.loading).toBe(false);
+    expect(result.current.gated).toBe(false);
   });
 });

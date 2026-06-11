@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 export type OnboardingStep =
   | "welcome"
@@ -47,7 +48,12 @@ interface OnboardingState {
   setModelProgress: (p: ModelProgress) => void;
 }
 
-export const useOnboardingStore = create<OnboardingState>((set, get) => ({
+// `completed` is persisted locally so a returning user NEVER falls back into
+// the wizard while the kernel is still booting (cold start loads voice models
+// for 40-60 s); the kernel-offline banner covers the dead-backend case.
+export const useOnboardingStore = create<OnboardingState>()(
+  persist(
+    (set, get) => ({
   currentStep: "welcome",
   completed: false,
   apiProvider: null,
@@ -89,4 +95,10 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     set((state) => ({
       modelProgress: { ...state.modelProgress, [p.filename]: p },
     })),
-}));
+    }),
+    {
+      name: "kali-onboarding",
+      partialize: (s) => ({ completed: s.completed }),
+    },
+  ),
+);

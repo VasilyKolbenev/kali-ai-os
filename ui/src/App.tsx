@@ -37,13 +37,13 @@ function useKernelOffline(graceMs = 3000): boolean {
 export default function App() {
   const mode = useAppStore((s) => s.mode);
   useWebSocket();
-  const { loading: onboardingLoading, gated: onboardingGated } = useOnboardingGate();
+  const { loading: onboardingLoading, gated: onboardingGated, slow } = useOnboardingGate();
   const kernelOffline = useKernelOffline();
 
   if (onboardingLoading) {
     return (
       <div
-        className="w-full h-screen flex items-center justify-center"
+        className="w-full h-screen flex flex-col items-center justify-center gap-4"
         style={{ background: "var(--j-bg)", color: "var(--j-text-dim)" }}
       >
         <motion.div
@@ -51,8 +51,14 @@ export default function App() {
           transition={{ duration: 1.5, repeat: Infinity }}
           className="glow-text text-lg tracking-widest uppercase font-semibold"
         >
-          Loading KALI...
+          Джарвис запускается…
         </motion.div>
+        {slow && (
+          <div className="text-xs text-center max-w-sm" style={{ color: "var(--j-text-muted)" }}>
+            Первый запуск загружает голосовые модели — это может занять минуту.
+            Если совсем долго, перезапусти приложение.
+          </div>
+        )}
       </div>
     );
   }

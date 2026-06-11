@@ -43,7 +43,14 @@ export function ApiKeyStep() {
       }
     } catch (e) {
       setStatus("invalid");
-      setError(e instanceof Error ? e.message : "unknown error");
+      const msg = e instanceof Error ? e.message : "";
+      // fetch-level failures mean the kernel isn't answering (usually still
+      // booting) — say that in plain words instead of «Failed to fetch».
+      setError(
+        /fetch|network/i.test(msg)
+          ? "Не вижу ядро KALI — оно ещё запускается. Подожди немного и нажми ещё раз."
+          : msg || "Что-то пошло не так. Попробуй ещё раз.",
+      );
     }
   }
 

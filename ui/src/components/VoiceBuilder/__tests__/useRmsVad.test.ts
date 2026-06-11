@@ -5,7 +5,28 @@ import { describe, expect, it, vi } from "vitest";
 import { useRmsVad } from "../useRmsVad";
 
 describe("useRmsVad", () => {
-  it("triggers onSilence after the configured silence duration of low RMS", () => {
+  it("never fires onSilence before any speech frame (empty-audio guard)", () => {
+    // The pre-answer pause must NOT submit empty audio: onSilence is armed
+    // only after at least one above-threshold (speech) frame.
+    vi.useFakeTimers();
+    const onSilence = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRmsVad({ threshold: 0.01, silenceMs: 1500, onSilence }),
+    );
+
+    act(() => {
+      for (let i = 0; i < 40; i++) {
+        result.current.feed(new Float32Array(800).fill(0));
+        vi.advanceTimersByTime(50);
+      }
+    });
+
+    expect(onSilence).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("triggers onSilence after speech followed by the configured silence", () => {
     vi.useFakeTimers();
     const onSilence = vi.fn();
 
@@ -17,8 +38,11 @@ describe("useRmsVad", () => {
       }),
     );
 
-    // Push 40 frames of silence (RMS=0). At 50ms each → 2s wall.
     act(() => {
+      // One speech frame arms the silence detector…
+      result.current.feed(new Float32Array(800).fill(0.5));
+      vi.advanceTimersByTime(50);
+      // …then 40 frames of silence (RMS=0) at 50ms each → 2s wall.
       for (let i = 0; i < 40; i++) {
         result.current.feed(new Float32Array(800).fill(0));
         vi.advanceTimersByTime(50);
