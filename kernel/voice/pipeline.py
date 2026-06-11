@@ -374,12 +374,39 @@ class VoicePipeline:
             )
         )
 
+        # Long-term memory — mirrors remote_pipeline so desktop voice, mobile
+        # voice and chat share ONE memory: known facts prime the system
+        # prompt, and new permanent facts are extracted fire-and-forget.
+        # Before this wiring the desktop voice path neither read nor wrote
+        # facts — Jarvis "forgot" voice users between sessions.
+        lt_memory = (
+            getattr(self._app_state, "long_term_memory", None)
+            if self._app_state
+            else None
+        )
+        system_prompt = None
+        if lt_memory:
+            try:
+                facts_context = await lt_memory.get_user_context_string()
+            except Exception:
+                facts_context = ""
+            if facts_context:
+                from kernel.jarvis_persona import get_prompt
+                system_prompt = get_prompt() + "\n\n" + facts_context
+
         request = LLMRequest(
             text=stt_result.text,
             context=self._context[-10:],
             available_tools=self._tools,
+            system_prompt=system_prompt,
         )
         response = await self._llm.route(request)
+
+        if lt_memory:
+            try:
+                await lt_memory.maybe_extract_and_save_facts(stt_result.text)
+            except Exception as e:
+                logger.warning("Background memory extraction failed: %s", e)
 
         tool_calls_payload = (
             [{"name": tc.name, "args": tc.arguments} for tc in response.tool_calls]

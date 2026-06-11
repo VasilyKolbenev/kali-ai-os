@@ -22,14 +22,19 @@ class LongTermMemory:
         self._db = db
         self._llm = LLMRouter(llm_config)
 
+    # Facts are injected into EVERY prompt; without a cap they grow unbounded
+    # over months of use (prompt bloat = cost + quality). Newest-first cap
+    # until dedup/supersede lands (facts come ORDER BY timestamp DESC).
+    MAX_INJECTED_FACTS = 50
+
     async def get_user_context_string(self) -> str:
-        """Get all stored facts formatted as a prompt context."""
+        """Get recent stored facts formatted as a prompt context."""
         facts = await self._db.get_user_facts()
         if not facts:
             return ""
 
         context = "<UserFacts>\n"
-        for f in facts:
+        for f in facts[: self.MAX_INJECTED_FACTS]:
             context += f"- {f['topic']}: {f['fact']}\n"
         context += "</UserFacts>\n"
         return context
