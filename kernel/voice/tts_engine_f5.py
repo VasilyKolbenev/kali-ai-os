@@ -114,16 +114,24 @@ def _checkpoint_paths() -> tuple[Path, Path]:
     if local_ckpt.exists() and local_vocab.exists():
         return local_ckpt, local_vocab
 
-    # Fallback: HuggingFace hub cache
+    # Fallback: HuggingFace hub cache. A missing local file means the cache
+    # is incomplete by definition, so the early offline gate (entry.py sets
+    # HF_HUB_OFFLINE when vocos+whisper snapshots exist) must not block this
+    # last-resort download.
     from huggingface_hub import hf_hub_download
-    ckpt = hf_hub_download(
-        repo_id="Misha24-10/F5-TTS_RUSSIAN",
-        filename="F5TTS_v1_Base_accent_tune/model_last_inference.safetensors",
-    )
-    vocab = hf_hub_download(
-        repo_id="Misha24-10/F5-TTS_RUSSIAN",
-        filename="F5TTS_v1_Base/vocab.txt",
-    )
+    _offline_keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    _saved = {k: os.environ.pop(k) for k in _offline_keys if k in os.environ}
+    try:
+        ckpt = hf_hub_download(
+            repo_id="Misha24-10/F5-TTS_RUSSIAN",
+            filename="F5TTS_v1_Base_accent_tune/model_last_inference.safetensors",
+        )
+        vocab = hf_hub_download(
+            repo_id="Misha24-10/F5-TTS_RUSSIAN",
+            filename="F5TTS_v1_Base/vocab.txt",
+        )
+    finally:
+        os.environ.update(_saved)
     return Path(ckpt), Path(vocab)
 
 
