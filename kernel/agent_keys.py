@@ -18,6 +18,7 @@ AGENT_REQUIRED_KEYS: dict[str, list[str]] = {
     "notion": ["NOTION_API_KEY"],
     "todoist": ["TODOIST_API_KEY"],
     "smart-home": ["HA_URL", "HA_TOKEN"],
+    "news": ["NEWS_API_KEY"],
 }
 
 # Flattened whitelist — the settings endpoint accepts ONLY these env names from

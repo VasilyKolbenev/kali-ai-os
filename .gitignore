@@ -65,3 +65,7 @@ Jarvis Sound Pack*/
 # OS
 .DS_Store
 Thumbs.db
+
+verify_demo.py
+verify_stt.py
+verify_builder.py

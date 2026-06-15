@@ -127,7 +127,11 @@ class AgentRuntime:
         try:
             return await protocol.execute(action, args)
         except Exception:
-            self._statuses[agent_name] = AgentStatus.ERROR
+            # A per-call failure (bad arg, unknown action, city not found) is
+            # NOT a process failure — the agent is still alive and the error is
+            # returned to the caller. Flipping the agent to a sticky ERROR
+            # status made one bad call look like a permanently broken agent in
+            # the UI. Status now reflects process liveness only.
             logger.exception("Agent '%s' dispatch failed", agent_name)
             raise
 

@@ -193,6 +193,16 @@ export const CURATED: CuratedEntry[] = [
     category: "news",
     kind: "agent",
     agentName: "news",
+    setup: {
+      what: "Бесплатный ключ NewsAPI",
+      steps: [
+        "Открой newsapi.org/register и зарегистрируйся бесплатно",
+        "Скопируй свой API Key из личного кабинета",
+        "Вставь его в поле ниже",
+      ],
+      url: "https://newsapi.org/register",
+      keys: [{ env: "NEWS_API_KEY", label: "Ключ NewsAPI" }],
+    },
     keywords: ["новости", "заголовки", "news"],
   },
   {

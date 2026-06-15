@@ -72,7 +72,10 @@ class WeatherAgent(BaseAgent):
         Raises:
             ValueError: If city not found.
         """
-        url = f"{GEOCODING_URL}?name={urllib.request.quote(city)}&count=1&language=en"
+        # language=ru resolves BOTH Cyrillic ("Москва") and Latin ("Moscow")
+        # city names; language=en silently fails on Cyrillic, which is exactly
+        # what voice STT produces for a Russian speaker.
+        url = f"{GEOCODING_URL}?name={urllib.request.quote(city)}&count=1&language=ru"
         with urllib.request.urlopen(url, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         results = data.get("results", [])
