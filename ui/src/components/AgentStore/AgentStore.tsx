@@ -33,6 +33,9 @@ export function AgentStore() {
   const [installed, setInstalled] = useState<InstalledSkill[]>([]);
   const [agentNames, setAgentNames] = useState<Set<string>>(new Set());
   const [runningAgents, setRunningAgents] = useState<Set<string>>(new Set());
+  const [configStatus, setConfigStatus] = useState<
+    Record<string, { configured: boolean; missing_keys: string[]; required_keys: string[] }>
+  >({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [setupEntry, setSetupEntry] = useState<CuratedEntry | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
@@ -59,16 +62,41 @@ export function AgentStore() {
 
   const bootstrap = async () => {
     try {
-      const [installedRes, manifests, running] = await Promise.all([
+      const [installedRes, manifests, running, cfg] = await Promise.all([
         api.skillsInstalled(),
         api.agents(),
         api.runningAgents(),
+        api.agentConfigStatus().catch(() => ({})),
       ]);
       setInstalled(installedRes.results || []);
       setAgentNames(new Set((manifests || []).map((m) => m.name)));
       setRunningAgents(new Set((running || []).map((r) => r.name)));
+      setConfigStatus(cfg || {});
     } catch (err) {
       console.error("Store bootstrap failed:", err);
+    }
+  };
+
+  const refreshConfigStatus = async () => {
+    try {
+      setConfigStatus(await api.agentConfigStatus());
+    } catch {
+      /* leave previous */
+    }
+  };
+
+  // After keys are saved in the setup dialog: refresh status + auto-enable the
+  // agent so it flips straight to «Работает».
+  const handleSetupSaved = async (entry: CuratedEntry) => {
+    await refreshConfigStatus();
+    if (entry.kind === "agent" && entry.agentName) {
+      try {
+        await api.loadAgent(entry.agentName);
+        await refreshRunning();
+        showToast(`«${entry.title}» настроен и работает`, "success");
+      } catch {
+        showToast(`«${entry.title}» настроен`, "success");
+      }
     }
   };
 
@@ -161,6 +189,11 @@ export function AgentStore() {
   const entryState = (entry: CuratedEntry): CardState => {
     if (busyId === entry.id) return "busy";
     if (entry.kind === "agent") {
+      // Needs a key it doesn't have yet → «Настроить», not a fake «Работает».
+      if (entry.setup?.keys?.length) {
+        const cfg = configStatus[entry.agentName!];
+        if (cfg && !cfg.configured) return "needs-setup";
+      }
       return runningAgents.has(entry.agentName!) ? "active" : "idle";
     }
     return installedNames.has(entry.source!.name) ? "active" : "idle";
@@ -437,7 +470,11 @@ export function AgentStore() {
         </div>
 
         {setupEntry && (
-          <SetupDialog entry={setupEntry} onClose={() => setSetupEntry(null)} />
+          <SetupDialog
+            entry={setupEntry}
+            onClose={() => setSetupEntry(null)}
+            onSaved={() => handleSetupSaved(setupEntry)}
+          />
         )}
 
         {publishState && (

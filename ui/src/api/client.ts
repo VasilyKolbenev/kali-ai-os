@@ -182,4 +182,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+
+  // Per-agent credential status: { agent: { configured, missing_keys, required_keys } }
+  agentConfigStatus: () =>
+    fetchJSON<Record<string, { configured: boolean; missing_keys: string[]; required_keys: string[] }>>(
+      "/agents/config-status",
+    ),
 };

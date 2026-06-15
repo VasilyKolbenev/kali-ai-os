@@ -343,13 +343,18 @@ export function ChatInput() {
         </button>
       </div>
 
-      {/* Loading indicator */}
+      {/* Status indicator — plain Russian so the user knows what's happening */}
       {isLoading && (
         <div
-          className="text-center mt-2 mono text-[10px] tracking-[3px]"
+          className="text-center mt-2 text-xs flex items-center justify-center gap-2"
           style={{ color: "var(--j-amber)" }}
         >
-          PROCESSING
+          <span className="inline-flex gap-1">
+            <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "0ms" }} />
+            <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "150ms" }} />
+            <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "300ms" }} />
+          </span>
+          Джарвис думает…
         </div>
       )}
     </div>

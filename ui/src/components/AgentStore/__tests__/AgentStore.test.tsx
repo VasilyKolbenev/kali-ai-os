@@ -17,6 +17,7 @@ vi.mock("../../../api/client", () => ({
     skillsCatalogSources: vi.fn(),
     skillsCatalogList: vi.fn(),
     skillsCatalogRefresh: vi.fn(),
+    agentConfigStatus: vi.fn(),
   },
 }));
 
@@ -29,6 +30,7 @@ describe("AgentStore (Мастерская)", () => {
     ] as never);
     vi.mocked(api.runningAgents).mockResolvedValue([] as never);
     vi.mocked(api.skillsCatalogList).mockRejectedValue(new Error("offline"));
+    vi.mocked(api.agentConfigStatus).mockResolvedValue({});
   });
 
   it("renders the header and the three loop segments", async () => {

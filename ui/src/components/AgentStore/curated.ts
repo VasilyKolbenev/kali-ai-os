@@ -37,6 +37,13 @@ export const CATEGORIES: Category[] = [
   { id: "docs", label: "Документы", emoji: "📄" },
 ];
 
+export interface SetupKeyField {
+  /** Backend env var name (must be in the agent_keys whitelist). */
+  env: string;
+  /** Plain-RU label shown above the input. */
+  label: string;
+}
+
 export interface SetupGuide {
   /** What the user needs, in plain words: «Ключ Telegram-бота». */
   what: string;
@@ -44,6 +51,9 @@ export interface SetupGuide {
   steps: string[];
   /** Optional external page that issues the key. */
   url?: string;
+  /** Inline fields the user can paste right here → saved to settings. When
+      absent (e.g. OAuth flows) the dialog is guidance-only. */
+  keys?: SetupKeyField[];
 }
 
 export interface CuratedEntry {
@@ -108,9 +118,10 @@ export const CURATED: CuratedEntry[] = [
       steps: [
         "Открой todoist.com и войди в свой аккаунт",
         "Настройки → Интеграции → вкладка «Для разработчиков»",
-        "Скопируй API-токен и вставь его в Настройках KALI",
+        "Скопируй API-токен и вставь в поле ниже",
       ],
       url: "https://app.todoist.com/app/settings/integrations/developer",
+      keys: [{ env: "TODOIST_API_KEY", label: "API-токен Todoist" }],
     },
     keywords: ["todoist", "задачи"],
   },
@@ -139,9 +150,13 @@ export const CURATED: CuratedEntry[] = [
     setup: {
       what: "Подключение к твоему хабу умного дома",
       steps: [
-        "Открой Настройки KALI → раздел «Умный дом»",
-        "Укажи адрес хаба (Home Assistant / Tuya) и токен доступа",
-        "Скажи: «Джарвис, включи свет» — проверим вместе",
+        "Открой свой Home Assistant → Профиль → Токены долгого доступа",
+        "Создай токен и скопируй его",
+        "Вставь адрес хаба и токен в поля ниже",
+      ],
+      keys: [
+        { env: "HA_URL", label: "Адрес хаба (напр. http://192.168.1.10:8123)" },
+        { env: "HA_TOKEN", label: "Токен доступа" },
       ],
     },
     keywords: ["дом", "свет", "розетка", "home"],
@@ -201,13 +216,17 @@ export const CURATED: CuratedEntry[] = [
     kind: "agent",
     agentName: "telegram",
     setup: {
-      what: "Ключ Telegram-бота",
+      what: "Ключ Telegram-бота и ID чата",
       steps: [
-        "В Telegram найди @BotFather и напиши ему /newbot",
-        "Придумай имя — BotFather пришлёт ключ (токен)",
-        "Вставь ключ в Настройках KALI → «Telegram»",
+        "В Telegram найди @BotFather и напиши /newbot — он пришлёт токен",
+        "Напиши своему боту любое сообщение",
+        "Узнай свой ID у @userinfobot и вставь оба значения ниже",
       ],
       url: "https://t.me/BotFather",
+      keys: [
+        { env: "TELEGRAM_BOT_TOKEN", label: "Токен бота" },
+        { env: "TELEGRAM_CHAT_ID", label: "ID чата" },
+      ],
     },
     keywords: ["телеграм", "сообщение", "telegram", "бот"],
   },
@@ -238,10 +257,16 @@ export const CURATED: CuratedEntry[] = [
     kind: "agent",
     agentName: "messenger-hub",
     setup: {
-      what: "Подключение мессенджеров",
+      what: "Ключ Telegram-бота и ID чата",
       steps: [
-        "Открой Настройки KALI → «Мессенджеры»",
-        "Подключи нужные: Telegram, WhatsApp — по кнопке",
+        "В Telegram найди @BotFather и напиши /newbot — он пришлёт токен",
+        "Узнай свой ID у @userinfobot",
+        "Вставь оба значения ниже",
+      ],
+      url: "https://t.me/BotFather",
+      keys: [
+        { env: "TELEGRAM_BOT_TOKEN", label: "Токен бота" },
+        { env: "TELEGRAM_CHAT_ID", label: "ID чата" },
       ],
     },
     keywords: ["мессенджер", "whatsapp", "чат"],
@@ -261,9 +286,10 @@ export const CURATED: CuratedEntry[] = [
       steps: [
         "Открой notion.so/my-integrations и создай интеграцию",
         "Скопируй Internal Integration Secret",
-        "Вставь его в Настройках KALI → «Notion»",
+        "Вставь его в поле ниже",
       ],
       url: "https://www.notion.so/my-integrations",
+      keys: [{ env: "NOTION_API_KEY", label: "Ключ интеграции Notion" }],
     },
     keywords: ["notion", "заметки"],
   },
