@@ -968,17 +968,36 @@ def create_app(
     async def running_agents(request: Request) -> list[dict[str, Any]]:
         return request.app.state.agent_runtime.list_agents()
 
+    @app.get("/agents/config-status")
+    async def agents_config_status() -> dict[str, Any]:
+        """Per-agent credential status so the UI can show «Нужна настройка».
+
+        «running» means the process is up; this says whether the keys it needs
+        are actually present — the difference between «Работает» and a button
+        that does nothing.
+        """
+        from kernel.agent_keys import all_agents_config_status
+        return all_agents_config_status()
+
+    def _approve_agent(s: Any, name: str) -> None:
+        """Grant runtime permission to an agent the user explicitly enabled.
+
+        Clicking «Включить» (or invoking a tool directly) IS the consent: the
+        agent's process was already started, so without this its calls hit the
+        sandbox unapproved and 403 — i.e. «Работает» with zero function. Built-
+        in or not, an explicit user action approves it.
+        """
+        manifest = s.plugin_registry.get(name)
+        if manifest and s.permission_enforcer:
+            manifest.permissions.user_approved = True
+            s.permission_enforcer.register_agent(name, manifest)
+
     @app.post("/agents/{name}/load")
     async def load_agent(name: str, request: Request) -> dict[str, str]:
         try:
             s = request.app.state
             await s.agent_runtime.load_agent(name)
-            # Auto-approve built-in agents on manual load too
-            if name in s.builtin_agents:
-                manifest = s.plugin_registry.get(name)
-                if manifest and s.permission_enforcer:
-                    manifest.permissions.user_approved = True
-                    s.permission_enforcer.register_agent(name, manifest)
+            _approve_agent(s, name)
             return {"status": "loaded", "agent": name}
         except ValueError as e:
             return {"status": "error", "message": str(e)}
@@ -1009,15 +1028,13 @@ def create_app(
         if not status or status.get("status") != "running":
             try:
                 await runtime.load_agent(name)
-                # Auto-approve built-in agents loaded on demand
-                s = request.app.state
-                if name in s.builtin_agents:
-                    manifest = s.plugin_registry.get(name)
-                    if manifest and s.permission_enforcer:
-                        manifest.permissions.user_approved = True
-                        s.permission_enforcer.register_agent(name, manifest)
             except Exception as e:
                 return {"error": f"Agent '{name}' not available: {e}"}
+
+        # A direct tool call is explicit user consent → ensure approval every
+        # time (idempotent), so an already-running-but-unapproved agent doesn't
+        # 403 — the bug where «Работает» agents silently did nothing.
+        _approve_agent(request.app.state, name)
 
         # Route through SandboxBackend — adds permission + rate limit + audit
         sandbox = _get_sandbox(request.app)
@@ -2095,6 +2112,16 @@ def create_app(
             value = "true" if body["onboarding_completed"] else "false"
             os.environ["KALI_ONBOARDING_COMPLETED"] = value
             updates["KALI_ONBOARDING_COMPLETED"] = value
+
+        # Agent credentials (Telegram/Notion/Todoist/smart-home). Only env
+        # names in the registry whitelist are accepted, so a request can't set
+        # arbitrary environment variables. Masked values (read-back) are
+        # skipped so a re-save of the settings form doesn't clobber a real key.
+        from kernel.agent_keys import ALLOWED_AGENT_KEYS
+        for key in ALLOWED_AGENT_KEYS:
+            if key in body and body[key] and "***" not in str(body[key]):
+                os.environ[key] = str(body[key])
+                updates[key] = str(body[key])
 
         if updates:
             _save_env(updates)
