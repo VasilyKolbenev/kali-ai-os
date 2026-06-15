@@ -108,7 +108,13 @@ class VoicePipeline:
         self._wake_detected = False
         self._wake_time: float = 0.0
         self._silence_count = 0
-        self._max_silence_chunks = 30  # ~1s of silence ends utterance
+        # End an utterance only after a real thinking pause. Chunks are 32 ms
+        # (recorder default), so 78 ≈ 2.5 s — the old 30 (~1 s) cut people off
+        # mid-thought when they paused to phrase a sentence. Overridable via
+        # KALI_SILENCE_MS for tuning without a rebuild.
+        import os as _os
+        _silence_ms = int(_os.environ.get("KALI_SILENCE_MS", "2500"))
+        self._max_silence_chunks = max(1, _silence_ms // 32)
 
     @property
     def state(self) -> PipelineState:

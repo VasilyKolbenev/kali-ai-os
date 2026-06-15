@@ -53,13 +53,21 @@ class TestSentenceBoundaries:
 
 
 class TestMinCharsMerging:
-    def test_short_sentence_is_held_not_emitted(self) -> None:
+    def test_first_short_sentence_emits_immediately(self) -> None:
+        # Time-to-first-audio: the opener reaches the speaker at once.
         sb = SentenceBuffer()
-        assert sb.feed("Хорошо. ") == []
+        assert sb.feed("Хорошо. ") == ["Хорошо."]
 
-    def test_short_sentences_merge_until_min_chars(self) -> None:
+    def test_second_short_sentence_is_held(self) -> None:
+        # After the fast first emit, merging resumes for the rest.
         sb = SentenceBuffer()
-        assert sb.feed("Да. Нет! ") == []
+        assert sb.feed("Хорошо. ") == ["Хорошо."]
+        assert sb.feed("Да. ") == []
+
+    def test_short_sentences_merge_after_first(self) -> None:
+        sb = SentenceBuffer()
+        assert sb.feed("Хорошо. ") == ["Хорошо."]  # first emits
+        assert sb.feed("Да. Нет! ") == []  # held (below min_chars)
         out = sb.feed("Сейчас всё подробно расскажу про эту задачу. ")
         assert out == ["Да. Нет! Сейчас всё подробно расскажу про эту задачу."]
 
@@ -70,13 +78,15 @@ class TestMinCharsMerging:
 
     def test_flush_returns_held_short_sentences(self) -> None:
         sb = SentenceBuffer()
-        sb.feed("Готово. ")
-        assert sb.flush() == "Готово."
+        assert sb.feed("Готово. ") == ["Готово."]  # first emits
+        sb.feed("И ещё. ")  # held
+        assert sb.flush() == "И ещё."
 
     def test_flush_joins_held_sentence_with_partial(self) -> None:
         sb = SentenceBuffer()
-        sb.feed("Готово. И ещё кое-что")
-        assert sb.flush() == "Готово. И ещё кое-что"
+        assert sb.feed("Готово. ") == ["Готово."]  # first emits
+        sb.feed("И ещё кое-что")  # partial, held
+        assert sb.flush() == "И ещё кое-что"
 
     def test_default_min_chars_is_sane(self) -> None:
         assert 0 < DEFAULT_MIN_CHARS <= 100

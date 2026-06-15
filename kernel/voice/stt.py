@@ -33,7 +33,10 @@ class SpeechToText:
     """
 
     def __init__(self, model_size: str = "base", device: str = "auto") -> None:
-        self.model_size = model_size
+        # KALI_STT_MODEL overrides the configured size without a rebuild — lets
+        # us A/B "small" vs "medium" (more accurate, slower) on the same build.
+        import os
+        self.model_size = os.environ.get("KALI_STT_MODEL", model_size)
         self._device = device
         self._model: object | None = None
         self._loaded = False
@@ -98,6 +101,18 @@ class SpeechToText:
             beam_size=5,
             language="ru",
             vad_filter=True,
+            # Lower threshold + shorter min-silence so quiet/short Russian
+            # words at phrase edges aren't clipped by the internal VAD (the
+            # "many words missed" complaint). Pipeline-level VAD already
+            # bounds the utterance, so this filter only trims dead air.
+            vad_parameters={"threshold": 0.3, "min_silence_duration_ms": 300},
+            # Bias decoding toward the assistant's domain vocabulary so names
+            # and terms stop getting mangled.
+            initial_prompt=(
+                "Разговор с голосовым ассистентом Джарвис. Темы: напоминания, "
+                "задачи, календарь, погода, новости, курс доллара и евро, "
+                "биткоин, Telegram, почта, заметки."
+            ),
             condition_on_previous_text=False,
         )
         text_parts = [segment.text.strip() for segment in segments]

@@ -52,8 +52,10 @@ async def test_stream_tts_merges_short_sentences_into_one_chunk() -> None:
     ):
         await pipe._stream_tts("Один. Два. Три.")
 
-    assert synth_calls == ["Один. Два. Три."]
-    assert pipe._bus.publish.await_count == 1
+    # First sentence emits immediately (fast first audio); the remaining short
+    # sentences merge into one chunk (no mid-speech gaps).
+    assert synth_calls == ["Один.", "Два. Три."]
+    assert pipe._bus.publish.await_count == 2
 
 
 async def test_stream_tts_handles_unterminated_text() -> None:

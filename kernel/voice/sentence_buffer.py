@@ -40,6 +40,12 @@ class SentenceBuffer:
         self._buf = ""
         self._closed = ""
         self.min_chars = min_chars
+        # The very first sentence is emitted as soon as it closes, regardless
+        # of min_chars: time-to-first-audio dominates perceived latency, so a
+        # short opener («Хорошо.») should reach the speaker immediately while
+        # the rest of the reply is still streaming. Merging then resumes for
+        # the remaining sentences (no mid-speech gaps).
+        self._first_emitted = False
 
     def feed(self, delta: str) -> list[str]:
         """Add a streamed delta; return any chunks it completed (in order)."""
@@ -55,9 +61,11 @@ class SentenceBuffer:
             if not sentence:
                 continue
             self._closed = f"{self._closed} {sentence}".strip() if self._closed else sentence
-            if len(self._closed) >= self.min_chars:
+            threshold = 1 if not self._first_emitted else self.min_chars
+            if len(self._closed) >= threshold:
                 out.append(self._closed)
                 self._closed = ""
+                self._first_emitted = True
         return out
 
     def flush(self) -> str:
@@ -65,4 +73,5 @@ class SentenceBuffer:
         remaining = f"{self._closed} {self._buf}".strip()
         self._closed = ""
         self._buf = ""
+        self._first_emitted = False
         return remaining
