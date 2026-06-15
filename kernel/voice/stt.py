@@ -117,7 +117,7 @@ class SpeechToText:
         )
         text_parts = [segment.text.strip() for segment in segments]
         text = " ".join(text_parts).strip()
-        
+
         # Drop common Whisper hallucinations from silence/noise
         lower_text = text.lower()
         if any(phrase in lower_text for phrase in [
