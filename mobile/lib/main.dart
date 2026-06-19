@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'presentation/connection_screen.dart';
 
 import 'core/theme.dart';
+import 'core/deep_link_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,8 +21,9 @@ class KaliMobileApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'KALI Mobile',
+      scaffoldMessengerKey: scaffoldMessengerKey,
       theme: AppTheme.darkTheme,
-      home: const ConnectionScreen(),
+      home: const DeepLinkHandler(child: ConnectionScreen()),
     );
   }
 }

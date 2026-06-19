@@ -1,9 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:ui';
+import 'package:share_plus/share_plus.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import '../core/config.dart';
+import '../core/http_client.dart';
 import '../core/l10n.dart';
+import '../core/share_config.dart';
+import '../core/theme.dart';
 
-class ShareToReelsScreen extends ConsumerWidget {
+/// Share an agent to social apps via the OS native share sheet (no platform
+/// OAuth — the user posts under their own account).
+///
+/// The shared link is a self-contained `kali://import?n=<name>&d=<bundle>`: the
+/// agent's exported bundle travels inside the link/QR, so a friend who taps or
+/// scans it installs the exact agent with no catalog or server (the P2P import
+/// side lives in [DeepLinkHandler]). Above a QR-safe size the link is shown on
+/// its own — tapping still works, only the QR is omitted.
+class ShareToReelsScreen extends ConsumerStatefulWidget {
   final String agentName;
   final String agentDescription;
 
@@ -14,14 +27,92 @@ class ShareToReelsScreen extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ShareToReelsScreen> createState() => _ShareToReelsScreenState();
+}
+
+class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
+  /// Max link length we still render as a QR (a v40 byte-mode code holds more,
+  /// but past this density on-screen scanning gets unreliable).
+  static const int _qrMaxChars = 1800;
+
+  String? _link; // kali://import?... once the bundle is fetched
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  Future<void> _prepare() async {
+    final ip = ref.read(serverIpProvider);
+    if (ip == null) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    try {
+      final url =
+          'http://$ip:3006/skills/${Uri.encodeComponent(widget.agentName)}/export';
+      final resp = await ref.read(dioProvider).get(url);
+      final body = resp.data as Map<String, dynamic>?;
+      final data = body?['data'];
+      if (resp.statusCode == 200 && body?['status'] == 'ok' && data is String) {
+        final link = Uri(
+          scheme: 'kali',
+          host: 'import',
+          queryParameters: {'n': widget.agentName, 'd': data},
+        ).toString();
+        setState(() {
+          _link = link;
+          _loading = false;
+        });
+      } else {
+        setState(() {
+          _loading = false;
+          _failed = true;
+        });
+      }
+    } catch (_) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  /// Caption posted alongside the reel. Localized copy; the agent name,
+  /// description and self-contained link are real.
+  String _caption(L10n t) {
+    final tags = ShareConfig.defaultHashtags.map((h) => '#$h').join(' ');
+    return '${t.reelsCaption}\n\n'
+        '🤖 ${widget.agentName} — ${widget.agentDescription}\n\n'
+        '📲 ${t.shareLinkLabel}: ${_link ?? ''}\n\n'
+        '$tags';
+  }
+
+  Future<void> _share(BuildContext context, L10n t) async {
+    if (_link == null) return;
+    final box = context.findRenderObject() as RenderBox?;
+    await SharePlus.instance.share(ShareParams(
+      text: _caption(t),
+      subject: t.shareAgentTitle,
+      sharePositionOrigin:
+          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final t = L10n.of(ref);
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Simulated Video Background
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
@@ -31,162 +122,65 @@ class ShareToReelsScreen extends ConsumerWidget {
                   end: Alignment.bottomCenter,
                 ),
               ),
-              child: Stack(
-                children: [
-                  // Animated Blob / Avatar Placeholder
-                  Center(
-                    child: Container(
-                      width: 250,
-                      height: 250,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: RadialGradient(
-                          colors: [
-                            const Color(0xFFA855F7).withValues(alpha: 0.5),
-                            Colors.transparent,
-                          ],
-                        ),
-                      ),
+              child: Center(
+                child: Container(
+                  width: 250,
+                  height: 250,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        AppTheme.primary.withValues(alpha: 0.45),
+                        Colors.transparent,
+                      ],
                     ),
                   ),
-                  const Center(
-                    child: Icon(Icons.auto_awesome, color: Color(0xFFA855F7), size: 100),
-                  ),
-                ],
+                  child: const Icon(Icons.auto_awesome,
+                      color: AppTheme.primary, size: 90),
+                ),
               ),
             ),
           ),
-
-          // Reels UI Overlay
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Top bar
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                        icon: const Icon(Icons.close, color: Colors.white, size: 28),
                         onPressed: () => Navigator.pop(context),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.music_note, color: Colors.white, size: 16),
-                            SizedBox(width: 8),
-                            Text("Trending Audio", style: TextStyle(color: Colors.white)),
-                          ],
+                      const SizedBox(width: 4),
+                      Text(
+                        t.shareAgentTitle,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(width: 48),
                     ],
                   ),
-                  
                   const Spacer(),
-
-                  // Bottom content (TikTok / Reels style)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      // Text Info & QR Code
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              '@kali_creator',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '${t.reelsCaption}\n\n$agentDescription',
-                              style: const TextStyle(color: Colors.white, fontSize: 14),
-                            ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              '#AI #Jarvis #TechTok #Automation',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 20),
-                            
-                            // QR Code Mockup
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    width: 60,
-                                    height: 60,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: const Icon(Icons.qr_code_2, color: Colors.black, size: 40),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(t.reelsDownload, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                      const Text('KALI Agent Store', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                                    ],
-                                  )
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      
-                      // Right action buttons
-                      Column(
-                        children: [
-                          _buildActionButton(Icons.favorite, '12.4K'),
-                          _buildActionButton(Icons.comment, '342'),
-                          _buildActionButton(Icons.share, t.share),
-                        ],
-                      ),
-                    ],
-                  ),
-                  
-                  const SizedBox(height: 30),
-                  
-                  // Big Export Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(t.reelsExporting)),
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00D4FF),
-                        foregroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                        elevation: 8,
-                      ),
-                      child: Text(
-                        t.reelsPublish,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
+                  Text(
+                    widget.agentName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.agentDescription,
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 14, height: 1.4),
+                  ),
+                  const SizedBox(height: 20),
+                  ..._buildBody(t),
                   const SizedBox(height: 10),
                 ],
               ),
@@ -197,16 +191,106 @@ class ShareToReelsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildActionButton(IconData icon, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        children: [
-          Icon(icon, color: Colors.white, size: 36),
-          const SizedBox(height: 4),
-          Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
-        ],
+  List<Widget> _buildBody(L10n t) {
+    if (_loading) {
+      return [
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+            ),
+            const SizedBox(width: 14),
+            Text(t.shareLoading, style: const TextStyle(color: Colors.white70)),
+          ],
+        ),
+        const SizedBox(height: 40),
+      ];
+    }
+    if (_failed || _link == null) {
+      return [
+        Text(t.shareExportFailed,
+            style: const TextStyle(color: Colors.orangeAccent, fontSize: 14)),
+        const SizedBox(height: 40),
+      ];
+    }
+
+    final link = _link!;
+    final showQr = link.length <= _qrMaxChars;
+    return [
+      Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        ),
+        child: Row(
+          children: [
+            if (showQr) ...[
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: QrImageView(
+                  data: link,
+                  version: QrVersions.auto,
+                  size: 84,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 14),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t.shareScanToInstall,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    link,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
-    );
+      const SizedBox(height: 16),
+      Text(
+        t.shareSheetHint,
+        style: const TextStyle(color: Colors.white60, fontSize: 12, height: 1.4),
+      ),
+      const SizedBox(height: 16),
+      SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: ElevatedButton.icon(
+          onPressed: () => _share(context, t),
+          icon: const Icon(Icons.ios_share),
+          label: Text(
+            t.share,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.primary,
+            foregroundColor: Colors.black,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            elevation: 8,
+          ),
+        ),
+      ),
+    ];
   }
 }

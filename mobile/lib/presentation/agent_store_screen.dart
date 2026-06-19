@@ -6,6 +6,7 @@ import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/l10n.dart';
 import '../core/http_client.dart';
+import 'share_to_reels_screen.dart';
 
 class AgentModel {
   final String name;
@@ -236,13 +237,32 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
                         ),
                       ],
                     ),
-                    Switch(
-                      value: agent.enabled,
-                      onChanged: (val) => _toggleAgent(agent, val),
-                      activeColor: AppTheme.primary,
-                      activeTrackColor: AppTheme.primary.withValues(alpha: 0.3),
-                      inactiveThumbColor: AppTheme.textSecondary,
-                      inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.ios_share, size: 20),
+                          color: AppTheme.textSecondary,
+                          tooltip: t.shareAgentTitle,
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ShareToReelsScreen(
+                                agentName: agent.name,
+                                agentDescription: agent.description,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Switch(
+                          value: agent.enabled,
+                          onChanged: (val) => _toggleAgent(agent, val),
+                          activeColor: AppTheme.primary,
+                          activeTrackColor: AppTheme.primary.withValues(alpha: 0.3),
+                          inactiveThumbColor: AppTheme.textSecondary,
+                          inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ],
                     ),
                   ],
                 ),
