@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme.dart';
 import '../core/http_client.dart';
 import '../core/l10n.dart';
-import 'share_to_reels_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -56,6 +55,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final t = L10n.of(ref);
+    final insight = _buildInsight(t);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -130,122 +130,65 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ),
                 const SizedBox(height: 40),
 
-                // Proactive Insight (Smart Timeline)
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppTheme.glassSurface,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.22)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.12),
-                        blurRadius: 34,
-                        spreadRadius: -8,
-                        offset: const Offset(0, 8),
-                      )
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(28),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.auto_awesome, color: AppTheme.primary, size: 22)
-                                  .animate(onPlay: (controller) => controller.repeat(reverse: true))
-                                  .scaleXY(end: 1.1, duration: 1.seconds),
-                                const SizedBox(width: 10),
-                                Text(
-                                  t.insightTitle,
-                                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    color: AppTheme.primary,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 1.2,
+                // Proactive insight — honest live summary built from the real
+                // dashboard data (weather + tasks). Hidden entirely when not
+                // connected, so the card never shows a fabricated briefing.
+                if (insight != null) ...[
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.glassSurface,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: AppTheme.primary.withValues(alpha: 0.22)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.primary.withValues(alpha: 0.12),
+                          blurRadius: 34,
+                          spreadRadius: -8,
+                          offset: const Offset(0, 8),
+                        )
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(28),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.auto_awesome, color: AppTheme.primary, size: 22)
+                                    .animate(onPlay: (controller) => controller.repeat(reverse: true))
+                                    .scaleXY(end: 1.1, duration: 1.seconds),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    t.insightTitle,
+                                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                      color: AppTheme.primary,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              t.insightText,
-                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                fontSize: 16,
-                                height: 1.5,
+                                ],
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 16),
+                              Text(
+                                insight,
+                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  fontSize: 16,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.2),
-                const SizedBox(height: 24),
-
-                // Share to Reels Teaser
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: AppTheme.glassSurface,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(color: AppTheme.glassBorder),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accent.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.video_library, color: AppTheme.accent),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              t.agentReady, 
-                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              t.shareInReels, 
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 13),
-                            ),
-                          ],
-                        ),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ShareToReelsScreen(
-                                agentName: t.budgetTracker,
-                                agentDescription: t.budgetTrackerDesc,
-                              ),
-                            ),
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.accent.withValues(alpha: 0.2),
-                          foregroundColor: AppTheme.accent,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                        ),
-                        child: Text(t.share, style: const TextStyle(fontWeight: FontWeight.w600)),
-                      ),
-                    ],
-                  ),
-                ).animate().fadeIn(delay: 400.ms).slideY(begin: 0.2),
-                const SizedBox(height: 40),
+                  ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.2),
+                  const SizedBox(height: 40),
+                ],
 
                 // Widgets Grid
                 Text(
@@ -266,7 +209,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         color: Colors.orangeAccent,
                         title: t.weather,
                         value: _dashboardData?['weather']?['temp'] ?? '\u2014',
-                        subtitle: _dashboardData?['weather']?['condition'] ?? '',
+                        subtitle: _localizeCondition(
+                            _dashboardData?['weather']?['condition'] as String?, t.locale),
                         delay: 600,
                       ),
                     ),
@@ -302,6 +246,60 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  /// Honest one-line insight built from the live dashboard data. Returns null
+  /// when there is no data (not connected) so the card is hidden rather than
+  /// showing a fabricated briefing.
+  String? _buildInsight(L10n t) {
+    final d = _dashboardData;
+    if (d == null) return null;
+    final parts = <String>[];
+    final temp = d['weather']?['temp'] as String?;
+    if (temp != null && temp.isNotEmpty && temp != '—') {
+      final cond = _localizeCondition(d['weather']?['condition'] as String?, t.locale);
+      parts.add(t.insightWeather(cond.isEmpty ? temp : '$temp, $cond'));
+    }
+    final active = ((d['tasks']?['active'] ?? 0) as num).toInt();
+    parts.add(active > 0 ? t.insightTasksActive(active) : t.insightNoTasks);
+    final amount = d['budget']?['amount'] as String?;
+    parts.add(amount == null || amount.isEmpty || amount == '—'
+        ? t.insightNoSpending
+        : t.insightSpending(amount));
+    return parts.isEmpty ? null : parts.join('  ·  ');
+  }
+
+  /// Localize an English Open-Meteo weather condition to the UI locale. The
+  /// keys mirror `agents/weather` WMO_CODES one-for-one, so every condition the
+  /// backend can emit has a Russian form. Only Russian (the primary audience)
+  /// is mapped; other locales keep the source English. Unknown codes (the
+  /// agent's "Unknown" fallback) pass through unchanged.
+  String _localizeCondition(String? condition, String locale) {
+    if (condition == null || condition.isEmpty) return '';
+    if (locale != 'ru') return condition;
+    const ru = {
+      'Clear sky': 'ясно',
+      'Mainly clear': 'ясно',
+      'Partly cloudy': 'облачно',
+      'Overcast': 'пасмурно',
+      'Foggy': 'туман',
+      'Rime fog': 'туман',
+      'Light drizzle': 'морось',
+      'Moderate drizzle': 'морось',
+      'Dense drizzle': 'сильная морось',
+      'Slight rain': 'небольшой дождь',
+      'Moderate rain': 'дождь',
+      'Heavy rain': 'сильный дождь',
+      'Slight snow': 'небольшой снег',
+      'Moderate snow': 'снег',
+      'Heavy snow': 'сильный снег',
+      'Slight rain showers': 'ливень',
+      'Moderate rain showers': 'ливень',
+      'Violent rain showers': 'сильный ливень',
+      'Thunderstorm': 'гроза',
+      'Thunderstorm with hail': 'гроза с градом',
+    };
+    return ru[condition] ?? condition;
   }
 
   Widget _buildGlassWidget({
