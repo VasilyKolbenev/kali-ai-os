@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KALI — голосовой ИИ-агент на твоём железе</title>
+<meta name="description" content="Говоришь — получаешь личного ИИ-агента, который работает прямо на твоём компьютере. Делишься им, как видео. Данные остаются у тебя." />
+
+<!--
+  ============================================================================
+  KALI public landing / site-визитка (RU primary, EN secondary).
+
+  This single file is self-contained: all CSS is embedded, zero external
+  dependencies, dark theme matching the desktop app.
+
+  PLACEHOLDERS — replace before going live (no real domain/URLs chosen yet):
+    {{DESKTOP_DOWNLOAD_URL}}  — direct link to the Windows installer (.exe + 3 .bin)
+    {{ANDROID_APK_URL}}       — direct link to the Android .apk
+    {{CONTACT_EMAIL}}         — public contact / support address
+    {{REPO_URL}}              — public source/issues link (today: github.com/VasilyKolbenev/kali-ai-os)
+
+  DEEP-LINK HOST — this page is also meant to host the shared-agent import
+  route. In the mobile app, ShareConfig.agentLink() builds <linkBase>/a/<slug>
+  (mobile/lib/core/share_config.dart:32). When the real domain is registered
+  and set as ShareConfig.linkBase, host THIS page there and add:
+    - GET /a/:slug          — show agent preview + "Открыть в KALI" (kali:// deep link)
+                              with a graceful "Установить KALI" fallback for non-installers
+    - /.well-known/assetlinks.json   — Android App Links verification
+    - /.well-known/apple-app-site-association — iOS Universal Links (when iOS ships)
+  Import itself uses the OS-native share sheet + custom kali:// scheme — NO
+  per-platform OAuth/API (anti-pivot, see mobile/android/.../AndroidManifest.xml).
+  ============================================================================
+-->
+
+<style>
+  :root {
+    --bg:          #05070a;
+    --bg-soft:     #0a0e14;
+    --panel:       #0d1219;
+    --panel-2:     #111824;
+    --border:      #1c2735;
+    --border-soft: #18212e;
+    --text:        #e8eef5;
+    --text-dim:    #93a3b5;
+    --text-faint:  #5d6c7e;
+    --accent:      #00d4ff;
+    --accent-dim:  #0795b3;
+    --accent-glow: rgba(0, 212, 255, 0.35);
+    --good:        #34d399;
+    --warn:        #fbbf24;
+    --radius:      16px;
+    --maxw:        1080px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* radial glow backdrop */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(900px 600px at 50% -10%, rgba(0, 212, 255, 0.10), transparent 70%),
+      radial-gradient(700px 500px at 90% 20%, rgba(0, 212, 255, 0.05), transparent 60%),
+      radial-gradient(600px 400px at 5% 80%, rgba(0, 212, 255, 0.04), transparent 60%);
+    pointer-events: none;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .en {
+    display: block;
+    color: var(--text-faint);
+    font-size: 0.82em;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    margin-top: 2px;
+  }
+
+  /* ---------- top bar ---------- */
+  header.bar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(5, 7, 10, 0.78);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .bar-inner {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    font-weight: 700;
+    font-size: 1.15rem;
+    letter-spacing: 0.18em;
+  }
+  .brand .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px 2px var(--accent-glow);
+  }
+  .bar-nav {
+    display: flex;
+    gap: 26px;
+    font-size: 0.92rem;
+  }
+  .bar-nav a { color: var(--text-dim); }
+  .bar-nav a:hover { color: var(--text); text-decoration: none; }
+  @media (max-width: 720px) { .bar-nav { display: none; } }
+
+  /* ---------- hero ---------- */
+  .hero {
+    text-align: center;
+    padding: 96px 0 72px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 15px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    margin-bottom: 30px;
+  }
+  .badge .pulse {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px 1px var(--accent-glow);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.35;} }
+
+  .hero h1 {
+    font-size: clamp(2.2rem, 6vw, 4rem);
+    line-height: 1.08;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .hero h1 .accent {
+    color: var(--accent);
+    text-shadow: 0 0 26px var(--accent-glow);
+  }
+  .hero .one-liner {
+    font-size: clamp(1.05rem, 2.4vw, 1.4rem);
+    color: var(--text-dim);
+    max-width: 720px;
+    margin: 22px auto 0;
+  }
+  .hero .one-liner .en { font-size: 0.9rem; max-width: 640px; margin: 10px auto 0; }
+
+  .flow-line {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin: 34px auto 0;
+    font-weight: 600;
+    font-size: clamp(0.95rem, 2vw, 1.15rem);
+  }
+  .flow-line .step { color: var(--text); }
+  .flow-line .arrow { color: var(--accent); font-weight: 400; }
+
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 44px;
+  }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    padding: 15px 26px;
+    border-radius: 13px;
+    font-weight: 700;
+    font-size: 1rem;
+    border: 1px solid transparent;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+    text-align: left;
+    min-width: 230px;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-2px); }
+  .btn .sub {
+    font-size: 0.74rem;
+    font-weight: 500;
+    opacity: 0.85;
+    letter-spacing: 0.01em;
+  }
+  .btn .top { display: flex; align-items: center; gap: 10px; }
+  .btn .ic { width: 18px; height: 18px; flex: none; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #02121a;
+    box-shadow: 0 0 0 1px var(--accent-dim), 0 10px 34px -8px var(--accent-glow);
+  }
+  .btn-primary:hover { background: #2ddcff; box-shadow: 0 0 0 1px var(--accent), 0 14px 40px -8px var(--accent-glow); }
+  .btn-primary .sub { color: #033140; }
+
+  .btn-secondary {
+    background: var(--panel-2);
+    color: var(--text);
+    border-color: var(--border);
+  }
+  .btn-secondary:hover { background: #16202e; border-color: var(--accent-dim); }
+  .btn-secondary .sub { color: var(--text-dim); }
+
+  .cta-note {
+    margin-top: 20px;
+    font-size: 0.82rem;
+    color: var(--text-faint);
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 70px 0; }
+  .section-head { margin-bottom: 44px; text-align: center; }
+  .section-head h2 {
+    font-size: clamp(1.6rem, 3.6vw, 2.4rem);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+  .section-head h2 .en { font-size: 0.8rem; margin-top: 6px; }
+  .section-head p {
+    color: var(--text-dim);
+    max-width: 640px;
+    margin: 14px auto 0;
+  }
+  .alt { background: linear-gradient(180deg, transparent, var(--bg-soft) 12%, var(--bg-soft) 88%, transparent); }
+
+  /* ---------- feature grid ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 26px 24px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .card:hover { border-color: var(--accent-dim); transform: translateY(-3px); }
+  .card .ico {
+    width: 42px; height: 42px;
+    border-radius: 11px;
+    display: grid; place-items: center;
+    background: rgba(0, 212, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.18);
+    margin-bottom: 16px;
+  }
+  .card .ico svg { width: 22px; height: 22px; stroke: var(--accent); }
+  .card h3 { font-size: 1.12rem; font-weight: 700; margin-bottom: 8px; }
+  .card p { color: var(--text-dim); font-size: 0.95rem; }
+  .card p .en { font-size: 0.84em; }
+
+  /* ---------- how it works ---------- */
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+    counter-reset: step;
+  }
+  .step-card {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 30px 24px 26px;
+  }
+  .step-card .num {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: grid; place-items: center;
+    background: var(--accent);
+    color: #02121a;
+    font-weight: 800;
+    font-size: 1.05rem;
+    margin-bottom: 16px;
+    box-shadow: 0 0 16px -2px var(--accent-glow);
+  }
+  .step-card h3 { font-size: 1.08rem; font-weight: 700; margin-bottom: 8px; }
+  .step-card p { color: var(--text-dim); font-size: 0.92rem; }
+  .step-card p .en { font-size: 0.85em; }
+  .step-card .tag {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(0,212,255,0.22);
+    border-radius: 6px;
+    padding: 3px 8px;
+  }
+
+  /* ---------- trust ---------- */
+  .trust-wrap {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 820px) { .trust-wrap { grid-template-columns: 1fr; } }
+  .trust-list { list-style: none; display: flex; flex-direction: column; gap: 16px; }
+  .trust-list li {
+    display: flex; gap: 13px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .trust-list .chk {
+    flex: none; width: 22px; height: 22px;
+    border-radius: 6px;
+    background: rgba(52,211,153,0.12);
+    border: 1px solid rgba(52,211,153,0.3);
+    display: grid; place-items: center;
+    margin-top: 2px;
+  }
+  .trust-list .chk svg { width: 13px; height: 13px; stroke: var(--good); }
+  .trust-list b { display: block; font-size: 0.98rem; }
+  .trust-list span { color: var(--text-dim); font-size: 0.9rem; }
+  .trust-list span .en { font-size: 0.86em; }
+
+  .consent-box {
+    background: linear-gradient(160deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+  }
+  .consent-box h4 { font-size: 1rem; margin-bottom: 6px; color: var(--text); }
+  .consent-box .perm {
+    margin-top: 16px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 11px;
+    padding: 16px;
+    font-size: 0.9rem;
+  }
+  .consent-box .perm .who { color: var(--accent); font-weight: 600; }
+  .consent-box .perm .ask { margin: 8px 0 14px; color: var(--text-dim); }
+  .consent-box .perm-actions { display: flex; gap: 10px; }
+  .pbtn { flex: 1; text-align: center; padding: 9px; border-radius: 9px; font-size: 0.85rem; font-weight: 600; }
+  .pbtn.allow { background: var(--accent); color: #02121a; }
+  .pbtn.deny { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .consent-box .cap { margin-top: 14px; font-size: 0.78rem; color: var(--text-faint); }
+
+  /* ---------- requirements ---------- */
+  .req-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 720px) { .req-grid { grid-template-columns: 1fr; } }
+  .req {
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 24px;
+  }
+  .req h3 { display: flex; align-items: center; gap: 10px; font-size: 1.1rem; margin-bottom: 16px; }
+  .req h3 svg { width: 18px; height: 18px; stroke: var(--accent); }
+  .req dl { display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; font-size: 0.92rem; }
+  .req dt { color: var(--text-faint); white-space: nowrap; }
+  .req dd { color: var(--text); }
+  .req .fallback {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .req .fallback .en { font-size: 0.85em; }
+
+  .install-note {
+    margin-top: 22px;
+    background: rgba(251,191,36,0.06);
+    border: 1px solid rgba(251,191,36,0.22);
+    border-radius: 12px;
+    padding: 16px 18px;
+    font-size: 0.88rem;
+    color: var(--text-dim);
+  }
+  .install-note b { color: var(--warn); }
+  .install-note .en { font-size: 0.86em; color: var(--text-faint); }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--border-soft);
+    padding: 48px 0 56px;
+    background: var(--bg-soft);
+  }
+  .foot-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 28px;
+  }
+  .foot-brand { max-width: 320px; }
+  .foot-brand .brand { margin-bottom: 12px; }
+  .foot-brand p { color: var(--text-faint); font-size: 0.88rem; }
+  .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  .foot-col h5 {
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-faint); margin-bottom: 14px; font-weight: 700;
+  }
+  .foot-col a { display: block; color: var(--text-dim); font-size: 0.92rem; margin-bottom: 9px; }
+  .foot-col a:hover { color: var(--text); text-decoration: none; }
+  .foot-bottom {
+    margin-top: 40px; padding-top: 22px;
+    border-top: 1px solid var(--border-soft);
+    display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px;
+    color: var(--text-faint); font-size: 0.82rem;
+  }
+  .foot-legal { display: flex; gap: 18px; flex-wrap: wrap; }
+  .foot-legal a { color: var(--text-faint); }
+  .placeholder-tag {
+    font-size: 0.68rem;
+    color: var(--warn);
+    border: 1px dashed rgba(251,191,36,0.4);
+    border-radius: 5px;
+    padding: 1px 6px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== TOP BAR ===================== -->
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand"><span class="dot"></span>KALI</div>
+    <nav class="bar-nav">
+      <a href="#what">Что это</a>
+      <a href="#how">Как работает</a>
+      <a href="#trust">Приватность</a>
+      <a href="#requirements">Требования</a>
+      <a href="#download">Скачать</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="wrap">
+    <span class="badge"><span class="pulse"></span>Голосовой ИИ-агент для обычных людей · beta</span>
+
+    <h1>Говоришь — и у тебя<br><span class="accent">личный ИИ-агент</span></h1>
+
+    <p class="one-liner">
+      Создаёшь помощника голосом за минуту. Он работает прямо на твоём компьютере.
+      Делишься им с друзьями, как видео.
+      <span class="en">Speak it into existence. It runs on your own machine. Share it like a video.</span>
+    </p>
+
+    <div class="flow-line">
+      <span class="step">Говоришь</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">ИИ на твоём железе</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">Делишься, как видео</span>
+    </div>
+
+    <div class="cta-row" id="download">
+      <!-- PLACEHOLDER href: real download URL not chosen yet -->
+      <a class="btn btn-primary" href="{{DESKTOP_DOWNLOAD_URL}}">
+        <span class="top">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16v-5a9 9 0 0 0-9-9 9 9 0 0 0-9 9v5"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>
+          Скачать для Windows
+        </span>
+        <span class="sub">Desktop · Windows 10/11 64-bit · beta · Download for Windows</span>
+      </a>
+
+      <!-- PLACEHOLDER href: real APK URL not chosen yet -->
+      <a class="btn btn-secondary" href="{{ANDROID_APK_URL}}">
+        <span class="top">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+          Скачать для Android
+        </span>
+        <span class="sub">Mobile · APK · companion · beta · Download Android APK</span>
+      </a>
+    </div>
+
+    <p class="cta-note">
+      Без аккаунтов и подписок на старте. Бесплатно в бета-периоде.
+      <span class="en">No account required to start. Free during beta.</span>
+    </p>
+  </div>
+</section>
+
+<!-- ===================== WHAT IT DOES ===================== -->
+<section id="what" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Что делает KALI<span class="en">What it does</span></h2>
+      <p>
+        Не «ещё один чат-бот». KALI превращает твою идею в настоящего агента,
+        который выполняет задачи — и живёт на твоём устройстве.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></div>
+        <h3>Создаёшь голосом</h3>
+        <p>
+          «Считай кирпичи по фото и напоминай про смену» — и через минуту агент у тебя в кармане. Без кода и настроек.
+          <span class="en">Describe it out loud; a working agent appears in about a minute — no coding.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg></div>
+        <h3>Работает на твоём железе</h3>
+        <p>
+          Голос (JARVIS) синтезируется локально на твоей видеокарте NVIDIA. Разговоры и факты лежат в локальной базе на твоём диске.
+          <span class="en">Voice runs locally on your NVIDIA GPU; your data stays in a local database on your disk.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg></div>
+        <h3>Делишься, как видео</h3>
+        <p>
+          Записал результат — поделился через обычное системное «Поделиться». Друг открывает ссылку и ставит того же агента себе.
+          <span class="en">Share via the normal OS share sheet — no platform login. A friend taps the link and installs the same agent.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 1.66-4 7-9 7s-9-5.34-9-7 4-7 9-7 9 5.34 9 7z"/></svg></div>
+        <h3>Спрашивает разрешение</h3>
+        <p>
+          Прежде чем агент получит доступ к календарю, почте или сообщениям — KALI понятным языком спрашивает, что именно разрешить.
+          <span class="en">Before an agent touches your calendar, mail, or messages, KALI asks in plain language.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3>Помнит и напоминает</h3>
+        <p>
+          Утренняя сводка, погода, задачи, расходы, регулярные напоминания — агенты работают по расписанию, пока ты занят делом.
+          <span class="en">Morning brief, weather, tasks, reminders — agents run on schedule while you work.</span>
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <h3>Открытый формат</h3>
+        <p>
+          Агенты — это файлы SKILL.md по открытому стандарту Anthropic. Созданное в KALI переносимо, а не заперто в одном приложении.
+          <span class="en">Agents are open SKILL.md files — portable, not locked to one app.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== HOW IT WORKS ===================== -->
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Как это работает<span class="en">How it works</span></h2>
+      <p>Четыре шага — от слов до агента, которым делишься.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step-card">
+        <div class="num">1</div>
+        <h3>Скажи</h3>
+        <p>
+          Нажми Ctrl+Space или позови по имени и опиши, что нужно. KALI уточнит пару деталей голосом.
+          <span class="en">Press Ctrl+Space or call it by name, then describe the task.</span>
+        </p>
+        <span class="tag">Голос / Voice</span>
+      </div>
+
+      <div class="step-card">
+        <div class="num">2</div>
+        <h3>Собери</h3>
+        <p>
+          KALI находит готовый навык или собирает новый под тебя — и показывает, что именно получилось, до запуска.
+          <span class="en">KALI finds or builds the agent, and shows you what it made before running it.</span>
+        </p>
+        <span class="tag">Сборка / Build</span>
+      </div>
+
+      <div class="step-card">
+        <div class="num">3</div>
+        <h3>Разреши</h3>
+        <p>
+          Нужен доступ к данным? KALI понятным языком спросит разрешение. Ничего не делается за твоей спиной.
+          <span class="en">Needs access? You grant it explicitly. Nothing happens behind your back.</span>
+        </p>
+        <span class="tag">Доверие / Consent</span>
+      </div>
+
+      <div class="step-card">
+        <div class="num">4</div>
+        <h3>Поделись</h3>
+        <p>
+          Запиши короткое видео и отправь через системное «Поделиться». Друг ставит того же агента по ссылке.
+          <span class="en">Record a clip, share via the OS share sheet, friend installs from the link.</span>
+        </p>
+        <span class="tag">UGC</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TRUST / LOCAL-DATA ===================== -->
+<section id="trust" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Твои данные остаются у тебя<span class="en">Your data stays with you</span></h2>
+      <p>
+        Приватность — не галочка в настройках, а то, как KALI устроен. По умолчанию всё локально.
+      </p>
+    </div>
+
+    <div class="trust-wrap">
+      <ul class="trust-list">
+        <li>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <div>
+            <b>Локальный голос на твоей видеокарте</b>
+            <span>Синтез речи JARVIS работает на твоём GPU. Без облака для голоса — если у тебя есть видеокарта NVIDIA.
+            <span class="en">JARVIS voice synthesis runs on your own GPU — no cloud needed for speech.</span></span>
+          </div>
+        </li>
+        <li>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <div>
+            <b>Разговоры — в локальной базе</b>
+            <span>История и факты хранятся в базе на твоём диске, а не на наших серверах.
+            <span class="en">Conversations and facts live in a local database on your disk, not our servers.</span></span>
+          </div>
+        </li>
+        <li>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <div>
+            <b>Ключи API — только у тебя</b>
+            <span>Если подключаешь облачную модель, ключ лежит в локальном файле на твоём ПК и никуда не уходит.
+            <span class="en">If you connect a cloud model, your API key stays in a local file on your machine.</span></span>
+          </div>
+        </li>
+        <li>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <div>
+            <b>Песочница для каждого агента</b>
+            <span>Агент видит только свою папку, ходит в сеть лишь на разрешённые домены, а опасный код блокируется до запуска.
+            <span class="en">Each agent is sandboxed: own folder, allow-listed network, dangerous code blocked before it runs.</span></span>
+          </div>
+        </li>
+        <li>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <div>
+            <b>Без OAuth соцсетей для шеринга</b>
+            <span>Делишься через стандартное системное «Поделиться» — мы не просим вход в TikTok, Instagram или другие платформы.
+            <span class="en">Sharing uses the native OS share sheet — we never ask for a social-platform login.</span></span>
+          </div>
+        </li>
+      </ul>
+
+      <div class="consent-box">
+        <h4>Согласие понятным языком</h4>
+        <p style="color:var(--text-dim);font-size:0.9rem;">Так выглядит запрос доступа — без мелкого шрифта.
+          <span class="en">This is what a permission request looks like — no fine print.</span></p>
+
+        <div class="perm">
+          <div class="who">Агент «Утренняя сводка»</div>
+          <div class="ask">запрашивает доступ к: <b style="color:var(--text)">Календарю</b> (чтение событий на день)</div>
+          <div class="perm-actions">
+            <span class="pbtn allow">Разрешить</span>
+            <span class="pbtn deny">Не сейчас</span>
+          </div>
+        </div>
+
+        <p class="cap">
+          Иллюстрация продуктовой задачи доверия. Гранулярное согласие и предпросмотр действий — на активной дорожной карте к публичному запуску.
+          <span class="en">Illustrative. Granular consent &amp; action preview are on the public-launch roadmap.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SYSTEM REQUIREMENTS ===================== -->
+<section id="requirements">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Системные требования<span class="en">System requirements</span></h2>
+      <p>Локальный голос требует современной видеокарты. Без неё голос работает через облако.</p>
+    </div>
+
+    <div class="req-grid">
+      <div class="req">
+        <h3><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Desktop · Windows</h3>
+        <dl>
+          <dt>ОС</dt><dd>Windows 10 / 11, 64-bit</dd>
+          <dt>Видеокарта</dt><dd>NVIDIA RTX 20-series или новее — для локального голоса</dd>
+          <dt>Диск</dt><dd>~9 ГБ после установки, ~12 ГБ свободно на время установки</dd>
+          <dt>Загрузка</dt><dd>~5 ГБ установщик (.exe + 3 файла .bin)</dd>
+          <dt>Прочее</dt><dd>WebView2 — установится автоматически при необходимости</dd>
+        </dl>
+        <div class="fallback">
+          Нет видеокарты NVIDIA? Голос автоматически переключается на облако ElevenLabs (нужен API-ключ).
+          <span class="en">No NVIDIA GPU? Voice falls back to ElevenLabs cloud (API key required).</span>
+        </div>
+      </div>
+
+      <div class="req">
+        <h3><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg> Mobile · Android</h3>
+        <dl>
+          <dt>ОС</dt><dd>Android (companion-приложение)</dd>
+          <dt>Установка</dt><dd>APK напрямую (публикация в магазинах — позже)</dd>
+          <dt>Назначение</dt><dd>Запуск агентов и шеринг на ходу; парный режим с десктопом</dd>
+          <dt>iOS</dt><dd>Планируется; в текущей бете недоступно</dd>
+        </dl>
+        <div class="fallback">
+          Установка из ссылки на агента и шеринг используют системное меню «Поделиться».
+          <span class="en">Agent install-from-link and sharing use the native share sheet.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="install-note">
+      <b>Важно при установке десктопа:</b> все 4 файла (<code>.exe</code> + три <code>.bin</code>) должны лежать в одной папке — установщик подтянет их сам.
+      Это ранняя бета: установщик пока без цифровой подписи, поэтому Windows может показать предупреждение SmartScreen — это ожидаемо для beta-сборки.
+      <span class="en">Desktop install: keep all 4 files in one folder. This beta installer is not yet code-signed, so Windows SmartScreen may warn — expected for a beta build.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DOWNLOAD CTA (repeat) ===================== -->
+<section class="alt">
+  <div class="wrap" style="text-align:center;">
+    <div class="section-head" style="margin-bottom:30px;">
+      <h2>Попробовать сейчас<span class="en">Get started</span></h2>
+      <p>Скачай, поставь, скажи первую фразу. Первый агент — за минуту.</p>
+    </div>
+    <div class="cta-row">
+      <!-- PLACEHOLDER href -->
+      <a class="btn btn-primary" href="{{DESKTOP_DOWNLOAD_URL}}">
+        <span class="top">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16v-5a9 9 0 0 0-9-9 9 9 0 0 0-9 9v5"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>
+          Скачать для Windows
+        </span>
+        <span class="sub">Desktop · 64-bit · beta</span>
+      </a>
+      <!-- PLACEHOLDER href -->
+      <a class="btn btn-secondary" href="{{ANDROID_APK_URL}}">
+        <span class="top">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+          Скачать для Android
+        </span>
+        <span class="sub">Mobile · APK · beta</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <div class="brand"><span class="dot"></span>KALI</div>
+        <p>
+          Голосовой создатель ИИ-агентов для обычных людей. Работает на твоём железе, данные — у тебя.
+          <span class="en">Voice-first AI agent creator. Runs on your hardware; your data stays yours.</span>
+        </p>
+      </div>
+
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Продукт</h5>
+          <a href="#what">Что это</a>
+          <a href="#how">Как работает</a>
+          <a href="#trust">Приватность</a>
+          <a href="#requirements">Требования</a>
+        </div>
+        <div class="foot-col">
+          <h5>Скачать</h5>
+          <!-- PLACEHOLDER hrefs -->
+          <a href="{{DESKTOP_DOWNLOAD_URL}}">Windows desktop</a>
+          <a href="{{ANDROID_APK_URL}}">Android APK</a>
+        </div>
+        <div class="foot-col">
+          <h5>Связь</h5>
+          <!-- PLACEHOLDER hrefs -->
+          <a href="{{REPO_URL}}">Исходный код / Issues</a>
+          <a href="mailto:{{CONTACT_EMAIL}}">Написать нам</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot-bottom">
+      <div>© 2026 KALI · beta. Все права защищены.</div>
+      <div class="foot-legal">
+        <!-- Legal pages do not exist yet — privacy policy / EULA / terms are a known
+             pre-launch requirement. Linked as placeholders so the footer is final-shape. -->
+        <a href="{{PRIVACY_POLICY_URL}}">Политика конфиденциальности<span class="placeholder-tag">скоро</span></a>
+        <a href="{{TERMS_URL}}">Условия использования<span class="placeholder-tag">скоро</span></a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
