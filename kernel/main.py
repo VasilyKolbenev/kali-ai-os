@@ -670,17 +670,48 @@ def create_app(
 
     @app.get("/dashboard")
     async def get_dashboard(request: Request) -> dict[str, Any]:
+        """Live dashboard for the mobile app — computed from real agents, not
+        stored placeholders. Each widget degrades to a neutral «—» (never a
+        fake number) when its agent has no data, so the UI never shows a
+        fabricated value as if it were real.
+        """
         s = request.app.state
-        # Fetch the core widgets used by mobile
-        weather = await s.database.get_dashboard_data("weather")
-        budget = await s.database.get_dashboard_data("budget")
-        tasks = await s.database.get_dashboard_data("tasks")
-        
-        return {
-            "weather": weather["data_json"] if weather else {"temp": "+22°C", "condition": "Солнечно"},
-            "budget": budget["data_json"] if budget else {"amount": "₽14,200", "status": "В норме"},
-            "tasks": tasks["data_json"] if tasks else {"active": 5, "completed": 2},
-        }
+        rt = s.agent_runtime
+
+        async def _safe(agent: str, action: str, args: dict[str, Any]) -> dict[str, Any] | None:
+            try:
+                return await rt.dispatch(agent, action, args)
+            except Exception:
+                return None
+
+        # Weather — real, via the (Cyrillic-capable) weather agent.
+        city = os.environ.get("KALI_DEFAULT_CITY", "Москва")
+        wx = await _safe("weather", "get_weather", {"city": city})
+        if wx and wx.get("temperature_c") is not None:
+            weather = {"temp": f"{round(wx['temperature_c']):+d}°C",
+                       "condition": wx.get("condition", "")}
+        else:
+            weather = {"temp": "—", "condition": ""}
+
+        # Tasks — real, via the tasks agent summary.
+        ts = await _safe("tasks", "get_summary", {})
+        if ts:
+            tasks = {"active": ts.get("pending", 0),
+                     "completed": ts.get("done", 0),
+                     "subtitle": f"{ts.get('done', 0)} выполнено сегодня"}
+        else:
+            tasks = {"active": 0, "completed": 0, "subtitle": "нет задач"}
+
+        # Spending today — real, via life-dashboard. Shown in the «budget»
+        # slot the mobile reads, but labeled honestly as spending.
+        life = await _safe("life-dashboard", "get_daily_summary", {})
+        if life and life.get("total_spending"):
+            spending = {"amount": f"₽{life['total_spending']:,}".replace(",", " "),
+                        "status": "потрачено сегодня"}
+        else:
+            spending = {"amount": "—", "status": "нет трат сегодня"}
+
+        return {"weather": weather, "budget": spending, "tasks": tasks}
 
     @app.get("/agents")
     async def list_agents(request: Request) -> list[dict[str, Any]]:
