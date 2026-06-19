@@ -15,6 +15,7 @@ Target location:
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import shutil
@@ -164,6 +165,31 @@ def _download_repo_subtree(
     return target_subdir
 
 
+def _deploy_atomic(extracted_dir: Path, final_path: Path) -> None:
+    """Move a staged skill dir to its final location atomically.
+
+    Replaces an existing skill of the same name, rolling back on failure so a
+    failed install never leaves the user without their previous version.
+    """
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    if final_path.exists():
+        backup = final_path.with_name(final_path.name + ".old")
+        if backup.exists():
+            shutil.rmtree(backup)
+        final_path.rename(backup)
+        try:
+            shutil.move(str(extracted_dir), str(final_path))
+            shutil.rmtree(backup)
+        except Exception:
+            # Rollback to the backed-up version
+            if final_path.exists():
+                shutil.rmtree(final_path)
+            backup.rename(final_path)
+            raise
+    else:
+        shutil.move(str(extracted_dir), str(final_path))
+
+
 def install_from_catalog(
     entry: CatalogEntry,
     *,
@@ -237,29 +263,105 @@ def install_from_catalog(
             warnings.append("Safety gate skipped — unsafe install mode")
 
         # Deploy atomically
-        target_root.mkdir(parents=True, exist_ok=True)
-        if final_path.exists():
-            backup = final_path.with_name(final_path.name + ".old")
-            if backup.exists():
-                shutil.rmtree(backup)
-            final_path.rename(backup)
-            try:
-                shutil.move(str(extracted_dir), str(final_path))
-                shutil.rmtree(backup)
-            except Exception:
-                # Rollback
-                if final_path.exists():
-                    shutil.rmtree(final_path)
-                backup.rename(final_path)
-                raise
-        else:
-            shutil.move(str(extracted_dir), str(final_path))
+        _deploy_atomic(extracted_dir, final_path)
 
         logger.info("Installed skill '%s' → %s", entry.name, final_path)
         return InstallResult(
             ok=True, skill_name=entry.name,
             install_path=final_path, warnings=warnings,
         )
+
+
+def install_from_bundle(
+    bundle_b64: str,
+    *,
+    expected_name: str | None = None,
+    target_dir: Path | None = None,
+    allow_overwrite: bool = False,
+    skip_safety: bool = False,
+) -> InstallResult:
+    """Install a skill from a base64url(.tar.gz) bundle — the P2P share path.
+
+    The bundle layout matches ``publisher.package_skill``: a single top-level
+    ``<name>/`` directory containing SKILL.md (+ optional scripts/references/
+    assets). The same validation and AST safety gate as catalog installs apply,
+    so an imported agent is held to the identical bar as a downloaded one.
+
+    Args:
+        bundle_b64: base64url-encoded .tar.gz (padding optional).
+        expected_name: if given, the bundle's SKILL.md name must match.
+        target_dir: override install location (defaults to user_skills_dir()).
+        allow_overwrite: replace an existing skill of the same name.
+        skip_safety: DANGEROUS — bypass the AST safety gate (testing only).
+
+    Returns:
+        InstallResult with status + details.
+    """
+    name_hint = expected_name or "skill"
+
+    try:
+        padding = "=" * (-len(bundle_b64) % 4)
+        raw = base64.urlsafe_b64decode(bundle_b64 + padding)
+    except Exception as exc:
+        return InstallResult(ok=False, skill_name=name_hint, error=f"Invalid bundle encoding: {exc}")
+
+    target_root = target_dir or user_skills_dir()
+
+    with tempfile.TemporaryDirectory(prefix="kali-bundle-") as tmp:
+        staging = Path(tmp)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+                # filter="data" (PEP 706) blocks path traversal, absolute paths,
+                # symlinks and special files — refuses an unsafe bundle outright.
+                tar.extractall(staging, filter="data")
+        except Exception as exc:
+            return InstallResult(ok=False, skill_name=name_hint, error=f"Cannot read bundle: {exc}")
+
+        subdirs = [d for d in staging.iterdir() if d.is_dir()]
+        if len(subdirs) != 1:
+            return InstallResult(
+                ok=False, skill_name=name_hint,
+                error="Bundle must contain exactly one skill directory",
+            )
+        extracted_dir = subdirs[0]
+
+        try:
+            manifest = load_skill(extracted_dir, source="bundle", strict=True)
+        except (FileNotFoundError, ValidationError) as exc:
+            return InstallResult(ok=False, skill_name=name_hint, error=f"Bundle skill is invalid: {exc}")
+
+        name = manifest.name
+        if expected_name and expected_name != name:
+            return InstallResult(
+                ok=False, skill_name=name,
+                error=f"Bundle name '{name}' does not match expected '{expected_name}'",
+            )
+
+        final_path = target_root / name
+        if final_path.exists() and not allow_overwrite:
+            return InstallResult(
+                ok=False, skill_name=name,
+                error=f"Skill '{name}' already installed. Pass overwrite=True to replace.",
+            )
+
+        warnings: list[str] = []
+        if not skip_safety:
+            issues = _safety_check_scripts(extracted_dir)
+            if issues:
+                return InstallResult(
+                    ok=False, skill_name=name,
+                    error="Safety check failed:\n- " + "\n- ".join(issues),
+                )
+        else:
+            warnings.append("Safety gate skipped — unsafe install mode")
+
+        try:
+            _deploy_atomic(extracted_dir, final_path)
+        except Exception as exc:
+            return InstallResult(ok=False, skill_name=name, error=f"Deploy failed: {exc}")
+
+        logger.info("Installed skill '%s' from bundle → %s", name, final_path)
+        return InstallResult(ok=True, skill_name=name, install_path=final_path, warnings=warnings)
 
 
 def uninstall(skill_name: str, *, target_dir: Path | None = None) -> bool:

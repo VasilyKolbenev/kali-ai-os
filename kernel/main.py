@@ -1958,6 +1958,67 @@ def create_app(
             _get_skills_registry().reload()
         return {"status": "ok" if ok else "error", "removed": ok}
 
+    @app.post("/skills/install-bundle")
+    async def skills_install_bundle(request: Request) -> dict[str, Any]:
+        """Install a skill from a posted base64url(.tar.gz) bundle — the P2P
+        share-loop import path.
+
+        Body: {"data": "<base64url>", "name"?: "...", "overwrite"?: false}.
+        Held to the same validation + AST safety gate as a catalog install.
+        """
+        from kernel.skills.installer import install_from_bundle
+
+        body = await request.json()
+        data = body.get("data", "")
+        if not data:
+            return {"status": "error", "message": "data is required"}
+
+        try:
+            result = install_from_bundle(
+                data,
+                expected_name=body.get("name") or None,
+                allow_overwrite=bool(body.get("overwrite", False)),
+            )
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+        if result.ok:
+            _get_skills_registry().reload()
+            return {
+                "status": "ok",
+                "skill_name": result.skill_name,
+                "install_path": str(result.install_path),
+                "warnings": result.warnings,
+            }
+        return {"status": "error", "message": result.error, "skill_name": result.skill_name}
+
+    @app.get("/skills/{name}/export")
+    async def skills_export(name: str) -> dict[str, Any]:
+        """Export an installed skill as a portable base64url(.tar.gz) bundle for
+        P2P sharing (the UGC share loop). Self-contained — a friend imports it
+        via POST /skills/install-bundle with no catalog or server involved.
+        """
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        from kernel.skills.publisher import package_skill
+
+        reg = _get_skills_registry()
+        skill = reg.get(name)
+        if skill is None:
+            return {"status": "error", "message": f"Skill '{name}' not found locally"}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                bundle = package_skill(skill.skill_dir, output_dir=Path(tmp))
+                raw = bundle.read_bytes()
+        except Exception as exc:
+            return {"status": "error", "message": f"Export failed: {exc}"}
+
+        data = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return {"status": "ok", "name": name, "data": data, "size": len(raw)}
+
     @app.get("/skills/installed")
     async def skills_installed() -> dict[str, Any]:
         """List all skills discovered locally (builtin + user)."""

@@ -292,6 +292,21 @@ pub async fn skills_uninstall(ExtractJson(body): ExtractJson<serde_json::Value>)
     proxy_post_with_body("/skills/uninstall", &body).await
 }
 
+/// `POST /skills/install-bundle` — always proxy. Imports a skill from a
+/// posted base64url(.tar.gz) bundle (the P2P share-loop path). Python runs
+/// the same validation + AST safety gate as a catalog install.
+pub async fn skills_install_bundle(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response {
+    proxy_post_with_body("/skills/install-bundle", &body).await
+}
+
+/// `GET /skills/:name/export` — always proxy. Bundling (tar.gz of the skill
+/// dir → base64url) lives in `kernel/skills/publisher.py`; Rust forwards and
+/// returns the self-contained bundle the share screen embeds in a `kali://`
+/// link.
+pub async fn skills_export(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    proxy_get(&format!("/skills/{}/export", encode_path_segment(&name))).await
+}
+
 /// Proxy a POST with the caller-supplied JSON body to Python,
 /// preserving upstream status semantics so 404s and validation
 /// failures surface cleanly to the UI.
@@ -610,6 +625,8 @@ pub fn router_full(
         .route("/voice/stop", post(voice_stop))
         .route("/skills/installed", get(skills_installed))
         .route("/skills/install", post(skills_install))
+        .route("/skills/install-bundle", post(skills_install_bundle))
+        .route("/skills/:name/export", get(skills_export))
         .route("/skills/uninstall", post(skills_uninstall))
         .route("/skills/validate", post(skills_validate))
         .route("/skills/catalog/sources", get(skills_catalog_sources))
