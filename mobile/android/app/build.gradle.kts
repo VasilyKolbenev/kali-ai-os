@@ -5,6 +5,9 @@ plugins {
 }
 
 android {
+    // namespace stays as the original code package (MainActivity lives here);
+    // the store identity is applicationId below. Full package rename is a
+    // later polish item — not worth the MainActivity move risk right now.
     namespace = "com.example.kali_mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -15,10 +18,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.kali_mobile"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Real application ID for store distribution (was com.example placeholder).
+        applicationId = "ai.kali.mobile"
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
