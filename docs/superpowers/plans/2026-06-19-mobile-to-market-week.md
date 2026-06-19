@@ -20,26 +20,35 @@ silently dropped.
   / honest statuses), real dashboard data (currently mock), memory UI, canvas,
   nightstand, activity.
 
-## Scope for the week
+## Scope — FULL PARITY, no cuts (Vasily, 2026-06-19)
 
-### IN — the moat (without these mobile isn't the product)
-1. **Baseline:** rebuild APK against the fixed backend; run on `kali_test_34`
-   emulator; confirm what truly works on device. (De-risks everything.)
-2. **Voice builder on mobile** — speak → create agent → deploy. THE wedge.
-   Reuse backend `/builder/*` (already works); build the Flutter screen +
-   wire voice. Biggest item.
-3. **Мастерская parity-lite** — categories of life, RU benefit cards, honest
-   statuses (Работает / Остановлен / Нужна настройка via `/agents/config-status`),
-   1-click enable, inline key entry. Mirror the desktop curated model.
-4. **Real dashboard data** — kill mock weather/budget/tasks; pull live from
-   backend agents.
-5. **Ship-ready APK** — fix `applicationId` (com.example → real), debug-signed
-   build that installs cleanly.
+Mobile must be no less useful than desktop. Prioritized so value lands first;
+nothing dropped — items lower in the list ship later in the week, not "never".
 
-### OUT — honest cut for the week (post-launch)
-- Canvas widgets, Nightstand, Activity logs, dedicated memory UI (memory works
-  backend-side; surfacing it is later).
-- Full design polish / animation parity.
+1. **Baseline** ✅ — APK builds, runs on `kali_test_34`, applicationId real.
+2. **Backend bridge** ✅ — emulator → :3006 (staged desktop) → :3005; mobile
+   connects and renders the live app.
+3. **Real dashboard data** ✅ (backend) — `/dashboard` live from agents, honest
+   «—». NEEDS frozen-backend rebuild to reach mobile (mobile still on staged
+   build showing old mock).
+4. **Kill remaining dashboard mockups** — the hardcoded «Jarvis Insight»
+   (l10n `insightText`: «встреча через 30 минут…») and «агент готов» teaser are
+   fake; wire to real briefing/agent state or remove.
+5. **Мастерская parity** — categories, RU cards, honest statuses
+   (`/agents/config-status`), 1-click enable, inline key entry; segments
+   Мои·Витрина·Сообщество. Mirror desktop curated model.
+6. **Voice builder on mobile** — speak → create agent → deploy. THE wedge.
+   Reuse backend `/builder/*`.
+7. **Memory** — surface facts on mobile (works backend-side; needs UI).
+8. **Canvas / live widgets** — port the interactive widgets.
+9. **Activity / Nightstand** — agent execution feed + ambient mode.
+10. **Share-to-Reels** — currently a mockup (export button = SnackBar only);
+    make the UGC export real (or honest pending-state).
+11. **Ship-ready signed APK**.
+
+> Honesty on timeline: TRUE full parity is the ~2-week estimate. In one week we
+> land items 1–6 (the moat: connected, real dashboard, store, voice creation)
+> well; 7–11 continue as fast-follow. No functionality is cut — sequenced.
 
 ### Desktop (parallel, lighter — already demo/beta-ready)
 - Freeze the verified demo build; no churn before the investor meeting.
