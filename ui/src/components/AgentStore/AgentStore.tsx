@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, Sparkles, Wrench, X } from "lucide-react";
 import { api } from "../../api/client";
-import type { CatalogSkill, CatalogSource, InstalledSkill } from "../../api/types";
+import type { AgentCapability, CatalogSkill, CatalogSource, InstalledSkill } from "../../api/types";
 import { useAppStore } from "../../stores/appStore";
 import { CURATED, type CategoryId, type CuratedEntry } from "./curated";
 import { CommunitySection, CuratedStore } from "./CuratedStore";
 import { MineSection, type MyAgent } from "./StoreMine";
 import { SetupDialog, type CardState } from "./StoreCards";
+import { ConsentDialog } from "./ConsentDialog";
 import { AdvancedStore, PublishDialog, type PublishDialogState } from "./AdvancedStore";
 
 type ToastType = "success" | "error" | "info";
@@ -38,6 +39,7 @@ export function AgentStore() {
   >({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [setupEntry, setSetupEntry] = useState<CuratedEntry | null>(null);
+  const [consent, setConsent] = useState<{ entry: CuratedEntry; capabilities: AgentCapability[] } | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
 
   // Community (kali source)
@@ -199,7 +201,8 @@ export function AgentStore() {
     return installedNames.has(entry.source!.name) ? "active" : "idle";
   };
 
-  const handleCuratedPrimary = async (entry: CuratedEntry) => {
+  // Does the actual enabling — the same path for one-click and post-consent.
+  const enableEntry = async (entry: CuratedEntry) => {
     setBusyId(entry.id);
     try {
       if (entry.kind === "agent") {
@@ -220,6 +223,35 @@ export function AgentStore() {
       showToast(`Не получилось: ${(err as Error).message}`, "error");
     }
     setBusyId(null);
+  };
+
+  // Consent gate: agents with sensitive capabilities (personal-data read/write)
+  // disclose first; weather/currency/skills keep today's one-click. Disclosure
+  // only — «Разрешить» runs the same enableEntry path. Fail-open: if the
+  // capabilities lookup is unavailable, fall through to direct enable.
+  const handleCuratedPrimary = async (entry: CuratedEntry) => {
+    if (entry.kind === "agent" && entry.agentName) {
+      setBusyId(entry.id);
+      try {
+        const caps = await api.getCapabilities(entry.agentName);
+        if (caps.sensitive) {
+          setConsent({ entry, capabilities: caps.capabilities });
+          setBusyId(null);
+          return;
+        }
+      } catch {
+        /* fail-open: keep today's one-click enable */
+      }
+      setBusyId(null);
+    }
+    await enableEntry(entry);
+  };
+
+  const handleConsentAllow = async () => {
+    if (!consent) return;
+    const { entry } = consent;
+    setConsent(null);
+    await enableEntry(entry);
   };
 
   // --- Мои actions -------------------------------------------------------
@@ -468,6 +500,15 @@ export function AgentStore() {
             {view === "main" ? "Для продвинутых: источники и публикация ›" : "‹ Вернуться в Мастерскую"}
           </button>
         </div>
+
+        {consent && (
+          <ConsentDialog
+            entry={consent.entry}
+            capabilities={consent.capabilities}
+            onAllow={handleConsentAllow}
+            onCancel={() => setConsent(null)}
+          />
+        )}
 
         {setupEntry && (
           <SetupDialog

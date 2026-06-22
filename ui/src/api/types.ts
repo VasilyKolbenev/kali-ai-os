@@ -28,6 +28,23 @@ export interface AgentManifest {
   protocol: string;
 }
 
+export type CapabilityRisk = "low" | "med" | "high";
+
+/** One plain-language permission line derived from a manifest capability id. */
+export interface AgentCapability {
+  id: string;
+  label: string;
+  risk: CapabilityRisk;
+}
+
+/** Consent-disclosure payload: GET /agents/{name}/capabilities. `sensitive`
+    is true iff any capability is "high" or "med" (personal-data read/write). */
+export interface AgentCapabilities {
+  name: string;
+  capabilities: AgentCapability[];
+  sensitive: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   version: string;

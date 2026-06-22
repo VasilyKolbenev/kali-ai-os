@@ -9,6 +9,7 @@ vi.mock("../../../api/client", () => ({
     skillsInstalled: vi.fn(),
     agents: vi.fn(),
     runningAgents: vi.fn(),
+    getCapabilities: vi.fn(),
     loadAgent: vi.fn(),
     unloadAgent: vi.fn(),
     skillInstall: vi.fn(),
@@ -31,6 +32,12 @@ describe("AgentStore (Мастерская)", () => {
     vi.mocked(api.runningAgents).mockResolvedValue([] as never);
     vi.mocked(api.skillsCatalogList).mockRejectedValue(new Error("offline"));
     vi.mocked(api.agentConfigStatus).mockResolvedValue({});
+    // Default: not sensitive → one-click enable stays (weather/currency).
+    vi.mocked(api.getCapabilities).mockResolvedValue({
+      name: "weather",
+      capabilities: [{ id: "network:http", label: "Выходить в интернет", risk: "low" }],
+      sensitive: false,
+    });
   });
 
   it("renders the header and the three loop segments", async () => {
@@ -64,6 +71,76 @@ describe("AgentStore (Мастерская)", () => {
     await waitFor(() =>
       expect(card.textContent).toContain("Работает"),
     );
+  });
+
+  it("sensitive agent: Включить → consent disclosure → Разрешить enables", async () => {
+    vi.mocked(api.agents).mockResolvedValue([
+      { name: "email", description: "Email agent" },
+    ] as never);
+    vi.mocked(api.getCapabilities).mockResolvedValue({
+      name: "email",
+      capabilities: [
+        { id: "email:send", label: "Отправлять письма от твоего имени", risk: "high" },
+        { id: "email:read", label: "Читать твою почту", risk: "med" },
+      ],
+      sensitive: true,
+    });
+    vi.mocked(api.runningAgents)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValue([{ name: "email" }] as never);
+    vi.mocked(api.loadAgent).mockResolvedValue({ status: "ok" });
+
+    const user = userEvent.setup();
+    render(<AgentStore />);
+
+    const card = (await screen.findByText("Почта")).closest(".glass") as HTMLElement;
+    await user.click(await waitFor(() => {
+      const btn = [...card.querySelectorAll("button")].find(
+        (b) => b.textContent?.includes("Включить"),
+      );
+      if (!btn) throw new Error("enable button not rendered yet");
+      return btn;
+    }));
+
+    // Disclosure appears with the «…от твоего имени» phrasing; no enable yet.
+    await waitFor(() =>
+      expect(screen.getByText("Отправлять письма от твоего имени")).toBeInTheDocument(),
+    );
+    expect(api.loadAgent).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("Разрешить"));
+    await waitFor(() => expect(api.loadAgent).toHaveBeenCalledWith("email"));
+  });
+
+  it("sensitive agent: Не сейчас cancels without enabling", async () => {
+    vi.mocked(api.agents).mockResolvedValue([
+      { name: "email", description: "Email agent" },
+    ] as never);
+    vi.mocked(api.getCapabilities).mockResolvedValue({
+      name: "email",
+      capabilities: [
+        { id: "email:send", label: "Отправлять письма от твоего имени", risk: "high" },
+      ],
+      sensitive: true,
+    });
+
+    const user = userEvent.setup();
+    render(<AgentStore />);
+
+    const card = (await screen.findByText("Почта")).closest(".glass") as HTMLElement;
+    await user.click(await waitFor(() => {
+      const btn = [...card.querySelectorAll("button")].find(
+        (b) => b.textContent?.includes("Включить"),
+      );
+      if (!btn) throw new Error("enable button not rendered yet");
+      return btn;
+    }));
+
+    await user.click(await screen.findByText("Не сейчас"));
+    await waitFor(() =>
+      expect(screen.queryByText("Отправлять письма от твоего имени")).not.toBeInTheDocument(),
+    );
+    expect(api.loadAgent).not.toHaveBeenCalled();
   });
 
   it("Мои with nothing enabled shows the friendly empty state", async () => {

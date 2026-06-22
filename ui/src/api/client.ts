@@ -25,6 +25,8 @@ export const api = {
   loadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/load`, { method: "POST" }),
   unloadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/unload`, { method: "POST" }),
   agentStatus: (name: string) => fetchJSON<import("./types").AgentStatus>(`/agents/${name}/status`),
+  getCapabilities: (name: string) =>
+    fetchJSON<import("./types").AgentCapabilities>(`/agents/${name}/capabilities`),
   chat: (text: string) => fetchJSON<{ response: string; source: string; data?: unknown }>("/chat", {
     method: "POST",
     body: JSON.stringify({ text }),

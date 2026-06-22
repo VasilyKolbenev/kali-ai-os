@@ -721,6 +721,21 @@ def create_app(
     async def list_tools(request: Request) -> list[dict[str, Any]]:
         return request.app.state.plugin_registry.get_all_tools()
 
+    @app.get("/agents/{name}/capabilities")
+    async def agent_capabilities(name: str, request: Request) -> dict[str, Any]:
+        """Plain-language capability disclosure for the consent-disclosure flow.
+
+        Returns the agent's manifest capabilities classified into RU labels and
+        risk tiers (see kernel.capabilities). Disclosure only — does not change
+        any permission/enforcement behavior. Unknown agents return an empty,
+        non-sensitive result (never 404) so the UI never crashes.
+        """
+        from kernel.capabilities import describe_capabilities
+
+        manifest = request.app.state.plugin_registry.get(name)
+        caps = manifest.capabilities if manifest else []
+        return {"name": name, **describe_capabilities(caps)}
+
     @app.get("/config")
     async def get_config(request: Request) -> dict[str, Any]:
         return request.app.state.config_manager.config.model_dump()
