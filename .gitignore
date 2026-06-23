@@ -69,3 +69,6 @@ Thumbs.db
 verify_demo.py
 verify_stt.py
 verify_builder.py
+
+# On-device TTS eval run artifacts (audio/results/logs — regenerable; BASELINE.md is the record)
+research/on-device-tts/runs/
