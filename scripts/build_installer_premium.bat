@@ -34,6 +34,20 @@ echo.
 echo This takes ~15-30 minutes for ~9 GB content. Be patient.
 echo.
 
+REM Materialize HF-cache symlinks (vocos/Whisper snapshots -> blobs) into real
+REM files before packaging: shipping the symlinks risks dangling links on the
+REM user's machine (offline gate then fails to load voice instead of degrading)
+REM or double-shipping each model. See scripts\materialize_hf_symlinks.py.
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+echo Materializing HF-cache symlinks to real files...
+"%PY%" scripts\materialize_hf_symlinks.py "dist_premium\premium_stage"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: HF-cache materialization failed.
+    exit /b 1
+)
+echo.
+
 "%ISCC%" scripts\installer_premium.iss
 
 if %ERRORLEVEL% NEQ 0 (
