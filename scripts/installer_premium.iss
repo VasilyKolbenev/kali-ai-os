@@ -9,7 +9,10 @@
 #define AppExe "kali-desktop.exe"
 
 [Setup]
-AppId={{B7A3F12E-KALI-PREMIUM-4F2C-2026042200}}
+; AppId is the stable GUID identifying this app for upgrade/uninstall detection.
+; Must be a valid GUID and must NOT change after a public release — a new value
+; installs side-by-side instead of upgrading the prior install.
+AppId={{B7A3F12E-4F2C-4A2B-9E5D-202604220000}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
