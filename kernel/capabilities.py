@@ -106,6 +106,21 @@ def _classify(cap: str) -> Risk:
     return "low"
 
 
+def classify_risk(token_source: str) -> Risk:
+    """Token-based risk tier for a capability id or a runtime action name.
+
+    Both capability ids (``email.send``) and action names (``send_email``)
+    encode the action as tokens, so the same rules apply: write/send/create/
+    delete -> ``high``, read -> ``med``, else ``low``. Used by consent
+    disclosure and the dry-run action preview.
+
+    Action names use underscores (``send_email``) while capability ids use dots
+    (``email.send``); normalize underscores to dots so the token split treats
+    both styles uniformly.
+    """
+    return _classify(token_source.replace("_", "."))
+
+
 def _describe_one(cap: str) -> dict[str, str]:
     """Build the disclosure entry for one capability id.
 

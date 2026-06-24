@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from kernel.action_preview import describe_action
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,6 +121,12 @@ class InProcessSandbox:
             "request_id": req.request_id,
             "status": "pending",
         }
+        # Dry-run preview v1 (disclosure-only): attach a plain-language label +
+        # risk tier so the Activity view shows, in plain Russian, what the action
+        # does. Non-gating — does not change execution.
+        preview = describe_action(req.agent_name, req.action, req.args)
+        record["preview_label"] = preview["label"]
+        record["preview_risk"] = preview["risk"]
 
         try:
             # --- Rate limit ------------------------------------------------

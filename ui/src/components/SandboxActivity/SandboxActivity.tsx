@@ -7,6 +7,7 @@ import { api } from "../../api/client";
 import type {
   AuditAgentStats, AuditRecord, AuditStatus, SandboxHealth,
 } from "../../api/types";
+import { parseActionPreview, type PreviewRisk } from "./actionPreview";
 
 const TIME_RANGES: { id: number; label: string }[] = [
   { id: 1, label: "1h" },
@@ -21,6 +22,15 @@ const STATUS_FILTERS: { id: "" | AuditStatus; label: string }[] = [
   { id: "denied", label: "Denied" },
   { id: "error", label: "Error" },
 ];
+
+// Dry-run preview (M1.8): plain-language label + risk tier parsed from the
+// audit record's `extra`, shown so a non-tech user can read what an agent did.
+const RISK_COLOR: Record<PreviewRisk, string> = {
+  high: "var(--j-red, #ef4444)",
+  med: "var(--j-amber, #f59e0b)",
+  low: "var(--j-text-muted, rgba(255,255,255,0.45))",
+};
+const RISK_TAG: Record<PreviewRisk, string> = { high: "важно", med: "личное", low: "" };
 
 export function SandboxActivity() {
   const [hours, setHours] = useState(24);
@@ -317,6 +327,8 @@ function AuditRow({ record }: { record: AuditRecord }) {
     StatusIcon = X;
   }
 
+  const preview = parseActionPreview(record.extra);
+
   return (
     <div
       className="flex items-center gap-3 px-3 py-1.5 rounded text-xs hover:bg-white/[0.02] transition"
@@ -327,7 +339,23 @@ function AuditRow({ record }: { record: AuditRecord }) {
         <span className="text-white/80 font-medium shrink-0">
           {record.agent}
         </span>
-        <span className="text-white/40 truncate">.{record.action}</span>
+        <span className="text-white/40 shrink-0">.{record.action}</span>
+        {preview && preview.risk !== "low" && (
+          <span
+            className="text-[9px] tracking-wider uppercase px-1 py-0.5 rounded shrink-0"
+            style={{
+              color: RISK_COLOR[preview.risk],
+              backgroundColor: RISK_COLOR[preview.risk] + "22",
+            }}
+          >
+            {RISK_TAG[preview.risk]}
+          </span>
+        )}
+        {preview && (
+          <span className="text-white/55 truncate" title={preview.label}>
+            {preview.label}
+          </span>
+        )}
         {record.denied_reason && (
           <span
             className="text-[10px] tracking-wider uppercase px-1 py-0.5 rounded shrink-0"
