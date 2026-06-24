@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS user_facts (
     confidence REAL DEFAULT 1.0,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS agent_consents (
+    agent_name TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -126,6 +132,31 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    async def set_consent(self, agent_name: str, status: str) -> None:
+        """Persist an agent's consent state ('approved' | 'revoked'); upserts."""
+        await self._db.execute(
+            "INSERT INTO agent_consents (agent_name, status, updated_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(agent_name) DO UPDATE SET "
+            "status = excluded.status, updated_at = CURRENT_TIMESTAMP",
+            (agent_name, status),
+        )
+        await self._db.commit()
+
+    async def get_consent(self, agent_name: str) -> str | None:
+        """Return an agent's persisted consent status, or None if unset."""
+        cursor = await self._db.execute(
+            "SELECT status FROM agent_consents WHERE agent_name = ?", (agent_name,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def get_all_consents(self) -> dict[str, str]:
+        """Return ``{agent_name: status}`` for every persisted consent."""
+        cursor = await self._db.execute("SELECT agent_name, status FROM agent_consents")
+        rows = await cursor.fetchall()
+        return {row[0]: row[1] for row in rows}
 
     async def save_agent_config(
         self, agent_name: str, config: dict[str, Any], enabled: bool = True

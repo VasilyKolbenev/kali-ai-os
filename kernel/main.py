@@ -496,6 +496,24 @@ def create_app(
 
         app.state.builtin_agents = builtin_agents
 
+        # Restore persisted consent (M2.2): a sticky revoke survives restart, so
+        # a previously-revoked agent (even an auto-approved built-in) is NOT
+        # re-approved here; an approved one is restored.
+        try:
+            from datetime import datetime, timezone
+            for _ag, _status in (await database.get_all_consents()).items():
+                _m = plugin_registry.get(_ag)
+                if not _m:
+                    continue
+                if _status == "revoked":
+                    _m.permissions.user_approved = False
+                elif _status == "approved":
+                    _m.permissions.user_approved = True
+                    _m.permissions.approval_timestamp = datetime.now(timezone.utc)
+                    permission_enforcer.register_agent(_ag, _m)
+        except Exception as _e:
+            logger.warning("Consent restore failed: %s", _e)
+
         catalog_client = CatalogClient()
         app.state.catalog_client = catalog_client
 
@@ -1025,25 +1043,35 @@ def create_app(
         from kernel.agent_keys import all_agents_config_status
         return all_agents_config_status()
 
-    def _approve_agent(s: Any, name: str) -> None:
-        """Grant runtime permission to an agent the user explicitly enabled.
+    async def _approve_agent(s: Any, name: str, *, explicit: bool = False) -> None:
+        """Grant runtime permission to an agent the user enabled.
 
-        Clicking «Включить» (or invoking a tool directly) IS the consent: the
-        agent's process was already started, so without this its calls hit the
-        sandbox unapproved and 403 — i.e. «Работает» with zero function. Built-
-        in or not, an explicit user action approves it.
+        Explicit user actions (enabling via «Включить» / «Разрешить») always
+        approve and clear any prior revoke. Implicit approvals (a direct tool
+        call) respect a STICKY revoke: a revoked agent stays unapproved until
+        the user explicitly re-enables it — M2.2 semantics A. Consent is
+        persisted so it (and a revoke) survives a restart.
         """
+        from datetime import datetime, timezone
+
         manifest = s.plugin_registry.get(name)
-        if manifest and s.permission_enforcer:
-            manifest.permissions.user_approved = True
-            s.permission_enforcer.register_agent(name, manifest)
+        if not (manifest and s.permission_enforcer):
+            return
+        db = getattr(s, "database", None)
+        if not explicit and db is not None and await db.get_consent(name) == "revoked":
+            return  # sticky revoke — wait for an explicit re-enable
+        manifest.permissions.user_approved = True
+        manifest.permissions.approval_timestamp = datetime.now(timezone.utc)
+        s.permission_enforcer.register_agent(name, manifest)
+        if db is not None:
+            await db.set_consent(name, "approved")
 
     @app.post("/agents/{name}/load")
     async def load_agent(name: str, request: Request) -> dict[str, str]:
         try:
             s = request.app.state
             await s.agent_runtime.load_agent(name)
-            _approve_agent(s, name)
+            await _approve_agent(s, name, explicit=True)
             return {"status": "loaded", "agent": name}
         except ValueError as e:
             return {"status": "error", "message": str(e)}
@@ -1052,6 +1080,23 @@ def create_app(
     async def unload_agent(name: str, request: Request) -> dict[str, str]:
         await request.app.state.agent_runtime.unload_agent(name)
         return {"status": "unloaded", "agent": name}
+
+    @app.post("/agents/{name}/revoke")
+    async def revoke_agent(name: str, request: Request) -> dict[str, str]:
+        """Revoke a previously-granted consent (sticky — M2.2 semantics A).
+
+        Clears approval in-memory (the enforcer shares the PermissionSet object,
+        so calls are denied immediately) and persists the revoke so it survives
+        a restart and is not undone by an implicit approve-on-execute.
+        """
+        s = request.app.state
+        manifest = s.plugin_registry.get(name)
+        if manifest:
+            manifest.permissions.user_approved = False
+        db = getattr(s, "database", None)
+        if db is not None:
+            await db.set_consent(name, "revoked")
+        return {"status": "revoked", "agent": name}
 
     @app.get("/agents/{name}/status")
     async def agent_status(name: str, request: Request) -> dict[str, Any]:
@@ -1077,10 +1122,10 @@ def create_app(
             except Exception as e:
                 return {"error": f"Agent '{name}' not available: {e}"}
 
-        # A direct tool call is explicit user consent → ensure approval every
-        # time (idempotent), so an already-running-but-unapproved agent doesn't
-        # 403 — the bug where «Работает» agents silently did nothing.
-        _approve_agent(request.app.state, name)
+        # A direct tool call implicitly approves a not-yet-revoked agent so an
+        # already-running-but-unapproved agent doesn't 403. A sticky revoke
+        # (M2.2) is respected: a revoked agent stays denied until re-enabled.
+        await _approve_agent(request.app.state, name, explicit=False)
 
         # Route through SandboxBackend — adds permission + rate limit + audit
         sandbox = _get_sandbox(request.app)
