@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,70 @@ _DEFAULT_TOOLS: list[dict[str, Any]] = [
     {"name": "status", "description": "Report skill status", "parameters": {}},
 ]
 
+# Russian number words for spelled-out intervals ("каждые два часа") — voice STT
+# often transcribes small numbers as words rather than digits.
+_RU_NUM: dict[str, int] = {
+    "один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4,
+    "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
+    "десять": 10, "двенадцать": 12,
+}
+
+
+def _parse_interval_hours(text: str) -> int | None:
+    """Parse 'каждые 2 часа' / 'каждый час' / 'раз в час' / 'ежечасно' → hours."""
+    t = text.lower()
+    m = re.search(r"(\d+)\s*час", t)
+    if m:
+        return max(1, int(m.group(1)))
+    for word, n in _RU_NUM.items():
+        if re.search(rf"\b{word}\w*\s+час", t):
+            return n
+    if "час" in t or "ежечас" in t:
+        return 1
+    return None
+
+
+def _parse_interval_minutes(text: str) -> int | None:
+    """Parse 'каждые 30 минут' / 'полчаса' → minutes."""
+    t = text.lower()
+    m = re.search(r"(\d+)\s*мин", t)
+    if m:
+        return int(m.group(1))
+    if "пол" in t and "час" in t:
+        return 30
+    return None
+
+
+def _with_schedule(config: dict[str, Any]) -> dict[str, Any]:
+    """Derive the deployer's schedule keys from the wizard's free-text answer.
+
+    The wizard records "Как часто…?" as a flat ``interval`` string (e.g.
+    "каждые 2 часа"), but the deployer only registers a cron when it finds
+    ``reminders.interval_hours`` or ``schedule.cron`` — so a time-based skill
+    previously never got scheduled. Returns a new config with those keys filled
+    in; leaves an already-structured schedule untouched.
+    """
+    reminders = config.get("reminders")
+    schedule = config.get("schedule")
+    if (isinstance(reminders, dict) and reminders.get("interval_hours")) or (
+        isinstance(schedule, dict) and schedule.get("cron")
+    ):
+        return config
+
+    raw = config.get("interval") or config.get("time_window") or ""
+    if not isinstance(raw, str) or not raw.strip():
+        return config
+
+    new = dict(config)
+    minutes = _parse_interval_minutes(raw)
+    if minutes:
+        new["schedule"] = {"cron": f"*/{minutes} * * * *"}
+        return new
+    hours = _parse_interval_hours(raw)
+    if hours:
+        new["reminders"] = {"enabled": True, "interval_hours": hours}
+    return new
+
 
 def generate_skill(
     name: str,
@@ -72,6 +137,10 @@ def generate_skill(
     """
     if "/" in name or "\\" in name or ".." in name:
         raise ValueError(f"Invalid agent name: {name}")
+
+    # Translate the wizard's free-text interval into the schedule keys the
+    # deployer reads, so a time-based skill actually gets a cron registered.
+    config = _with_schedule(config)
 
     skill_dir = agents_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
