@@ -186,27 +186,43 @@ class RemoteVoicePipeline:
         if tail:
             await self._emit_tts_for(tail)
 
-        tool_calls_payload = (
-            [{"name": tc.name, "args": tc.arguments} for tc in response.tool_calls]
-            if response.tool_calls
-            else None
-        )
-        
+        # If the model asked for a tool, EXECUTE it (shared path with chat) and
+        # speak the result — previously the call was only announced and the
+        # pipeline went idle, so the voice command silently did nothing.
+        final_text = response.text
+        if response.tool_calls and self._app_state is not None:
+            from kernel.tool_dispatch import execute_tool_call
+
+            try:
+                dispatched = await execute_tool_call(
+                    self._app_state,
+                    self._llm,
+                    response.tool_calls[0],
+                    self._context[-10:],
+                    stt_result.text,
+                )
+            except Exception:
+                logger.exception("Remote pipeline: tool dispatch failed")
+                dispatched = None
+            if dispatched is not None:
+                final_text = dispatched[0]
+                await self._emit_tts_for(final_text)
+
         await self._bus.publish(
             Event(
                 topic="agent.response",
                 source="remote-pipeline",
                 payload={
-                    "text": response.text,
+                    "text": final_text,
                     "provider": response.provider_used,
-                    "tool_calls": tool_calls_payload,
+                    "tool_calls": None,
                     "latency_ms": response.latency_ms,
                 },
             )
         )
 
         self._context.append({"role": "user", "content": stt_result.text})
-        self._context.append({"role": "assistant", "content": response.text})
+        self._context.append({"role": "assistant", "content": final_text})
         # (TTS already streamed sentence-by-sentence during route_streaming above.)
 
         if lt_memory:
