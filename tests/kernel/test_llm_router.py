@@ -1,5 +1,6 @@
 """Tests for LLM Router."""
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -70,6 +71,58 @@ class TestLLMRouter:
         router = LLMRouter(config)
         req = LLMRequest(text="hello", context=[], available_tools=[])
         assert router.select_provider(req) == "local"
+
+    def test_cloud_re_enabled_after_cooldown(self, router: LLMRouter) -> None:
+        """One transient cloud failure must not strand the session on local
+        (which strips tools) forever — cloud re-enables after the cooldown."""
+        router._cloud_available = False
+        router._cloud_last_fail = time.time() - 301
+        tools = [{"type": "function", "function": {"name": "t", "description": "t"}}]
+        req = LLMRequest(text="проверь агентов", context=[], available_tools=tools)
+        assert router.select_provider(req) == "cloud"
+        assert router._cloud_available is True
+
+    def test_cloud_stays_disabled_within_cooldown(self, router: LLMRouter) -> None:
+        router._cloud_available = False
+        router._cloud_last_fail = time.time()
+        router._local_available = True
+        req = LLMRequest(text="hi", context=[], available_tools=[])
+        assert router.select_provider(req) == "local"
+
+    async def test_local_forwards_tools_and_parses_tool_calls(self) -> None:
+        """Local (privacy) provider must still be able to call agents — forward
+        the tool schema to Ollama and parse any tool_calls it returns."""
+        config = LLMConfig(auto_route=False, local_model="llama3")
+        router = LLMRouter(config)
+        captured: dict = {}
+
+        class FakeResp:
+            def raise_for_status(self) -> None: ...
+            def json(self) -> dict:
+                return {"message": {"content": "", "tool_calls": [
+                    {"function": {"name": "tasks__list_tasks", "arguments": {}}}
+                ]}}
+
+        class FakeClient:
+            async def __aenter__(self) -> "FakeClient":
+                return self
+            async def __aexit__(self, *a: object) -> bool:
+                return False
+            async def post(self, url: str, json: dict | None = None, timeout: object = None) -> FakeResp:
+                captured["json"] = json
+                return FakeResp()
+
+        tools = [{"type": "function", "function": {
+            "name": "tasks__list_tasks", "description": "List tasks",
+            "parameters": {"type": "object", "properties": {}},
+        }}]
+        req = LLMRequest(text="проверь задачи", context=[], available_tools=tools)
+        with patch("httpx.AsyncClient", return_value=FakeClient()):
+            resp = await router._call_local(req)
+
+        assert "tools" in captured["json"]
+        assert resp.tool_calls is not None
+        assert resp.tool_calls[0].name == "tasks__list_tasks"
 
     async def test_route_returns_response(self, router: LLMRouter) -> None:
         req = LLMRequest(text="hello", context=[], available_tools=[])

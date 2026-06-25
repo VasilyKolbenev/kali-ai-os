@@ -71,6 +71,7 @@ class LLMRouter:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
         self._cloud_available = True
+        self._cloud_last_fail = 0.0
         self._local_available = True
         self._local_fails = 0
         self._local_last_fail = 0.0
@@ -89,6 +90,12 @@ class LLMRouter:
         if not self._local_available and (time.time() - self._local_last_fail > 300):
             self._local_available = True
             self._local_fails = 0
+
+        # Re-enable cloud after a cooldown so a single transient cloud failure
+        # doesn't strand the whole session on local — which strips tools, so
+        # every agent action would silently degrade to a chat reply.
+        if not self._cloud_available and (time.time() - self._cloud_last_fail > 300):
+            self._cloud_available = True
 
         # Prioritize cloud (much faster, always works)
         if self._cloud_available:
@@ -109,6 +116,7 @@ class LLMRouter:
             logger.exception("LLM call failed (provider=%s), trying fallback", provider)
             if provider == "cloud":
                 self._cloud_available = False
+                self._cloud_last_fail = time.time()
                 response = await self._call_local(request)
             else:
                 self._local_fails += 1
@@ -366,14 +374,22 @@ class LLMRouter:
     async def _call_local(self, request: LLMRequest) -> LLMResponse:
         import httpx
 
+        payload: dict[str, Any] = {
+            "model": self.config.local_model,
+            "messages": [{"role": "user", "content": request.text}],
+            "stream": False,
+        }
+        # Forward tools so a local (privacy) model can still call agents. Ollama
+        # accepts the same function schema and simply returns no tool_calls for a
+        # model without tool support — previously these were dropped, so every
+        # agent action silently degraded to a plain chat reply.
+        if request.available_tools:
+            payload["tools"] = request.available_tools
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "http://localhost:11434/api/chat",
-                json={
-                    "model": self.config.local_model,
-                    "messages": [{"role": "user", "content": request.text}],
-                    "stream": False,
-                },
+                json=payload,
                 # Short connect timeout so a missing Ollama daemon fails
                 # fast (→ cloud fallback), but a long read timeout so slow
                 # local generation isn't spuriously killed and bounced to
@@ -383,9 +399,23 @@ class LLMRouter:
             resp.raise_for_status()
             data = resp.json()
 
+        message = data.get("message", {})
+        tool_calls: list[ToolCall] = []
+        for tc in message.get("tool_calls", []) or []:
+            fn = tc.get("function", {})
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                import json
+
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            tool_calls.append(ToolCall(name=fn.get("name", ""), arguments=args or {}))
+
         return LLMResponse(
-            text=data.get("message", {}).get("content", ""),
-            tool_calls=None,
+            text=message.get("content", ""),
+            tool_calls=tool_calls if tool_calls else None,
             provider_used="local",
             latency_ms=0,
         )
