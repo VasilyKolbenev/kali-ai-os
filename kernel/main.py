@@ -522,6 +522,7 @@ def create_app(
             agents_dir=resolved_agents_dir,
             skill_executor=app.state.skill_executor,
             scheduler=app.state.scheduler,
+            plugin_registry=app.state.plugin_registry,
         )
 
         # Voice-engine prewarm — load F5-TTS + Whisper STT eagerly so the

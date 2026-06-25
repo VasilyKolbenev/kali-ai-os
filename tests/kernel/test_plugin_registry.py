@@ -96,3 +96,42 @@ class TestPluginRegistry:
         registry.discover()
         registered = registry.list_registered()
         assert len(registered) == 2
+
+    def test_register_dir_adds_single_skill_live(self, registry: PluginRegistry) -> None:
+        """A freshly-deployed skill becomes callable without a full re-scan and
+        without disturbing already-registered agents (M2.2 consent safety)."""
+        registry.discover()
+        assert registry.get("water-tracker") is None
+
+        skill_dir = registry.agents_dir / "water-tracker"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "water-tracker",
+                    "version": "1.0.0",
+                    "description": "Track water",
+                    "protocol": "skill",
+                    "tools": [{"name": "log", "description": "Log a data point", "parameters": {}}],
+                    "capabilities": ["water-tracker.log"],
+                    "permissions": [],
+                }
+            )
+        )
+        (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+
+        manifest = registry.register_dir(skill_dir)
+        assert manifest is not None and manifest.name == "water-tracker"
+        # Now live: get() finds it and its tool is offered to the LLM.
+        assert registry.get("water-tracker") is not None
+        tool_names = {t["function"]["name"] for t in registry.get_all_tools()}
+        assert "water-tracker__log" in tool_names
+        # Existing agents untouched (no full re-scan, consent state preserved).
+        assert registry.get("calendar") is not None
+        assert registry.get("tasks") is not None
+
+    def test_register_dir_ignores_non_skill_dir(self, registry: PluginRegistry) -> None:
+        registry.discover()
+        empty = registry.agents_dir / "empty"
+        empty.mkdir()
+        assert registry.register_dir(empty) is None

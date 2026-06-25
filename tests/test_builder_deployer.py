@@ -47,6 +47,39 @@ class TestDeploySkill:
         scheduler.register_cron.assert_called_once()
 
 
+class TestBuilderFlowRegistersSkill:
+    @pytest.mark.asyncio
+    async def test_deploy_registers_skill_live(self, tmp_path):
+        """deploy() must register the new skill in the plugin registry so the
+        assistant can find/call it without a restart (core-loop fix 2a)."""
+        from unittest.mock import MagicMock
+
+        from kernel.builder.flow import BuilderFlow
+        from kernel.builder.session_store import SessionStore
+
+        store = SessionStore()
+        executor = MagicMock()
+        registry = MagicMock()
+        flow = BuilderFlow(
+            session_store=store,
+            agents_dir=tmp_path,
+            skill_executor=executor,
+            plugin_registry=registry,
+        )
+        sid = store.create(request="track water", intent_type="skill", template="tracker")
+        store.get(sid).spec = {
+            "name": "water-tracker",
+            "template": "tracker",
+            "description": "track water",
+            "config": {},
+        }
+
+        result = await flow.deploy(sid)
+
+        assert result["status"] == "deployed"
+        registry.register_dir.assert_called_once()
+
+
 class TestDeployAgent:
     @pytest.mark.asyncio
     async def test_deploy_agent_success(self, tmp_path):

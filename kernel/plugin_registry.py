@@ -189,6 +189,36 @@ class PluginRegistry:
         )
         return list(self._agents.values())
 
+    def register_dir(self, agent_dir: Path) -> AgentManifest | None:
+        """Register a single agent/skill directory into the live registry.
+
+        Used right after the builder deploys a new skill so it becomes callable
+        immediately — its tools enter the LLM tool palette and it appears in
+        GET /agents — WITHOUT a full :meth:`discover`. A full re-scan rebuilds
+        every manifest and would disturb the in-memory consent/approval state of
+        the other agents (M2.2). Mirrors one iteration of :meth:`discover`.
+
+        Returns the registered manifest, or None if the directory is not a valid
+        skill/agent (so callers can detect a no-op).
+        """
+        if not agent_dir.is_dir() or agent_dir.name.startswith(("_", ".")):
+            return None
+        skill = self._load_skill(agent_dir)
+        legacy_path = agent_dir / "manifest.yaml"
+        legacy = (
+            self._load_legacy_manifest(legacy_path) if legacy_path.is_file() else None
+        )
+        if skill is None and legacy is None:
+            return None
+        if skill is not None:
+            manifest = _skill_manifest_to_agent_manifest(skill, legacy)
+            self._skills[manifest.name] = skill
+        else:
+            manifest = legacy  # type: ignore[assignment]
+        self._agents[manifest.name] = manifest
+        logger.info("Registered (incremental): %s v%s", manifest.name, manifest.version)
+        return manifest
+
     def get(self, name: str) -> AgentManifest | None:
         """Get agent manifest by name."""
         return self._agents.get(name)

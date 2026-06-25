@@ -35,6 +35,7 @@ class BuilderFlow:
         agents_dir: Path,
         skill_executor: Any,
         scheduler: Any | None = None,
+        plugin_registry: Any | None = None,
     ) -> None:
         """Initialise the BuilderFlow.
 
@@ -43,11 +44,15 @@ class BuilderFlow:
             agents_dir: Base directory under which skill directories will be created.
             skill_executor: SkillExecutor instance used during deployment.
             scheduler: Optional Scheduler for cron registration; pass None to skip.
+            plugin_registry: Optional PluginRegistry; when given, a freshly
+                deployed skill is registered live so it enters the LLM tool
+                palette and GET /agents immediately (no restart needed).
         """
         self._store = session_store
         self._agents_dir = agents_dir
         self._executor = skill_executor
         self._scheduler = scheduler
+        self._registry = plugin_registry
 
     def start(self, request: str) -> dict[str, Any]:
         """Phase 1: classify intent, create wizard session, return first question.
@@ -164,6 +169,12 @@ class BuilderFlow:
                 skill_executor=self._executor,
                 scheduler=self._scheduler,
             )
+            # Make the deployed skill live in the registry so the assistant can
+            # actually find/call it (LLM tool palette + GET /agents) without a
+            # restart. Incremental — never a full discover() that would reset
+            # other agents' in-memory consent state (M2.2).
+            if result.get("status") == "deployed" and self._registry is not None:
+                self._registry.register_dir(skill_dir)
         finally:
             self._store.delete(session_id)
         logger.info(
