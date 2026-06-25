@@ -40,8 +40,8 @@ people — the distribution + community flywheel the project's thesis depends on
 - **Cloud (Supabase):**
   - **Auth:** anonymous (device-id) → optional upgrade to a magic-link account.
   - **Postgres:** the catalog + social tables (§4).
-  - **Storage:** UGC skill bundles (`.kali-agent` / tar of SKILL.md + skill.yaml
-    + manifest).
+  - **Storage:** UGC skill bundles in the `.kali-agent` **zip** format (Phase B
+    catalog format; Phase A's P2P route reuses the existing `.tar.gz` — see §5A).
   - **Row-Level Security (RLS):** public read of `approved` content; a user may
     write only their own ratings/likes/comments; only a skill's creator may edit
     it. RLS is the first line of moderation.
@@ -69,6 +69,12 @@ high-trust shelf.
 - `installs` — `skill_id`, `device_id`, `creator_attrib`, `ts` (attribution +
   trending input). Counts only, no PII.
 
+**Uniqueness / collisions:** `slug` and `handle` are unique; on a publish
+collision the API auto-suffixes the slug (`name-2`, `name-3`) and rejects a
+duplicate handle (first-come). `likes.device_or_user_id` intentionally differs
+from `ratings`/`comments.user_id`: likes are anonymous-device (no account),
+ratings/comments are account-gated.
+
 Derived: **trending** = f(installs, likes, ratings, recency) via a SQL view or
 edge function.
 
@@ -77,17 +83,30 @@ edge function.
 ### Phase A — P2P share → friend (code-only, NO Supabase) ← unblocks the GAP now
 The immediate fix that makes "поделиться с другом" real today, fully anti-pivot,
 no infra:
-- **Export voice-built agents.** Today `/skills/{name}/export` resolves only
-  through `SkillsRegistry` (SKILL.md-indexed), so voice-built skills
-  (`manifest.yaml` + `skill.yaml`, written under `agents_dir`) cannot be
-  exported at all. Make export find voice-built skills and package them
-  (`.kali-agent`: manifest + skill.yaml [+ SKILL.md if present]).
+- **Export voice-built agents — whole round-trip.** Today `/skills/{name}/export`
+  resolves only through `SkillsRegistry` (SKILL.md-indexed), AND the packager
+  (`package_skill`) + bundle installer (`install_from_bundle`→`load_skill`) both
+  hard-require `SKILL.md` — so a voice-built skill (`manifest.yaml`+`skill.yaml`,
+  **no** `SKILL.md`, under `agents_dir`) can be neither exported NOR loaded from a
+  bundle. Phase A must touch the **whole P2P round-trip**: (1) export finds
+  voice-built skills; (2) the bundle carries `manifest.yaml`+`skill.yaml`
+  (synthesising a minimal `SKILL.md` if that is the least-invasive way to satisfy
+  the existing loader); (3) the bundle install/load path accepts a
+  `skill.yaml`-backed bundle.
+- **Canonical bundle format (decided — resolves the zip↔tar.gz fork):** Phase A
+  **reuses the shipped P2P route** — base64url `.tar.gz` of a single `<name>/`
+  dir via `POST /skills/install-bundle`. **No new format.** The `.kali-agent`
+  **zip** + checksums (cloud-catalog plan) is **Phase B's catalog/Storage
+  format**, not Phase A's.
 - **Registry reconciliation so an import is LLM-callable.** `install-bundle`
   already registers into the live runtime (core-loop fix 2d), but a skill
   installed under `%APPDATA%/KALI/skills` is withheld from the LLM palette
-  because `PluginRegistry._is_callable` looks for `skill.yaml` under `agents_dir`,
-  not the install dir. Teach the registry to recognise a skill's actual dir so
-  an imported voice agent can be *called*, not just listed.
+  because `PluginRegistry._is_callable` checks `skill.yaml` under `agents_dir`,
+  not the install dir. **Approach:** track each manifest's real `skill_dir` (the
+  registry already loads `SkillManifest.skill_dir`) and have `_is_callable`
+  consult it — so an imported voice agent is *callable*, while the deliberate
+  "withhold a `protocol=skill` manifest that has no `skill.yaml`" guard stays
+  intact.
 - **Share/import transport:** native share sheet + `kali://import?b=<base64url
   bundle>` (P2P, no server) or a shared file; optional creator attribution in the
   bundle metadata (handle + self-declared socials).
@@ -101,7 +120,9 @@ no infra:
   AST safety gate passes + basic heuristics, else held for review) under the
   creator (device-id or account).
 - **«Сообщество» browse/search/install** from Supabase `approved` skills + the
-  GitHub curated set, with category/trending filters.
+  GitHub curated set, with category/trending filters. When Supabase is
+  unconfigured/offline, «Сообщество» degrades to the GitHub curated set + locally
+  installed skills — no error wall.
 - **Creator profile** (handle + opt-in self-declared socials) on the profile and
   on skill cards — "find / follow me".
 - **Attribution:** install increments `install_count`; the share artifact + deep
@@ -119,7 +140,11 @@ no infra:
 - **Moderation:** the `status` lifecycle + a **report** button (`flags`) +
   a lightweight review (safe-gate-passing skills auto-approve; flagged content
   is hidden pending review — manual by Vasily at MVP, automatable later). The
-  AST safety gate runs on publish **and** install.
+  AST safety gate runs on publish **and** install. **Caveat:** the AST gate
+  scans `scripts/*.py` only — a script-less, pure-Markdown skill has nothing to
+  gate, yet its body is injected into the LLM prompt, so Phase C moderation must
+  also review prose (prompt-injection / social-engineering), not lean on the AST
+  gate as the sole auto-approve criterion.
 - **Trending / leaderboard** from §4 derived signal — "твоего агента поставили
   N раз", top creators.
 - **Gates:** moderation operations (review cadence), abuse/rate-limit policy.
@@ -150,7 +175,9 @@ no infra:
 
 - **Phase A:** export round-trip (voice-built skill → bundle → import → present
   in `/agents`) **and** "imported voice skill is LLM-callable" (extends the 2d
-  tests); registry-actual-dir resolution unit tests.
+  tests); registry-actual-dir resolution unit tests; **regression guard** — a
+  `protocol="skill"` manifest with no `skill.yaml` is still withheld from the
+  LLM palette.
 - **Phase B:** `CatalogClient` against a mocked Supabase (search/publish/install,
   graceful when unconfigured); publish→Storage→install integration; deep-link
   resolve.
@@ -172,8 +199,10 @@ Supabase + a domain + a moderation policy and are sequenced after A.
 
 ## 10. Open items for the per-phase plans (not decided here)
 
-- Phase A: exact `register_dir`/`_is_callable` change to track a skill's real
-  dir without breaking the deliberate "withhold non-skill.yaml skills" guard.
+- Phase A: exact wiring of the decided approach (track each manifest's real
+  `skill_dir`; consult it in `_is_callable` without breaking the withhold guard)
+  + the least-invasive bundle/loader change to accept a `skill.yaml`-backed,
+  no-`SKILL.md` bundle — per-plan implementation detail.
 - Phase B: Supabase project region/tier; bundle size limits; the domain (kali.app
   ownership — see prod-readiness audit); auto-approve heuristics.
 - Phase C: moderation review cadence + escalation; rate-limit numbers; trending
