@@ -2,11 +2,13 @@
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from kernel.main import create_app
+from kernel.models import Event
 
 
 async def _start_lifespan(app) -> tuple[asyncio.Task, asyncio.Event]:  # type: ignore[type-arg]
@@ -193,6 +195,41 @@ class TestNotificationsEndpoint:
         resp = await client.post("/notifications/send", json={})
         assert resp.status_code == 200
         assert resp.json()["status"] == "sent"
+
+
+class TestScheduledSkillTrigger:
+    """A fired cron (skill.{name}.trigger) must actually run the skill and
+    deliver its result — previously the event had no subscriber (core-loop 3b)."""
+
+    async def test_trigger_runs_skill_and_notifies(self, app) -> None:
+        s = app.state
+        s.skill_executor.get_skill_info = MagicMock(
+            return_value={"name": "r", "template": "reminder", "display_name": "Пей воду", "config": {}}
+        )
+        s.skill_executor.execute = AsyncMock(
+            return_value={"should_fire": True, "message": "Пора пить воду!"}
+        )
+        before = len(s.notifications.get_pending())
+
+        await s.event_bus.publish(Event(topic="skill.r.trigger", source="scheduler", payload={}))
+
+        s.skill_executor.execute.assert_awaited_once_with("r", "check")
+        pending = s.notifications.get_pending()
+        assert len(pending) == before + 1
+        assert "Пора пить воду" in pending[-1].message
+
+    async def test_trigger_skips_notification_when_not_firing(self, app) -> None:
+        s = app.state
+        s.skill_executor.get_skill_info = MagicMock(
+            return_value={"name": "r", "template": "reminder", "display_name": "r", "config": {}}
+        )
+        s.skill_executor.execute = AsyncMock(return_value={"should_fire": False, "reason": "too_soon"})
+        before = len(s.notifications.get_pending())
+
+        await s.event_bus.publish(Event(topic="skill.r.trigger", source="scheduler", payload={}))
+
+        s.skill_executor.execute.assert_awaited_once()
+        assert len(s.notifications.get_pending()) == before
 
 
 class TestWebSocket:

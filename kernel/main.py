@@ -457,6 +457,47 @@ def create_app(
         event_bus.subscribe("schedule.*", ws_forwarder)
         event_bus.subscribe("system.*", ws_forwarder)
 
+        # Scheduled skills: when the scheduler fires `skill.{name}.trigger`, run
+        # the skill's periodic action and deliver anything user-facing. Without
+        # this subscriber the cron event had NO consumer, so timed skills fired
+        # into the void (core-loop 3b).
+        _SKILL_TRIGGER_ACTION = {"reminder": "check", "monitor": "check", "notifier": "notify"}
+
+        async def _on_skill_trigger(event: Event) -> None:
+            parts = event.topic.split(".")
+            if len(parts) < 3 or parts[0] != "skill" or parts[-1] != "trigger":
+                return
+            name = ".".join(parts[1:-1])
+            executor = app.state.skill_executor
+            info = executor.get_skill_info(name)
+            if not info:
+                return
+            action = _SKILL_TRIGGER_ACTION.get(info.get("template", ""))
+            if action is None:
+                return
+            try:
+                result = await executor.execute(name, action)
+            except Exception:
+                logger.exception("Scheduled skill '%s' (%s) failed", name, action)
+                return
+            if isinstance(result, dict) and result.get("should_fire") is False:
+                return  # the skill decided not to fire right now
+            message = ""
+            if isinstance(result, dict):
+                message = result.get("message") or result.get("alert") or ""
+            if message:
+                from kernel.notifications import Notification
+
+                await app.state.notifications.send(
+                    Notification(
+                        title=info.get("display_name", name),
+                        message=str(message),
+                        source=f"skill.{name}",
+                    )
+                )
+
+        event_bus.subscribe("skill.*", _on_skill_trigger)
+
         # Phase 2: forward relayed topics to the Rust backend on :3006 so it
         # can fan out to UI WebSocket clients. Fire-and-forget — Rust being
         # absent during dev does not affect Python behaviour.
