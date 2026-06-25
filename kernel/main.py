@@ -2027,6 +2027,24 @@ def create_app(
 
         if result.ok:
             _get_skills_registry().reload()
+            # Wire the installed skill into the live runtime, not just the catalog:
+            # register it in the plugin registry (so it shows in /agents) and, if
+            # template-backed (skill.yaml), load it into the executor so it can
+            # actually run. Previously ONLY the catalog reloaded, so an installed
+            # skill was a ghost — visible in "Мои навыки" but unrunnable (2d).
+            # GAP: a skill under %APPDATA%/KALI/skills is not yet offered to the
+            # LLM palette (PluginRegistry._is_callable looks for skill.yaml under
+            # agents_dir, not the install dir) — full install->LLM-callable needs
+            # the registry reconciliation (see the 2026-06-25 core-loop critique).
+            if result.install_path is not None:
+                try:
+                    app.state.plugin_registry.register_dir(result.install_path)
+                    if (result.install_path / "skill.yaml").exists():
+                        app.state.skill_executor.load_skill(result.install_path)
+                except Exception:
+                    logger.exception(
+                        "Live registration of installed skill '%s' failed", result.skill_name
+                    )
             return {
                 "status": "ok",
                 "skill_name": result.skill_name,
@@ -2074,6 +2092,24 @@ def create_app(
 
         if result.ok:
             _get_skills_registry().reload()
+            # Wire the installed skill into the live runtime, not just the catalog:
+            # register it in the plugin registry (so it shows in /agents) and, if
+            # template-backed (skill.yaml), load it into the executor so it can
+            # actually run. Previously ONLY the catalog reloaded, so an installed
+            # skill was a ghost — visible in "Мои навыки" but unrunnable (2d).
+            # GAP: a skill under %APPDATA%/KALI/skills is not yet offered to the
+            # LLM palette (PluginRegistry._is_callable looks for skill.yaml under
+            # agents_dir, not the install dir) — full install->LLM-callable needs
+            # the registry reconciliation (see the 2026-06-25 core-loop critique).
+            if result.install_path is not None:
+                try:
+                    app.state.plugin_registry.register_dir(result.install_path)
+                    if (result.install_path / "skill.yaml").exists():
+                        app.state.skill_executor.load_skill(result.install_path)
+                except Exception:
+                    logger.exception(
+                        "Live registration of installed skill '%s' failed", result.skill_name
+                    )
             return {
                 "status": "ok",
                 "skill_name": result.skill_name,

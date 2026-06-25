@@ -2,9 +2,10 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from httpx import ASGITransport, AsyncClient
 
 from kernel.main import create_app
@@ -230,6 +231,47 @@ class TestScheduledSkillTrigger:
 
         s.skill_executor.execute.assert_awaited_once()
         assert len(s.notifications.get_pending()) == before
+
+
+class TestInstallBundleRegistersLive:
+    """An imported bundle must be wired into the live runtime (plugin registry +
+    executor), not just the catalog — otherwise it's a ghost (core-loop 2d)."""
+
+    async def test_imported_skill_is_registered_and_loaded(
+        self, app, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        s = app.state
+        s.skills_registry = MagicMock()  # avoid a real catalog rescan in the route
+
+        skill_dir = tmp_path / "shared-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "shared-skill",
+                    "version": "1.0.0",
+                    "description": "Shared",
+                    "protocol": "skill",
+                    "tools": [{"name": "run", "description": "r", "parameters": {}}],
+                    "capabilities": ["shared-skill.run"],
+                    "permissions": [],
+                }
+            )
+        )
+        (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+
+        from kernel.skills.installer import InstallResult
+
+        fake = InstallResult(ok=True, skill_name="shared-skill", install_path=skill_dir)
+        with patch("kernel.skills.installer.install_from_bundle", return_value=fake):
+            resp = await client.post("/skills/install-bundle", json={"data": "x"})
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        # Live now: present in the plugin registry AND the executor — not the
+        # catalog alone, which was the whole bug.
+        assert s.plugin_registry.get("shared-skill") is not None
+        assert "shared-skill" in s.skill_executor.list_skills()
 
 
 class TestWebSocket:
