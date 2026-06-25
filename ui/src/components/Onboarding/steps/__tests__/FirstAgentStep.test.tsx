@@ -7,7 +7,8 @@ import { useOnboardingStore } from "../../../../stores/onboardingStore";
 
 vi.mock("../../../../api/builder", () => ({
   builderApi: {
-    start: vi.fn(),
+    extract: vi.fn(),
+    deploy: vi.fn(),
   },
 }));
 
@@ -25,8 +26,6 @@ describe("FirstAgentStep", () => {
   });
 
   it("renders 5 skill-template starter chips", () => {
-    // Chips must stay within the skill-only builder pilot scope (reminders /
-    // trackers / diaries) — non-skill requests used to throw a raw error.
     render(<FirstAgentStep />);
     expect(screen.getByText(/напомни пить воду/i)).toBeInTheDocument();
     expect(screen.getByText(/дневник настроения/i)).toBeInTheDocument();
@@ -35,26 +34,50 @@ describe("FirstAgentStep", () => {
     expect(screen.getByText(/перерыв/i)).toBeInTheDocument();
   });
 
-  it("starts builder flow on chip click and stores session id", async () => {
-    vi.mocked(builderApi.start).mockResolvedValue({
+  it("complete extract → actually deploys the agent and stores the session", async () => {
+    vi.mocked(builderApi.extract).mockResolvedValue({
+      complete: true,
       session_id: "sess-123",
-      question: "Как часто напоминать?",
-      total_steps: 3,
-      template: null,
-    });
+      spec: { name: "voda", description: "пить воду", type: "skill", template: "tracker", config: {} },
+    } as never);
+    vi.mocked(builderApi.deploy).mockResolvedValue({ status: "deployed", name: "voda" });
+
     const user = userEvent.setup();
     render(<FirstAgentStep />);
     await user.click(screen.getByText(/напомни пить воду каждые 2 часа/i));
+
     await waitFor(() =>
-      expect(builderApi.start).toHaveBeenCalledWith("напомни пить воду каждые 2 часа"),
+      expect(builderApi.extract).toHaveBeenCalledWith("напомни пить воду каждые 2 часа"),
     );
-    await waitFor(() =>
-      expect(useOnboardingStore.getState().firstAgentSession).toBe("sess-123"),
-    );
+    // The fix: it deploys for real (it never did) and stores the session.
+    await waitFor(() => expect(builderApi.deploy).toHaveBeenCalledWith("sess-123"));
+    await waitFor(() => expect(useOnboardingStore.getState().firstAgentSession).toBe("sess-123"));
+    await waitFor(() => expect(screen.getByText(/готово/i)).toBeInTheDocument());
   });
 
-  it("shows a human RU message when builder rejects (no raw errors)", async () => {
-    vi.mocked(builderApi.start).mockRejectedValue(new Error("builder offline"));
+  it("partial extract → does NOT claim success and does not deploy", async () => {
+    vi.mocked(builderApi.extract).mockResolvedValue({
+      complete: false,
+      session_id: "sess-partial",
+      step: 1,
+      total_steps: 3,
+      questions: ["q1", "q2", "q3"],
+      next_question: "q2",
+      partial_spec: { name: "x", description: "x", type: "skill", template: "tracker", config: {} },
+    } as never);
+
+    const user = userEvent.setup();
+    render(<FirstAgentStep />);
+    await user.click(screen.getByText(/чашки кофе/i));
+
+    await waitFor(() => expect(builderApi.extract).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/допиши детали/i)).toBeInTheDocument());
+    expect(builderApi.deploy).not.toHaveBeenCalled();
+    expect(screen.queryByText(/готово/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a human RU message when the builder rejects (no raw errors)", async () => {
+    vi.mocked(builderApi.extract).mockRejectedValue(new Error("builder offline"));
     const user = userEvent.setup();
     render(<FirstAgentStep />);
     await user.click(screen.getByText(/дневник настроения/i));
@@ -64,10 +87,11 @@ describe("FirstAgentStep", () => {
     expect(screen.queryByText(/builder offline/i)).not.toBeInTheDocument();
   });
 
-  it("skip button advances without creating agent", async () => {
+  it("skip button advances without creating an agent", async () => {
     const user = userEvent.setup();
     render(<FirstAgentStep />);
     await user.click(screen.getByRole("button", { name: /пропустить/i }));
     expect(useOnboardingStore.getState().currentStep).not.toBe("first-agent");
+    expect(builderApi.extract).not.toHaveBeenCalled();
   });
 });

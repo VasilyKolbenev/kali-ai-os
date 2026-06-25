@@ -26,11 +26,23 @@ export function FirstAgentStep() {
     setState("creating");
     setMessage(null);
     try {
-      const res = await builderApi.start(request);
-      setSession(res.session_id);
-      setMessage(res.question);
-      setState("ready");
-      setTimeout(() => advance(), 1500);
+      // Single-shot extract, then ACTUALLY deploy when we have a full spec —
+      // onboarding used to only classify the request and then claim success
+      // for an agent that was never built or deployed.
+      const ex = await builderApi.extract(request);
+      if (ex.complete) {
+        await builderApi.deploy(ex.session_id);
+        setSession(ex.session_id);
+        setMessage(`Готово! «${ex.spec.name}» теперь в Мастерской → Мои.`);
+        setState("ready");
+        setTimeout(() => advance(), 1800);
+      } else {
+        // Not enough detail to build it in one shot — keep the session and be
+        // honest (don't claim it's ready); the user finishes it in Мастерская.
+        setSession(ex.session_id);
+        setMessage("Почти! Допиши детали в Мастерской — или нажми «Пропустить».");
+        setState("idle");
+      }
     } catch (e) {
       setState("error");
       const raw = e instanceof Error ? e.message : "";
