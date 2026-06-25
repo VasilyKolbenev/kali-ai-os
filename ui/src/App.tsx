@@ -4,15 +4,11 @@ import { useWebSocket } from "./api/websocket";
 import { useOnboardingGate } from "./hooks/useOnboardingGate";
 import { Avatar } from "./components/Avatar/Avatar";
 import { Dashboard } from "./components/Dashboard/Dashboard";
-import { AgentPanel } from "./components/AgentPanel/AgentPanel";
-import { Nightstand } from "./components/Nightstand/Nightstand";
 import { AgentStore } from "./components/AgentStore/AgentStore";
-import { SandboxActivity } from "./components/SandboxActivity/SandboxActivity";
 import { Settings } from "./components/Settings/Settings";
 import { VoiceBuilderScreen } from "./components/VoiceBuilder/VoiceBuilderScreen";
 import { Showcase } from "./components/Showcase/Showcase";
 import { OnboardingRoot } from "./components/Onboarding/OnboardingRoot";
-import { Canvas } from "./components/Canvas/Canvas";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
@@ -72,9 +68,8 @@ export default function App() {
       <motion.div
         className="fixed inset-0 pointer-events-none"
         animate={{
-          background: mode === "nightstand"
-            ? "radial-gradient(ellipse 60% 40% at 50% 50%, rgba(0, 212, 255, 0.03) 0%, transparent 70%)"
-            : "radial-gradient(ellipse 70% 60% at 50% -10%, rgba(168, 85, 247, 0.08) 0%, rgba(0, 212, 255, 0.04) 40%, transparent 80%)",
+          background:
+            "radial-gradient(ellipse 70% 60% at 50% -10%, rgba(168, 85, 247, 0.08) 0%, rgba(0, 212, 255, 0.04) 40%, transparent 80%)",
         }}
         transition={{ duration: 1.5, ease: "easeInOut" }}
       />
@@ -125,12 +120,8 @@ export default function App() {
               </div>
             )}
             {mode === "dashboard" && <Dashboard />}
-            {mode === "agents" && <AgentPanel />}
-            {mode === "nightstand" && <Nightstand />}
             {mode === "store" && <AgentStore />}
-            {mode === "activity" && <SandboxActivity />}
             {mode === "builder" && <VoiceBuilderScreen />}
-            {mode === "canvas" && <Canvas />}
             {mode === "settings" && <Settings />}
             {mode === "showcase" && <Showcase />}
           </motion.div>

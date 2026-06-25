@@ -61,21 +61,6 @@ export const api = {
   }>("/models/status"),
   modelsDownload: () => fetchJSON<{ status: string; message: string }>("/models/download", { method: "POST" }),
 
-  // Legacy Catalog / Store (kept for backward compat)
-  skills: () => fetchJSON<any[]>("/skills"),
-  catalogSearch: (q: string) =>
-    fetchJSON<{ results: any[]; count: number }>(
-      `/catalog/search?q=${encodeURIComponent(q)}`,
-    ),
-  catalogTrending: () => fetchJSON<{ results: any[] }>("/catalog/trending"),
-  catalogPack: (name: string) =>
-    fetchJSON<any>(`/catalog/pack/${name}`, { method: "POST" }),
-  catalogInstall: (path: string) =>
-    fetchJSON<any>("/catalog/install", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    }),
-
   // Agent Skills (SKILL.md spec) — new in Phase 3+
   skillsCatalogSources: () =>
     fetchJSON<{ sources: import("./types").CatalogSource[] }>("/skills/catalog/sources"),
@@ -151,16 +136,6 @@ export const api = {
       count: number;
       since_hours: number;
     }>(`/sandbox/stats?hours=${hours}`),
-  builderClassify: (text: string) =>
-    fetchJSON<any>("/builder/classify", {
-      method: "POST",
-      body: JSON.stringify({ text }),
-    }),
-  builderCreateSkill: (data: any) =>
-    fetchJSON<any>("/builder/create-skill", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
 
   // Agent tool execution
   executeAgentTool: (agentName: string, action: string, args: Record<string, unknown> = {}) =>

@@ -3,12 +3,8 @@ import { create } from "zustand";
 export type AppMode =
   | "focus"
   | "dashboard"
-  | "agents"
-  | "nightstand"
   | "store"
-  | "activity"
   | "builder"
-  | "canvas"
   | "settings"
   | "showcase";
 
