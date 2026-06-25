@@ -67,3 +67,29 @@ async def test_remote_pipeline_executes_tool_call_and_speaks_result() -> None:
     # ...and the real result was spoken back to the user.
     assert "Задач нет, сэр." in spoken
     assert pipe._state == PipelineState.IDLE
+
+
+def _make_pipe(app_state: object, tools: list | None = None) -> RemoteVoicePipeline:
+    return RemoteVoicePipeline(
+        event_bus=EventBus(),
+        voice_config=VoiceConfig(),
+        llm_config=LLMConfig(),
+        tools=tools or [],
+        app_state=app_state,
+    )
+
+
+def test_live_tools_reads_registry_each_turn() -> None:
+    """A skill created mid-session must be callable by voice, so the palette is
+    read live from the registry rather than a startup snapshot (core-loop 1c)."""
+    app_state = MagicMock()
+    sentinel = [{"type": "function", "function": {"name": "new-skill__do", "description": "d"}}]
+    app_state.plugin_registry.get_all_tools.return_value = sentinel
+    pipe = _make_pipe(app_state, tools=[])  # startup snapshot was empty
+    assert pipe._live_tools() == sentinel
+
+
+def test_live_tools_falls_back_to_snapshot_without_state() -> None:
+    snapshot = [{"type": "function", "function": {"name": "x__y", "description": "d"}}]
+    pipe = _make_pipe(None, tools=snapshot)
+    assert pipe._live_tools() == snapshot

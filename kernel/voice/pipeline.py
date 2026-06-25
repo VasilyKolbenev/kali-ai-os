@@ -403,7 +403,7 @@ class VoicePipeline:
         request = LLMRequest(
             text=stt_result.text,
             context=self._context[-10:],
-            available_tools=self._tools,
+            available_tools=self._live_tools(),
             system_prompt=system_prompt,
         )
         response = await self._llm.route(request)
@@ -455,6 +455,20 @@ class VoicePipeline:
             await self._play_tts_with_guard(final_text)
 
         await self._set_state(PipelineState.IDLE)
+
+    def _live_tools(self) -> list[dict[str, Any]]:
+        """Read the current tool palette from the registry each turn so an agent
+        created or installed mid-session is callable by voice (chat already
+        re-reads per request). Falls back to the startup snapshot if unavailable.
+        """
+        state = self._app_state
+        registry = getattr(state, "plugin_registry", None) if state is not None else None
+        if registry is not None:
+            try:
+                return registry.get_all_tools()
+            except Exception:
+                return self._tools
+        return self._tools
 
     async def _speak(self, text: str) -> None:
         """Synthesize and play text through the active TTS provider."""

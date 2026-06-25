@@ -55,6 +55,20 @@ class RemoteVoicePipeline:
         self._bus.subscribe("voice.state", self._on_voice_state)
         self._bus.subscribe("voice.audio_stream", self._on_audio_stream)
 
+    def _live_tools(self) -> list[dict[str, Any]]:
+        """Read the current tool palette from the registry each turn so an agent
+        created or installed mid-session is callable by voice (chat already
+        re-reads per request). Falls back to the startup snapshot if unavailable.
+        """
+        state = self._app_state
+        registry = getattr(state, "plugin_registry", None) if state is not None else None
+        if registry is not None:
+            try:
+                return registry.get_all_tools()
+            except Exception:
+                return self._tools
+        return self._tools
+
     async def _on_voice_state(self, event: Event) -> None:
         if event.source != "websocket":
             return
@@ -166,7 +180,7 @@ class RemoteVoicePipeline:
         request = LLMRequest(
             text=stt_result.text,
             context=self._context[-10:],
-            available_tools=self._tools,
+            available_tools=self._live_tools(),
             system_prompt=system_prompt,
         )
         # Stream the reply: synthesize + emit each sentence as soon as it closes,
