@@ -40,6 +40,7 @@ export function AgentStore() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [setupEntry, setSetupEntry] = useState<CuratedEntry | null>(null);
   const [consent, setConsent] = useState<{ entry: CuratedEntry; capabilities: AgentCapability[] } | null>(null);
+  const [consents, setConsents] = useState<Record<string, "approved" | "revoked">>({});
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
 
   // Community (kali source)
@@ -64,16 +65,18 @@ export function AgentStore() {
 
   const bootstrap = async () => {
     try {
-      const [installedRes, manifests, running, cfg] = await Promise.all([
+      const [installedRes, manifests, running, cfg, cons] = await Promise.all([
         api.skillsInstalled(),
         api.agents(),
         api.runningAgents(),
         api.agentConfigStatus().catch(() => ({})),
+        api.agentConsents().catch(() => ({})),
       ]);
       setInstalled(installedRes.results || []);
       setAgentNames(new Set((manifests || []).map((m) => m.name)));
       setRunningAgents(new Set((running || []).map((r) => r.name)));
       setConfigStatus(cfg || {});
+      setConsents(cons || {});
     } catch (err) {
       console.error("Store bootstrap failed:", err);
     }
@@ -170,6 +173,14 @@ export function AgentStore() {
     setRunningAgents(new Set((running || []).map((r) => r.name)));
   };
 
+  const refreshConsents = async () => {
+    try {
+      setConsents(await api.agentConsents());
+    } catch {
+      /* leave previous */
+    }
+  };
+
   // --- Витрина actions --------------------------------------------------
 
   const installedNames = useMemo(
@@ -262,6 +273,33 @@ export function AgentStore() {
       await api.unloadAgent(agent.name);
       await refreshRunning();
       showToast("Помощник остановлен", "info");
+    } catch (err) {
+      showToast(`Не получилось: ${(err as Error).message}`, "error");
+    }
+    setBusyId(null);
+  };
+
+  // M2.2: take back / restore an agent's access to personal data. Revoke is
+  // sticky (persisted, denied until re-enabled); re-enable runs the explicit
+  // approve path (loadAgent) which clears the sticky revoke.
+  const handleRevokeAgent = async (agent: MyAgent) => {
+    setBusyId(agent.name);
+    try {
+      await api.revokeAgent(agent.name);
+      await refreshConsents();
+      showToast("Доступ отозван", "info");
+    } catch (err) {
+      showToast(`Не получилось: ${(err as Error).message}`, "error");
+    }
+    setBusyId(null);
+  };
+
+  const handleReenableAgent = async (agent: MyAgent) => {
+    setBusyId(agent.name);
+    try {
+      await api.loadAgent(agent.name);
+      await Promise.all([refreshRunning(), refreshConsents()]);
+      showToast("Доступ снова разрешён", "success");
     } catch (err) {
       showToast(`Не получилось: ${(err as Error).message}`, "error");
     }
@@ -444,7 +482,10 @@ export function AgentStore() {
                 agents={myAgents}
                 skills={installed}
                 busyAgent={busyId}
+                consents={consents}
                 onToggleAgent={handleToggleAgent}
+                onRevoke={handleRevokeAgent}
+                onReenable={handleReenableAgent}
                 onPublish={handlePublish}
                 onUninstall={handleUninstall}
                 searchQuery={searchQuery}

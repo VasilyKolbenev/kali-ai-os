@@ -1098,6 +1098,19 @@ def create_app(
             await db.set_consent(name, "revoked")
         return {"status": "revoked", "agent": name}
 
+    @app.get("/agents/consents")
+    async def list_consents(request: Request) -> dict[str, str]:
+        """Persisted per-agent consent state — ``{name: 'approved'|'revoked'}``.
+
+        Lets the UI reflect durable consent (M2.2): which agents have a granted,
+        revocable consent vs. which were revoked, so a revoke / re-enable control
+        shows real state across reloads and restarts. Empty if never recorded.
+        """
+        db = getattr(request.app.state, "database", None)
+        if db is None:
+            return {}
+        return await db.get_all_consents()
+
     @app.get("/agents/{name}/status")
     async def agent_status(name: str, request: Request) -> dict[str, Any]:
         return await request.app.state.agent_runtime.get_status(name)

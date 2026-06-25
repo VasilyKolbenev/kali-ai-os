@@ -12,6 +12,8 @@ vi.mock("../../../api/client", () => ({
     getCapabilities: vi.fn(),
     loadAgent: vi.fn(),
     unloadAgent: vi.fn(),
+    revokeAgent: vi.fn(),
+    agentConsents: vi.fn(),
     skillInstall: vi.fn(),
     skillUninstall: vi.fn(),
     skillPublish: vi.fn(),
@@ -32,6 +34,7 @@ describe("AgentStore (Мастерская)", () => {
     vi.mocked(api.runningAgents).mockResolvedValue([] as never);
     vi.mocked(api.skillsCatalogList).mockRejectedValue(new Error("offline"));
     vi.mocked(api.agentConfigStatus).mockResolvedValue({});
+    vi.mocked(api.agentConsents).mockResolvedValue({});
     // Default: not sensitive → one-click enable stays (weather/currency).
     vi.mocked(api.getCapabilities).mockResolvedValue({
       name: "weather",
@@ -141,6 +144,64 @@ describe("AgentStore (Мастерская)", () => {
       expect(screen.queryByText("Отправлять письма от твоего имени")).not.toBeInTheDocument(),
     );
     expect(api.loadAgent).not.toHaveBeenCalled();
+  });
+
+  it("Мои: Отозвать доступ → revokeAgent → «Доступ отозван» (M2.2)", async () => {
+    vi.mocked(api.agents).mockResolvedValue([
+      { name: "email", description: "Email agent" },
+    ] as never);
+    vi.mocked(api.runningAgents).mockResolvedValue([{ name: "email" }] as never);
+    vi.mocked(api.agentConsents)
+      .mockResolvedValueOnce({}) // bootstrap: granted (no revoke on record)
+      .mockResolvedValue({ email: "revoked" }); // after revoke
+    vi.mocked(api.revokeAgent).mockResolvedValue({ status: "revoked", agent: "email" });
+
+    const user = userEvent.setup();
+    render(<AgentStore />);
+    await user.click(screen.getByText("Мои"));
+
+    const card = (await screen.findByText("Почта")).closest(".glass") as HTMLElement;
+    expect(card.textContent).toContain("Работает");
+
+    await user.click(await waitFor(() => {
+      const btn = [...card.querySelectorAll("button")].find(
+        (b) => b.textContent?.includes("Отозвать доступ"),
+      );
+      if (!btn) throw new Error("revoke button not rendered yet");
+      return btn;
+    }));
+
+    await waitFor(() => expect(api.revokeAgent).toHaveBeenCalledWith("email"));
+    await waitFor(() => expect(card.textContent).toContain("Доступ отозван"));
+  });
+
+  it("Мои: revoked агент → Разрешить снова → loadAgent → «Работает» (M2.2)", async () => {
+    vi.mocked(api.agents).mockResolvedValue([
+      { name: "email", description: "Email agent" },
+    ] as never);
+    vi.mocked(api.runningAgents).mockResolvedValue([{ name: "email" }] as never);
+    vi.mocked(api.agentConsents)
+      .mockResolvedValueOnce({ email: "revoked" }) // bootstrap: previously revoked
+      .mockResolvedValue({ email: "approved" }); // after re-enable
+    vi.mocked(api.loadAgent).mockResolvedValue({ status: "ok" });
+
+    const user = userEvent.setup();
+    render(<AgentStore />);
+    await user.click(screen.getByText("Мои"));
+
+    const card = (await screen.findByText("Почта")).closest(".glass") as HTMLElement;
+    expect(card.textContent).toContain("Доступ отозван");
+
+    await user.click(await waitFor(() => {
+      const btn = [...card.querySelectorAll("button")].find(
+        (b) => b.textContent?.includes("Разрешить снова"),
+      );
+      if (!btn) throw new Error("re-enable button not rendered yet");
+      return btn;
+    }));
+
+    await waitFor(() => expect(api.loadAgent).toHaveBeenCalledWith("email"));
+    await waitFor(() => expect(card.textContent).toContain("Работает"));
   });
 
   it("Мои with nothing enabled shows the friendly empty state", async () => {

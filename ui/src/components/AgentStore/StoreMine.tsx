@@ -1,4 +1,4 @@
-import { Loader2, Power, Share2, Sparkles, Trash2 } from "lucide-react";
+import { Loader2, Power, Share2, ShieldCheck, ShieldOff, Sparkles, Trash2 } from "lucide-react";
 import type { InstalledSkill } from "../../api/types";
 import { CURATED } from "./curated";
 import { CreateByVoiceHero } from "./CuratedStore";
@@ -13,15 +13,89 @@ const CURATED_BY_AGENT = new Map(
   CURATED.filter((e) => e.kind === "agent").map((e) => [e.agentName!, e]),
 );
 
+/** One running helper with its consent state: «Отозвать доступ» revokes access
+    (sticky — denied until re-enabled); once revoked, «Разрешить снова» restores
+    it. «Остановить» stays a separate, lighter pause that keeps consent. */
+function RunningAgentCard({
+  agent, revoked, busy, onRevoke, onReenable, onToggle,
+}: {
+  agent: MyAgent;
+  revoked: boolean;
+  busy: boolean;
+  onRevoke: (agent: MyAgent) => void;
+  onReenable: (agent: MyAgent) => void;
+  onToggle: (agent: MyAgent) => void;
+}) {
+  const curated = CURATED_BY_AGENT.get(agent.name);
+  return (
+    <div className="glass glass-interactive p-5 flex items-center gap-4 rounded-2xl">
+      <div className="text-3xl w-12 h-12 flex items-center justify-center rounded-xl bg-white/5 shrink-0">
+        {curated?.emoji ?? "🤖"}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-base font-medium truncate">{curated?.title ?? agent.name}</div>
+        <div
+          className={`text-sm mt-0.5 flex items-center gap-1.5 ${
+            revoked ? "text-[var(--j-red,#ef4444)]" : "text-[var(--j-green)]"
+          }`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-current" />
+          {revoked ? "Доступ отозван" : "Работает"}
+        </div>
+      </div>
+      {revoked ? (
+        <button
+          disabled={busy}
+          onClick={() => onReenable(agent)}
+          className="px-3 py-2 text-xs rounded-lg bg-[var(--j-cyan)]/15 text-[var(--j-cyan)]
+            hover:bg-[var(--j-cyan)]/25 transition flex items-center gap-1.5
+            border border-[var(--j-cyan)]/30 disabled:opacity-50"
+          title="Снова разрешить доступ к твоим данным"
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+          Разрешить снова
+        </button>
+      ) : (
+        <button
+          disabled={busy}
+          onClick={() => onRevoke(agent)}
+          className="px-3 py-2 text-xs rounded-lg bg-[var(--j-amber,#f59e0b)]/15 text-[var(--j-amber,#f59e0b)]
+            hover:bg-[var(--j-amber,#f59e0b)]/25 transition flex items-center gap-1.5
+            border border-[var(--j-amber,#f59e0b)]/30 disabled:opacity-50"
+          title="Забрать доступ к твоим данным — помощник не сможет действовать, пока не разрешишь снова"
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldOff className="w-3.5 h-3.5" />}
+          Отозвать доступ
+        </button>
+      )}
+      <button
+        disabled={busy}
+        onClick={() => onToggle(agent)}
+        className="px-3 py-2 text-xs rounded-lg bg-white/5 text-white/60 hover:bg-white/10
+          hover:text-white/90 transition flex items-center gap-1.5 border border-white/10
+          disabled:opacity-50"
+        title="Остановить помощника (доступ сохранится)"
+      >
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
+        Остановить
+      </button>
+    </div>
+  );
+}
+
 /** «Мои» — everything the user enabled, installed or created:
     создавать → делиться (или нет) → брать чужое (в Сообществе). */
 export function MineSection({
-  agents, skills, busyAgent, onToggleAgent, onPublish, onUninstall, searchQuery,
+  agents, skills, busyAgent, consents, onToggleAgent, onRevoke, onReenable,
+  onPublish, onUninstall, searchQuery,
 }: {
   agents: MyAgent[];
   skills: InstalledSkill[];
   busyAgent: string | null;
+  consents: Record<string, "approved" | "revoked">;
   onToggleAgent: (agent: MyAgent) => void;
+  onRevoke: (agent: MyAgent) => void;
+  onReenable: (agent: MyAgent) => void;
   onPublish: (skill: InstalledSkill) => void;
   onUninstall: (skill: InstalledSkill) => void;
   searchQuery: string;
@@ -57,40 +131,17 @@ export function MineSection({
             Работают сейчас
           </div>
           <div className="grid gap-2 stagger">
-            {visibleAgents.map((agent) => {
-              const curated = CURATED_BY_AGENT.get(agent.name);
-              const busy = busyAgent === agent.name;
-              return (
-                <div
-                  key={agent.name}
-                  className="glass glass-interactive p-5 flex items-center gap-4 rounded-2xl"
-                >
-                  <div className="text-3xl w-12 h-12 flex items-center justify-center rounded-xl bg-white/5 shrink-0">
-                    {curated?.emoji ?? "🤖"}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-base font-medium truncate">
-                      {curated?.title ?? agent.name}
-                    </div>
-                    <div className="text-sm text-[var(--j-green)] mt-0.5 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      Работает
-                    </div>
-                  </div>
-                  <button
-                    disabled={busy}
-                    onClick={() => onToggleAgent(agent)}
-                    className="px-3 py-2 text-xs rounded-lg bg-white/5 text-white/60 hover:bg-white/10
-                      hover:text-white/90 transition flex items-center gap-1.5 border border-white/10
-                      disabled:opacity-50"
-                    title="Остановить помощника"
-                  >
-                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
-                    Остановить
-                  </button>
-                </div>
-              );
-            })}
+            {visibleAgents.map((agent) => (
+              <RunningAgentCard
+                key={agent.name}
+                agent={agent}
+                revoked={consents[agent.name] === "revoked"}
+                busy={busyAgent === agent.name}
+                onRevoke={onRevoke}
+                onReenable={onReenable}
+                onToggle={onToggleAgent}
+              />
+            ))}
           </div>
         </div>
       )}

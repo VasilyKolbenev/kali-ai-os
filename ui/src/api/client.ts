@@ -24,6 +24,12 @@ export const api = {
   runningAgents: () => fetchJSON<import("./types").AgentStatus[]>("/agents/running"),
   loadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/load`, { method: "POST" }),
   unloadAgent: (name: string) => fetchJSON<{ status: string }>(`/agents/${name}/unload`, { method: "POST" }),
+  // M2.2: revoke a granted consent (sticky — denied until explicitly re-enabled
+  // via loadAgent). agentConsents reads durable {name: 'approved'|'revoked'}.
+  revokeAgent: (name: string) =>
+    fetchJSON<{ status: string; agent: string }>(`/agents/${name}/revoke`, { method: "POST" }),
+  agentConsents: () =>
+    fetchJSON<Record<string, "approved" | "revoked">>("/agents/consents"),
   agentStatus: (name: string) => fetchJSON<import("./types").AgentStatus>(`/agents/${name}/status`),
   getCapabilities: (name: string) =>
     fetchJSON<import("./types").AgentCapabilities>(`/agents/${name}/capabilities`),

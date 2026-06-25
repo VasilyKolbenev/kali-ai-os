@@ -85,6 +85,27 @@ class TestAgentsEndpoint:
         assert "test-agent__greet" in data[0]["function"]["name"]
 
 
+class TestConsentRoutes:
+    """M2.2: persisted, revocable consent surfaced to the UI."""
+
+    async def test_consents_empty_initially(self, client: AsyncClient) -> None:
+        resp = await client.get("/agents/consents")
+        assert resp.status_code == 200
+        assert resp.json() == {}
+
+    async def test_revoke_persists_and_is_listed(self, app, client: AsyncClient) -> None:
+        resp = await client.post("/agents/test-agent/revoke")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "revoked", "agent": "test-agent"}
+
+        # GET /agents/consents reflects it so the UI can show durable state
+        consents = (await client.get("/agents/consents")).json()
+        assert consents == {"test-agent": "revoked"}
+
+        # ...and it is persisted in the DB (survives a restart per M2.2)
+        assert await app.state.database.get_consent("test-agent") == "revoked"
+
+
 class TestConfigEndpoint:
     async def test_get_config(self, client: AsyncClient) -> None:
         resp = await client.get("/config")
