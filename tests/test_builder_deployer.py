@@ -88,6 +88,9 @@ class TestDeployAgent:
         registry = MagicMock()
         registry.get.return_value = MagicMock()
         runtime = AsyncMock()
+        # Health check reads status.get("status"); a bare AsyncMock returns a
+        # Mock that fails the "running/healthy/ok" check and triggers rollback.
+        runtime.get_status = AsyncMock(return_value={"status": "running"})
         result = await deploy_agent(agent_dir, registry, runtime)
         assert result["status"] == "deployed"
 
