@@ -25,6 +25,7 @@ class NativeProtocol(AgentProtocol):
         self._request_id = 0
         self._lock = asyncio.Lock()
         self._network_proxy: NetworkProxy | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
 
     def set_network_proxy(self, proxy: "NetworkProxy") -> None:
         """Wire in a NetworkProxy to handle agent network.request calls."""
@@ -45,6 +46,34 @@ class NativeProtocol(AgentProtocol):
             stderr=asyncio.subprocess.PIPE,
         )
         logger.info("Agent '%s' started (pid=%d)", self.agent_name, self._process.pid)
+        # Drain stderr continuously: an agent that logs heavily would otherwise
+        # fill the OS pipe buffer (~64 KB on Windows), block on its next write,
+        # and deadlock — stdout would never be read. Matters at launch because
+        # agents are user-generated.
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
+
+    async def _drain_stderr(self) -> None:
+        """Consume the agent's stderr line-by-line (logged at debug) until EOF.
+
+        Cancelled by ``stop()``; swallows pipe errors that occur when the
+        process exits mid-read.
+        """
+        proc = self._process
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            # Read raw chunks, not lines: an agent can emit a huge line with no
+            # newline, which readline() rejects at its 64 KB limit — leaving the
+            # rest of the pipe unread and re-introducing the deadlock.
+            while True:
+                chunk = await proc.stderr.read(4096)
+                if not chunk:
+                    break  # EOF — process closed stderr
+                text = chunk.decode(errors="replace").rstrip()
+                if text:
+                    logger.debug("[%s stderr] %s", self.agent_name, text)
+        except (BrokenPipeError, ConnectionResetError, ValueError):
+            pass  # process exited / pipe closed mid-read
 
     async def stop(self) -> None:
         if not self.is_running:
@@ -59,6 +88,13 @@ class NativeProtocol(AgentProtocol):
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
             except TimeoutError:
                 self._process.kill()
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+            self._stderr_task = None
         self._process = None
         logger.info("Agent '%s' stopped", self.agent_name)
 

@@ -53,3 +53,32 @@ class TestNativeProtocol:
         result = await proto.initialize({"test": True})
         assert result.get("status") == "ok"
         await proto.stop()
+
+    async def test_execute_survives_heavy_stderr(self, tmp_path: Path) -> None:
+        """A verbose-stderr agent must not deadlock.
+
+        stderr is opened as a PIPE; if it is never drained, a user-generated
+        agent that logs heavily fills the OS pipe buffer (~64 KB on Windows),
+        blocks on its next stderr write, and never replies on stdout — the
+        agent looks hung and execute() hits the 10 s readline timeout. The
+        agent below writes 500 KB to stderr *before* its stdout reply.
+        """
+        script = tmp_path / "noisy_agent.py"
+        script.write_text(
+            "import sys, json\n"
+            "for line in sys.stdin:\n"
+            "    req = json.loads(line)\n"
+            '    sys.stderr.write("x" * 500000)\n'
+            "    sys.stderr.flush()\n"
+            '    sys.stdout.write(json.dumps('
+            '{"jsonrpc": "2.0", "result": {"ok": True}, "id": req.get("id")}) + "\\n")\n'
+            "    sys.stdout.flush()\n",
+            encoding="utf-8",
+        )
+        proto = NativeProtocol(agent_name="noisy", script_path=script)
+        await proto.start()
+        try:
+            result = await proto.execute("noisy", {})
+            assert result == {"ok": True}
+        finally:
+            await proto.stop()
