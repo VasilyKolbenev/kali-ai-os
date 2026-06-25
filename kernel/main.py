@@ -1354,7 +1354,7 @@ def create_app(
     async def _chat_logic(request: Request) -> dict[str, Any]:
         """Internal chat logic — returns response dict using LLMRouter."""
         from kernel.llm_router import LLMRouter, LLMRequest
-        import json
+        from kernel.tool_dispatch import execute_tool_call
 
         body = await request.json()
         text = body.get("text", "")
@@ -1401,45 +1401,20 @@ def create_app(
             except Exception as e:
                 logger.warning("Background memory extraction failed: %s", e)
         
-        # 4. Handle tool calls
+        # 4. Handle tool calls — shared execution path with the voice pipelines
+        # (kernel/tool_dispatch.py) so chat and voice can never diverge again.
         if response.tool_calls:
-            # We process the first tool call (single turn for now to keep it fast)
             call = response.tool_calls[0]
-            if "__" in call.name:
-                agent_name, action = call.name.split("__", 1)
-                manifest = s.plugin_registry.get(agent_name)
-                
-                try:
-                    # Dispatch to appropriate executor
-                    if manifest and manifest.protocol == "skill":
-                        result = await s.skill_executor.execute(agent_name, action, call.arguments)
-                    else:
-                        result = await s.agent_runtime.dispatch(agent_name, action, call.arguments)
-                        
-                    # Second pass: let LLM format the result
-                    tool_context = req.context.copy()
-                    tool_context.append({"role": "user", "content": text})
-                    # Add tool response as system info to help LLM formulate final answer
-                    system_msg = f"Tool {call.name} returned:\n{json.dumps(result, ensure_ascii=False)}\nPlease summarize this naturally for the user."
-                    
-                    second_req = LLMRequest(
-                        text=system_msg,
-                        context=tool_context,
-                        available_tools=[]
-                    )
-                    final_response = await router.route(second_req)
-                    
-                    s.memory.add_turn("user", text)
-                    s.memory.add_turn("assistant", final_response.text)
-                    
-                    return {
-                        "response": final_response.text,
-                        "source": f"agent-{agent_name}",
-                        "data": result,
-                    }
-                except Exception as e:
-                    logger.exception(f"Tool execution failed for {call.name}")
-                    return {"response": f"Error executing {agent_name}: {e}", "source": "system"}
+            try:
+                dispatched = await execute_tool_call(s, router, call, req.context, text)
+            except Exception as e:
+                logger.exception("Tool execution failed for %s", call.name)
+                return {"response": f"Error executing {call.name}: {e}", "source": "system"}
+            if dispatched is not None:
+                final_text, result, source = dispatched
+                s.memory.add_turn("user", text)
+                s.memory.add_turn("assistant", final_text)
+                return {"response": final_text, "source": source, "data": result}
                     
         # 5. Normal text response
         s.memory.add_turn("user", text)
