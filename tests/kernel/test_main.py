@@ -81,8 +81,10 @@ class TestAgentsEndpoint:
         resp = await client.get("/agents/tools")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        assert "test-agent__greet" in data[0]["function"]["name"]
+        names = {t["function"]["name"] for t in data}
+        assert any("test-agent__greet" in n for n in names)
+        # The built-in list-my-agents tool is part of the palette (core-loop 2b).
+        assert "kali__list_my_agents" in names
 
 
 class TestConsentRoutes:

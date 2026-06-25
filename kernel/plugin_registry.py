@@ -273,6 +273,12 @@ class PluginRegistry:
                         },
                     },
                 })
+        # Built-in tool so the assistant can list the user's own agents/skills —
+        # otherwise "what agents do I have" misroutes to whatever list-like tool
+        # exists. Executed in kernel/tool_dispatch.execute_tool_call.
+        from kernel.tool_dispatch import LIST_AGENTS_TOOL
+
+        tools.append(LIST_AGENTS_TOOL)
         return tools
 
     def find_agent_for_tool(self, tool_name: str) -> AgentManifest | None:

@@ -73,6 +73,34 @@ async def test_dispatch_continues_when_autoload_fails() -> None:
     state.agent_runtime.dispatch.assert_awaited_once()
 
 
+async def test_list_my_agents_enumerates_registered_agents() -> None:
+    """The built-in list tool reports the user's agents (with running status)
+    instead of misrouting 'проверь моих агентов' to the tasks agent (2b)."""
+    state = MagicMock()
+    cal = MagicMock()
+    cal.name, cal.description = "calendar", "Календарь"
+    water = MagicMock()
+    water.name, water.description = "water-tracker", "Вода"
+    state.plugin_registry.list_registered.return_value = [cal, water]
+    state.agent_runtime.list_agents.return_value = [{"name": "calendar", "status": "running"}]
+    router = _router_returning("У тебя есть Календарь и трекер воды, сэр.")
+
+    from kernel.tool_dispatch import LIST_AGENTS_TOOL_NAME
+
+    call = ToolCall(name=LIST_AGENTS_TOOL_NAME, arguments={})
+    out = await execute_tool_call(state, router, call, [], "проверь моих агентов")
+
+    assert out is not None
+    text, result, source = out
+    assert result["count"] == 2
+    by_name = {a["name"]: a for a in result["agents"]}
+    assert set(by_name) == {"calendar", "water-tracker"}
+    assert by_name["calendar"]["running"] is True
+    assert by_name["water-tracker"]["running"] is False
+    assert source == "agent-kali"
+    state.agent_runtime.dispatch.assert_not_called()  # no agent dispatch, just a list
+
+
 async def test_non_tool_name_returns_none() -> None:
     state = MagicMock()
     router = _router_returning("x")

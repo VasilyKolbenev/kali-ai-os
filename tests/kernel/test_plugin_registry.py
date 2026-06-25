@@ -68,8 +68,11 @@ class TestPluginRegistry:
     def test_get_all_tools(self, registry: PluginRegistry) -> None:
         registry.discover()
         tools = registry.get_all_tools()
-        assert len(tools) == 1
-        assert tools[0]["function"]["name"] == "calendar__get_events"
+        names = {t["function"]["name"] for t in tools}
+        assert "calendar__get_events" in names
+        # The built-in "list my agents" tool is always offered to the LLM so a
+        # "what agents do I have" query has a real tool to call (core-loop 2b).
+        assert "kali__list_my_agents" in names
 
     def test_find_agent_by_tool_name(self, registry: PluginRegistry) -> None:
         registry.discover()
