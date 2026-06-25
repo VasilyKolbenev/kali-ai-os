@@ -140,7 +140,7 @@ export function ChatInput() {
       const estimatedMs = Math.max(2000, wordCount * 400);
       setTimeout(() => setVoiceState("idle"), estimatedMs);
     } catch {
-      addMessage("assistant", "Connection error. Is the kernel running?", "error");
+      addMessage("assistant", "Ошибка соединения. Ядро запущено?", "error");
       setVoiceState("idle");
     } finally {
       setLoading(false);
@@ -289,7 +289,7 @@ export function ChatInput() {
                   : "var(--j-border-glow)"
               }`,
             }}
-            title={listening ? "Stop listening" : "Start voice input"}
+            title={listening ? "Остановить запись" : "Голосовой ввод"}
           >
             {listening ? "\u25FC" : "\uD83C\uDFA4"}
           </button>
@@ -304,7 +304,7 @@ export function ChatInput() {
               ? "bg-[var(--j-green)]/20 text-[var(--j-green)]"
               : "text-white/30 hover:text-white/60"
           } ${isTogglingVoice ? "opacity-50 cursor-wait" : ""}`}
-          title={voiceActive ? "Stop JARVIS voice" : "Start JARVIS voice"}
+          title={voiceActive ? "Выключить голос Джарвиса" : "Включить голос Джарвиса"}
         >
           <span className="text-xs font-mono">{voiceActive ? "J\u25CF" : "J\u25CB"}</span>
         </button>
@@ -315,7 +315,7 @@ export function ChatInput() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={listening ? "Listening..." : "Ask KALI anything..."}
+          placeholder={listening ? "Слушаю…" : "Спроси Джарвиса о чём угодно…"}
           disabled={listening || isLoading}
           className="flex-1 bg-transparent outline-none text-sm placeholder-opacity-30"
           style={{
