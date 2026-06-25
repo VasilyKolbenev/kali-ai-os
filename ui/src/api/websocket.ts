@@ -19,6 +19,9 @@ export function useWebSocket() {
   const canvasClear = useCanvasStore((s) => s.clear);
 
   useEffect(() => {
+    let closedByUnmount = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
     // Seed pipelineActive from /voice/status on mount — covers the case where
     // auto_start=true already started the pipeline before the WS connected.
     api
@@ -83,11 +86,19 @@ export function useWebSocket() {
 
       ws.onclose = () => {
         useAppStore.getState().setKernelConnected(false);
-        setTimeout(connect, 3000);
+        // Don't resurrect a socket on a torn-down effect: cleanup calls close()
+        // which fires onclose, and React re-runs effects (StrictMode/HMR). Each
+        // unguarded reconnect would leak a live socket into the stores.
+        if (closedByUnmount) return;
+        reconnectTimer = setTimeout(connect, 3000);
       };
     };
 
     connect();
-    return () => wsRef.current?.close();
+    return () => {
+      closedByUnmount = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
   }, [setVoiceState, setPipelineActive, setTranscript, updateAgent, updateWidget]);
 }
