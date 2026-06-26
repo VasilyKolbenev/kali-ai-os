@@ -94,3 +94,41 @@ def test_bundle_existing_not_overwritten_without_flag(tmp_path: Path) -> None:
 
     third = install_from_bundle(data, target_dir=installed, allow_overwrite=True)
     assert third.ok
+
+
+def _make_voice_skill(root: Path, name: str = "water-tracker") -> Path:
+    """A voice-built skill: manifest.yaml + skill.yaml, NO SKILL.md."""
+    import yaml
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "manifest.yaml").write_text(
+        yaml.dump({"name": name, "version": "1.0.0", "description": "Track water intake daily",
+                   "protocol": "skill",
+                   "tools": [{"name": "log", "description": "Log a data point", "parameters": {}}],
+                   "capabilities": [f"{name}.log"], "permissions": []})
+    )
+    (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+    return skill_dir
+
+
+def test_voice_skill_roundtrip_is_llm_callable(tmp_path: Path) -> None:
+    """The full Phase A promise: a voice-built agent exports, installs on a
+    friend's device (synthesized SKILL.md passes the strict loader, config
+    carried), and is offered to the LLM."""
+    from kernel.plugin_registry import PluginRegistry
+
+    src = _make_voice_skill(tmp_path / "src")
+    data = _bundle_b64(src, tmp_path / "out")
+
+    installed = tmp_path / "installed"
+    result = install_from_bundle(data, target_dir=installed)
+    assert result.ok, result.error
+    assert (installed / "water-tracker" / "SKILL.md").is_file()    # synthesized
+    assert (installed / "water-tracker" / "skill.yaml").is_file()  # carried
+
+    # The imported skill is LLM-callable from its install dir (registry reconcile)
+    reg = PluginRegistry(tmp_path / "agents")
+    (tmp_path / "agents").mkdir()
+    reg.register_dir(installed / "water-tracker")
+    tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+    assert "water-tracker__log" in tool_names
