@@ -2032,10 +2032,10 @@ def create_app(
             # template-backed (skill.yaml), load it into the executor so it can
             # actually run. Previously ONLY the catalog reloaded, so an installed
             # skill was a ghost — visible in "Мои навыки" but unrunnable (2d).
-            # GAP: a skill under %APPDATA%/KALI/skills is not yet offered to the
-            # LLM palette (PluginRegistry._is_callable looks for skill.yaml under
-            # agents_dir, not the install dir) — full install->LLM-callable needs
-            # the registry reconciliation (see the 2026-06-25 core-loop critique).
+            # register_dir records the real install dir in PluginRegistry._dirs,
+            # which _is_callable now consults — so a skill under %APPDATA%/KALI/
+            # skills IS offered to the LLM palette, not just agents_dir (Phase A
+            # Chunk 1 closed the prior install->LLM-callable gap).
             if result.install_path is not None:
                 try:
                     app.state.plugin_registry.register_dir(result.install_path)
@@ -2097,10 +2097,10 @@ def create_app(
             # template-backed (skill.yaml), load it into the executor so it can
             # actually run. Previously ONLY the catalog reloaded, so an installed
             # skill was a ghost — visible in "Мои навыки" but unrunnable (2d).
-            # GAP: a skill under %APPDATA%/KALI/skills is not yet offered to the
-            # LLM palette (PluginRegistry._is_callable looks for skill.yaml under
-            # agents_dir, not the install dir) — full install->LLM-callable needs
-            # the registry reconciliation (see the 2026-06-25 core-loop critique).
+            # register_dir records the real install dir in PluginRegistry._dirs,
+            # which _is_callable now consults — so a skill under %APPDATA%/KALI/
+            # skills IS offered to the LLM palette, not just agents_dir (Phase A
+            # Chunk 1 closed the prior install->LLM-callable gap).
             if result.install_path is not None:
                 try:
                     app.state.plugin_registry.register_dir(result.install_path)
