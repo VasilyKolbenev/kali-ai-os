@@ -207,7 +207,7 @@ def test_generate_agent_writes_agent_py(tmp_path: Path) -> None:
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
@@ -228,7 +228,7 @@ def test_generate_agent_writes_manifest_yaml(tmp_path: Path) -> None:
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
@@ -253,7 +253,7 @@ def test_generate_agent_strips_markdown_fences(tmp_path: Path) -> None:
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
@@ -303,7 +303,7 @@ def test_generate_agent_returns_none_on_api_error(tmp_path: Path) -> None:
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
@@ -328,7 +328,7 @@ result = subprocess.run(["ls"], capture_output=True)
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
@@ -350,7 +350,7 @@ def test_generate_agent_manifest_includes_network_permission_for_apis(tmp_path: 
 
     with (
         patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}),
-        patch("kernel.builder.agent_generator.anthropic", mock_anthropic),
+        patch("anthropic.Anthropic", mock_anthropic.Anthropic),
     ):
         from kernel.builder.agent_generator import generate_agent
 
