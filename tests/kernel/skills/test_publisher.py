@@ -213,3 +213,25 @@ class TestCli:
         assert code != 0
         captured = capsys.readouterr()
         assert "FAILED" in captured.err
+
+
+def test_package_voice_skill_synthesizes_skill_md(tmp_path: Path) -> None:
+    """A voice-built skill (manifest.yaml + skill.yaml, no SKILL.md) packages
+    into a bundle that carries a synthesized SKILL.md AND the config files."""
+    import tarfile
+    import yaml as _yaml
+
+    src = tmp_path / "water-tracker"
+    src.mkdir()
+    (src / "manifest.yaml").write_text(
+        _yaml.dump({"name": "water-tracker", "description": "Track water intake daily",
+                    "protocol": "skill", "tools": [{"name": "log"}]})
+    )
+    (src / "skill.yaml").write_text(_yaml.dump({"template": "tracker", "config": {}}))
+
+    bundle = package_skill(src, output_dir=tmp_path / "out")
+    with tarfile.open(bundle, "r:gz") as tar:
+        names = set(tar.getnames())
+    assert "water-tracker/SKILL.md" in names      # synthesized
+    assert "water-tracker/manifest.yaml" in names  # carried (registry + tools)
+    assert "water-tracker/skill.yaml" in names     # carried (runnable)
