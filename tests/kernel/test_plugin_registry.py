@@ -138,3 +138,59 @@ class TestPluginRegistry:
         empty = registry.agents_dir / "empty"
         empty.mkdir()
         assert registry.register_dir(empty) is None
+
+
+def _write_voice_skill(skill_dir: Path) -> None:
+    """A voice-built skill on disk: manifest.yaml + skill.yaml, NO SKILL.md."""
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": skill_dir.name,
+                "version": "1.0.0",
+                "description": "Track water intake",
+                "protocol": "skill",
+                "tools": [{"name": "log", "description": "Log a data point", "parameters": {}}],
+                "capabilities": [f"{skill_dir.name}.log"],
+                "permissions": [],
+            }
+        )
+    )
+    (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+
+
+def test_skill_installed_outside_agents_dir_is_callable(tmp_path: Path) -> None:
+    """A skill registered from %APPDATA%/KALI/skills (NOT agents_dir) must still
+    enter the LLM tool palette — the registry-reconciliation fix."""
+    reg = PluginRegistry(tmp_path / "agents")
+    (tmp_path / "agents").mkdir()
+    install_dir = tmp_path / "appdata_skills" / "water-tracker"
+    _write_voice_skill(install_dir)
+
+    assert reg.register_dir(install_dir) is not None
+    tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+    assert "water-tracker__log" in tool_names
+    assert reg.skill_dir_for("water-tracker") == install_dir
+
+
+def test_skill_without_skill_yaml_is_withheld(tmp_path: Path) -> None:
+    """Withhold-guard preserved: a protocol='skill' manifest with no skill.yaml
+    anywhere must NOT be advertised (calling it would yield 'Skill not found')."""
+    reg = PluginRegistry(tmp_path / "agents")
+    (tmp_path / "agents").mkdir()
+    bad = tmp_path / "appdata_skills" / "ghost"
+    bad.mkdir(parents=True)
+    (bad / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "ghost", "version": "1.0.0", "description": "no template",
+                "protocol": "skill",
+                "tools": [{"name": "run", "description": "r", "parameters": {}}],
+                "capabilities": ["ghost.run"], "permissions": [],
+            }
+        )
+    )  # deliberately NO skill.yaml
+
+    assert reg.register_dir(bad) is not None  # present in /agents...
+    tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+    assert "ghost__run" not in tool_names  # ...but withheld from the LLM

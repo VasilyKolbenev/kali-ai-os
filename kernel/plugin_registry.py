@@ -106,6 +106,10 @@ class PluginRegistry:
         self._agents: dict[str, AgentManifest] = {}
         # Keep the underlying SKILL.md for new-format skills (needed for runtime).
         self._skills: dict[str, SkillManifest] = {}
+        # Real source directory of each registered agent/skill, keyed by name.
+        # Tracks dirs OUTSIDE agents_dir (imported skills under %APPDATA%/KALI/
+        # skills) so _is_callable / export resolve the actual location.
+        self._dirs: dict[str, Path] = {}
 
     @property
     def agents_dir(self) -> Path:
@@ -145,6 +149,7 @@ class PluginRegistry:
         """
         self._agents.clear()
         self._skills.clear()
+        self._dirs.clear()
 
         if not self._agents_dir.exists():
             logger.warning("Agents directory not found: %s", self._agents_dir)
@@ -179,6 +184,7 @@ class PluginRegistry:
                 source = "manifest.yaml (legacy)"
 
             self._agents[manifest.name] = manifest
+            self._dirs[manifest.name] = agent_dir
             logger.info(
                 "Registered: %s v%s [%s]", manifest.name, manifest.version, source
             )
@@ -216,6 +222,7 @@ class PluginRegistry:
         else:
             manifest = legacy  # type: ignore[assignment]
         self._agents[manifest.name] = manifest
+        self._dirs[manifest.name] = agent_dir
         logger.info("Registered (incremental): %s v%s", manifest.name, manifest.version)
         return manifest
 
@@ -229,6 +236,16 @@ class PluginRegistry:
         Returns None for legacy manifest.yaml-only agents.
         """
         return self._skills.get(name)
+
+    def skill_dir_for(self, name: str) -> Path | None:
+        """Real source directory of a registered agent/skill, or None.
+
+        Unlike :meth:`get_skill` (SKILL.md skills only), this tracks the dir for
+        EVERY registered manifest — including voice-built (manifest.yaml-only)
+        and imported skills under %APPDATA%/KALI/skills — so callers (e.g. the
+        export route) can resolve a bundle source regardless of format.
+        """
+        return self._dirs.get(name)
 
     def list_registered(self) -> list[AgentManifest]:
         """List all registered agent manifests."""
@@ -253,7 +270,8 @@ class PluginRegistry:
         """
         if agent.protocol != "skill":
             return True
-        return (self._agents_dir / agent.name / "skill.yaml").is_file()
+        skill_dir = self._dirs.get(agent.name, self._agents_dir / agent.name)
+        return (skill_dir / "skill.yaml").is_file()
 
     def get_all_tools(self) -> list[dict[str, Any]]:
         """Get all agent tools formatted for LLM function calling (OpenAI/Anthropic)."""
