@@ -2129,15 +2129,36 @@ def create_app(
         from pathlib import Path
 
         from kernel.skills.publisher import package_skill
+        from kernel.skills.validator import validate_frontmatter
 
         reg = _get_skills_registry()
         skill = reg.get(name)
-        if skill is None:
+        if skill is not None:
+            skill_dir = skill.skill_dir
+        else:
+            # Voice-built agents live under agents_dir (manifest.yaml + skill.yaml,
+            # no SKILL.md) and aren't indexed by SkillsRegistry; the live plugin
+            # registry tracks every agent's real directory (Phase A share fix).
+            skill_dir = app.state.plugin_registry.skill_dir_for(name)
+        if skill_dir is None:
             return {"status": "error", "message": f"Skill '{name}' not found locally"}
+
+        # Honest-fail: a non-spec name (uppercase / underscore / non-ascii — the
+        # voice builder's slugify uses \w without re.ASCII, so Cyrillic survives)
+        # would synthesize a SKILL.md the receiver's strict loader rejects on
+        # import. Refuse here rather than ship a bundle that dies on the friend.
+        if not validate_frontmatter({"name": name, "description": "x"}, expected_name=name).valid:
+            return {
+                "status": "error",
+                "message": (
+                    f"Agent name '{name}' can't be shared yet — names must be "
+                    "lowercase latin letters, digits and single hyphens."
+                ),
+            }
 
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                bundle = package_skill(skill.skill_dir, output_dir=Path(tmp))
+                bundle = package_skill(skill_dir, output_dir=Path(tmp))
                 raw = bundle.read_bytes()
         except Exception as exc:
             return {"status": "error", "message": f"Export failed: {exc}"}

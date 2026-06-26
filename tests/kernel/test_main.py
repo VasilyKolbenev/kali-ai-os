@@ -274,6 +274,35 @@ class TestInstallBundleRegistersLive:
         assert "shared-skill" in s.skill_executor.list_skills()
 
 
+class TestExportVoiceAgent:
+    """A voice-built agent (manifest.yaml + skill.yaml, no SKILL.md) under
+    agents_dir is exportable via the plugin-registry fallback (Phase A)."""
+
+    async def test_export_voice_agent_returns_bundle(
+        self, app, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        import base64
+
+        skill_dir = app.state.plugin_registry.agents_dir / "water-tracker"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "manifest.yaml").write_text(
+            yaml.dump({"name": "water-tracker", "version": "1.0.0",
+                       "description": "Track water intake daily", "protocol": "skill",
+                       "tools": [{"name": "log", "description": "Log", "parameters": {}}],
+                       "capabilities": ["water-tracker.log"], "permissions": []})
+        )
+        (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+        app.state.plugin_registry.register_dir(skill_dir)
+
+        resp = await client.get("/skills/water-tracker/export")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok", body
+        assert isinstance(body["data"], str) and body["data"]
+        raw = base64.urlsafe_b64decode(body["data"] + "=" * (-len(body["data"]) % 4))
+        assert raw[:2] == b"\x1f\x8b"  # gzip magic
+
+
 class TestWebSocket:
     async def test_websocket_connect_and_receive(self, app) -> None:
         from starlette.testclient import TestClient
