@@ -302,6 +302,99 @@ class TestExportVoiceAgent:
         raw = base64.urlsafe_b64decode(body["data"] + "=" * (-len(body["data"]) % 4))
         assert raw[:2] == b"\x1f\x8b"  # gzip magic
 
+    async def test_export_route_bundle_installs_and_is_callable(
+        self, app, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        """End-to-end share loop at ROUTE level: the EXPORT route's bundle must
+        actually install on a friend's device AND be LLM-callable + runnable —
+        not just be valid gzip. Register a voice skill (manifest.yaml + skill.yaml,
+        no SKILL.md) → GET /skills/{name}/export → feed the returned base64 to
+        install_from_bundle(target_dir=<tmp>) → register the installed dir into a
+        FRESH PluginRegistry → assert the tool is offered AND a real SkillExecutor
+        runs it. Install targets tmp (NOT real %APPDATA%/KALI/skills)."""
+        import base64
+
+        from kernel.plugin_registry import PluginRegistry
+        from kernel.skill_executor import SkillExecutor
+        from kernel.skills.installer import install_from_bundle
+
+        # Creator side: a voice-built tracker agent registered live.
+        skill_dir = app.state.plugin_registry.agents_dir / "sleep-tracker"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "manifest.yaml").write_text(
+            yaml.dump({"name": "sleep-tracker", "version": "1.0.0",
+                       "description": "Track hours of sleep each night daily",
+                       "protocol": "skill",
+                       "tools": [{"name": "log", "description": "Log a data point",
+                                  "parameters": {}}],
+                       "capabilities": ["sleep-tracker.log"], "permissions": []})
+        )
+        (skill_dir / "skill.yaml").write_text(
+            yaml.dump({"template": "tracker", "config": {}})
+        )
+        app.state.plugin_registry.register_dir(skill_dir)
+
+        # Export via the REAL route.
+        resp = await client.get("/skills/sleep-tracker/export")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok", body
+
+        # Friend side: install the route's bundle into a TMP dir (never appdata).
+        install_root = tmp_path / "friend_skills"
+        result = install_from_bundle(body["data"], target_dir=install_root)
+        assert result.ok, result.error
+        installed = install_root / "sleep-tracker"
+        assert (installed / "SKILL.md").is_file()    # synthesized by packager
+        assert (installed / "skill.yaml").is_file()   # config carried for execution
+
+        # Imported skill is LLM-callable from a FRESH registry rooted elsewhere.
+        fresh_agents = tmp_path / "friend_agents"
+        fresh_agents.mkdir()
+        reg = PluginRegistry(fresh_agents)
+        reg.register_dir(installed)
+        tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+        assert "sleep-tracker__log" in tool_names
+
+        # ...and actually RUNS through the real template executor (no LLM needed).
+        executor = SkillExecutor(data_dir=tmp_path / "friend_data")
+        executor.load_skill(installed)
+        assert "sleep-tracker" in executor.list_skills()
+        run = await executor.execute("sleep-tracker", "log", {"amount": 7})
+        assert isinstance(run, dict)
+        assert "error" not in run, run        # tracker.log never errors on happy path
+        assert run["total"] == 7.0            # value actually recorded
+
+    async def test_export_non_spec_name_fails_honestly(
+        self, app, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        """A Cyrillic / non-spec agent name must export as status:"error" with a
+        message about the name — NOT a status:ok bundle that dies on the friend's
+        strict loader. The voice builder's slugify keeps Cyrillic, so 'трекер'
+        can be registered locally yet is unshareable per the Agent-Skills name
+        spec; the export route refuses it up front."""
+        bad_name = "трекер"
+        skill_dir = app.state.plugin_registry.agents_dir / bad_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "manifest.yaml").write_text(
+            yaml.dump({"name": bad_name, "version": "1.0.0",
+                       "description": "Трекер воды на русском языке каждый день",
+                       "protocol": "skill",
+                       "tools": [{"name": "log", "description": "Log", "parameters": {}}],
+                       "capabilities": [f"{bad_name}.log"], "permissions": []})
+        )
+        (skill_dir / "skill.yaml").write_text(
+            yaml.dump({"template": "tracker", "config": {}})
+        )
+        app.state.plugin_registry.register_dir(skill_dir)
+
+        resp = await client.get(f"/skills/{bad_name}/export")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "error", body
+        assert "name" in body["message"].lower()
+        assert "data" not in body  # no bundle shipped
+
 
 class TestWebSocket:
     async def test_websocket_connect_and_receive(self, app) -> None:
