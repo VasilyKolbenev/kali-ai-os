@@ -235,3 +235,26 @@ def test_package_voice_skill_synthesizes_skill_md(tmp_path: Path) -> None:
     assert "water-tracker/SKILL.md" in names      # synthesized
     assert "water-tracker/manifest.yaml" in names  # carried (registry + tools)
     assert "water-tracker/skill.yaml" in names     # carried (runnable)
+
+
+def test_package_voice_skill_with_frontmatter_hostile_description(tmp_path: Path) -> None:
+    """A raw voice description containing newlines and a lone '---' must not
+    corrupt the synthesized SKILL.md — the bundle must still import cleanly."""
+    import base64
+    import yaml as _yaml
+    from kernel.skills.installer import install_from_bundle
+
+    src = tmp_path / "plumbing-bot"
+    src.mkdir()
+    (src / "manifest.yaml").write_text(
+        _yaml.dump({"name": "plumbing-bot",
+                    "description": "Bot for plumbing.\n---\nstep two: do things",
+                    "protocol": "skill", "tools": [{"name": "log"}]})
+    )
+    (src / "skill.yaml").write_text(_yaml.dump({"template": "tracker", "config": {}}))
+
+    bundle = package_skill(src, output_dir=tmp_path / "out")
+    data = base64.urlsafe_b64encode(bundle.read_bytes()).decode().rstrip("=")
+    result = install_from_bundle(data, target_dir=tmp_path / "installed")
+    assert result.ok, result.error
+    assert (tmp_path / "installed" / "plumbing-bot" / "SKILL.md").is_file()
