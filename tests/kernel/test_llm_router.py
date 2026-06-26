@@ -100,7 +100,7 @@ class TestLLMRouter:
             def raise_for_status(self) -> None: ...
             def json(self) -> dict:
                 return {"message": {"content": "", "tool_calls": [
-                    {"function": {"name": "tasks__list_tasks", "arguments": {}}}
+                    {"function": {"name": "tasks__list_tasks", "arguments": {"limit": 5}}}
                 ]}}
 
         class FakeClient:
@@ -120,9 +120,60 @@ class TestLLMRouter:
         with patch("httpx.AsyncClient", return_value=FakeClient()):
             resp = await router._call_local(req)
 
-        assert "tools" in captured["json"]
+        # (1) the outgoing body forwards the exact tool palette (not dropped)...
+        assert captured["json"]["tools"] == tools
+        assert captured["json"]["model"] == "llama3"
+        # (2) ...and the returned tool_calls are parsed back into ToolCall objects
+        # (was hardcoded tool_calls=None, silently degrading every agent action).
         assert resp.tool_calls is not None
+        assert isinstance(resp.tool_calls[0], ToolCall)
         assert resp.tool_calls[0].name == "tasks__list_tasks"
+        assert resp.tool_calls[0].arguments == {"limit": 5}
+        assert resp.provider_used == "local"
+
+    async def test_local_parses_string_encoded_tool_arguments(self) -> None:
+        """Ollama may return tool-call ``arguments`` as a JSON *string*; the
+        router must decode it to a dict, not leave the agent with a raw string."""
+        config = LLMConfig(auto_route=False, local_model="llama3")
+        router = LLMRouter(config)
+
+        class FakeResp:
+            def raise_for_status(self) -> None: ...
+            def json(self) -> dict:
+                return {"message": {"content": "", "tool_calls": [
+                    {"function": {
+                        "name": "water-tracker__log",
+                        "arguments": '{"amount": 200}',
+                    }}
+                ]}}
+
+        class FakeClient:
+            async def __aenter__(self) -> "FakeClient":
+                return self
+            async def __aexit__(self, *a: object) -> bool:
+                return False
+            async def post(self, url: str, json: dict | None = None, timeout: object = None) -> FakeResp:
+                return FakeResp()
+
+        req = LLMRequest(text="запиши воду", context=[], available_tools=[])
+        with patch("httpx.AsyncClient", return_value=FakeClient()):
+            resp = await router._call_local(req)
+
+        assert resp.tool_calls is not None
+        assert resp.tool_calls[0].arguments == {"amount": 200}
+
+    def test_local_re_enabled_after_cooldown(self) -> None:
+        """A transient local failure must not strand the session — _local_available
+        resets to True after the 300s cooldown (mirrors the cloud reset)."""
+        config = LLMConfig(auto_route=True)
+        router = LLMRouter(config)
+        router._local_available = False
+        router._local_last_fail = time.time() - 301
+        router._cloud_available = False  # force the local branch to be consulted
+        router._cloud_last_fail = time.time()  # cloud still in cooldown
+        req = LLMRequest(text="hi", context=[], available_tools=[])
+        assert router.select_provider(req) == "local"
+        assert router._local_available is True
 
     async def test_route_returns_response(self, router: LLMRouter) -> None:
         req = LLMRequest(text="hello", context=[], available_tools=[])

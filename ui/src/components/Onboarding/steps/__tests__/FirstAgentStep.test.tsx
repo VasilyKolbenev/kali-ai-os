@@ -55,6 +55,34 @@ describe("FirstAgentStep", () => {
     await waitFor(() => expect(screen.getByText(/готово/i)).toBeInTheDocument());
   });
 
+  it("success copy appears ONLY after deploy resolves, not before", async () => {
+    vi.mocked(builderApi.extract).mockResolvedValue({
+      complete: true,
+      session_id: "sess-123",
+      spec: { name: "voda", description: "пить воду", type: "skill", template: "tracker", config: {} },
+    } as never);
+    // Defer deploy so we can observe the in-flight state before it resolves.
+    let resolveDeploy!: (v: { status: string; name: string }) => void;
+    vi.mocked(builderApi.deploy).mockReturnValue(
+      new Promise((res) => {
+        resolveDeploy = res;
+      }) as never,
+    );
+
+    const user = userEvent.setup();
+    render(<FirstAgentStep />);
+    await user.click(screen.getByText(/напомни пить воду каждые 2 часа/i));
+
+    // Deploy was called and is still pending — must NOT yet claim success.
+    await waitFor(() => expect(builderApi.deploy).toHaveBeenCalledWith("sess-123"));
+    expect(screen.queryByText(/готово/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/создаю/i)).toBeInTheDocument();
+
+    // Only once deploy resolves does the success copy render.
+    resolveDeploy({ status: "deployed", name: "voda" });
+    await waitFor(() => expect(screen.getByText(/готово/i)).toBeInTheDocument());
+  });
+
   it("partial extract → does NOT claim success and does not deploy", async () => {
     vi.mocked(builderApi.extract).mockResolvedValue({
       complete: false,
