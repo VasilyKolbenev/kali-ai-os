@@ -1,0 +1,75 @@
+name: core-loop
+
+# Fast, ML-free gate for the "create → works → share" core loop.
+#
+# WHY NOT `uv sync`?  The project's *runtime* deps include torch / torchaudio /
+# f5-tts / faster-whisper / onnxruntime, pinned to a CUDA (cu128) index. A full
+# `uv sync` would pull ~2.5 GB of GPU wheels on every push — slow and pointless
+# here, because the core_loop suite is provably ML-free:
+#   * every torch/F5/whisper import in kernel/ is lazy (function-local), and
+#   * with KALI_SKIP_PREWARM=1 (set in tests/conftest.py) no heavy module loads
+#     at import OR runtime for these tests (verified: the suite touches torch et
+#     al. zero times).
+# So we install only the lightweight import-required subset below. If a future
+# core_loop test starts exercising a path that imports an ML package, this job
+# will fail with a clear ModuleNotFoundError — add that package here (do NOT
+# switch to a blanket `uv sync`, which reintroduces the GPU-wheel cost).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-loop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Lightweight, ML-free dependency set (no torch/F5/whisper). Covers every
+      # top-level import the core_loop modules + tests resolve at import time,
+      # plus the pytest stack. Kept in sync with pyproject's non-ML deps.
+      - name: Install core-loop dependencies (ML-free)
+        run: |
+          uv venv
+          uv pip install \
+            "fastapi>=0.115.0" \
+            "uvicorn[standard]>=0.34.0" \
+            "pydantic>=2.10.0" \
+            "pyyaml>=6.0.2" \
+            "aiosqlite>=0.20.0" \
+            "python-dotenv>=1.0.1" \
+            "httpx>=0.28.0" \
+            "numpy>=2.0.0" \
+            "scipy>=1.13" \
+            "sounddevice>=0.5.1" \
+            "croniter>=6.2.2" \
+            "requests>=2.32" \
+            "websockets>=14.0" \
+            "pytest>=8.3.0" \
+            "pytest-asyncio>=0.24.0"
+
+      # Run the gate directly with the venv interpreter (mirrors `make
+      # test-core-loop`; avoids needing GNU make on the runner).
+      - name: Core-loop gate (pytest -m core_loop)
+        run: uv run python -m pytest -m core_loop -q
+
+      # ruff is intentionally NOT in the project venv — run it via uvx so it is
+      # fetched on demand without polluting the dependency set.
+      #
+      # NON-BLOCKING (continue-on-error): the repo currently carries ~200
+      # pre-existing ruff findings across kernel/ + tests/ that are out of scope
+      # for this core-loop gate. Surfacing them is useful, but failing every PR
+      # on legacy debt is not. Flip `continue-on-error` to false once the
+      # backlog is cleared (`make format` / `uvx ruff check --fix`).
+      - name: Lint (ruff, informational)
+        continue-on-error: true
+        run: uvx ruff check kernel/ tests/
