@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-push gate: re-verify the "create → works → share" core loop before pushing.
+#
+# Fast (~5s) and ML-free (no torch/F5/whisper). Blocks the push on failure.
+#
+# Opt-in install (does NOT clobber your existing .git/hooks):
+#     git config core.hooksPath scripts/git-hooks      # or: make install-hooks
+# Undo:
+#     git config --unset core.hooksPath
+#
+# Bypass for a single push (use sparingly):
+#     git push --no-verify
+set -euo pipefail
+
+echo "[pre-push] running core-loop gate (pytest -m core_loop)…"
+
+# Prefer the Makefile target; fall back to the venv python directly when `make`
+# is unavailable (e.g. a bare Windows + Git-Bash box without GNU make).
+if command -v make >/dev/null 2>&1; then
+    make test-core-loop
+elif [ -x ".venv/Scripts/python.exe" ]; then
+    .venv/Scripts/python.exe -m pytest -m core_loop -q
+elif [ -x ".venv/bin/python" ]; then
+    .venv/bin/python -m pytest -m core_loop -q
+else
+    echo "[pre-push] ERROR: no 'make' and no .venv python found — cannot run the gate." >&2
+    echo "[pre-push] install deps (make install) or run 'pytest -m core_loop' manually." >&2
+    exit 1
+fi
+
+echo "[pre-push] core-loop gate passed ✔"

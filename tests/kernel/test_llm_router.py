@@ -89,6 +89,7 @@ class TestLLMRouter:
         req = LLMRequest(text="hi", context=[], available_tools=[])
         assert router.select_provider(req) == "local"
 
+    @pytest.mark.core_loop
     async def test_local_forwards_tools_and_parses_tool_calls(self) -> None:
         """Local (privacy) provider must still be able to call agents — forward
         the tool schema to Ollama and parse any tool_calls it returns."""
@@ -131,6 +132,7 @@ class TestLLMRouter:
         assert resp.tool_calls[0].arguments == {"limit": 5}
         assert resp.provider_used == "local"
 
+    @pytest.mark.core_loop
     async def test_local_parses_string_encoded_tool_arguments(self) -> None:
         """Ollama may return tool-call ``arguments`` as a JSON *string*; the
         router must decode it to a dict, not leave the agent with a raw string."""

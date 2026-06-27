@@ -63,6 +63,7 @@ class _StubRouter:
         )
 
 
+@pytest.mark.core_loop
 @pytest.mark.asyncio
 async def test_core_loop_build_deploy_cron_callable_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

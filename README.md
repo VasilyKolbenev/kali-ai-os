@@ -98,6 +98,11 @@ cd ui && pnpm dev
 # Open http://localhost:1420
 ```
 
+**Tests:** `make test` runs the full suite. `make test-core-loop` runs the fast
+(~5s, ML-free) gate that re-verifies the "create → works → share" loop — wire it
+into `git push` with `make install-hooks` (opt-in; runs the same gate pre-push).
+CI runs this gate on every push/PR (`.github/workflows/core-loop.yml`).
+
 If the Desktop app cannot start the backend, collect logs from `%APPDATA%\KALI\logs\`.
 
 Supports **OpenAI** or **Anthropic** — set your preferred provider in `config/kali.yaml`.

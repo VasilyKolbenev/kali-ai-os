@@ -50,6 +50,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "core_loop: fast, ML-free verification of the 'create → works → share' loop (run via `make test-core-loop`)",
+]
 
 [tool.ruff]
 line-length = 100

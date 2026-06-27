@@ -34,6 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from kernel.notifications import NotificationManager
@@ -105,6 +106,7 @@ def _deploy_reminder_skill(
     assert manifest is not None, f"register_dir rejected {skill_dir}"
 
 
+@pytest.mark.core_loop
 async def test_schedule_fire_runs_real_skill_and_notifies(app: Any) -> None:  # noqa: ANN401, F811
     """Open-window reminder: trigger fires the REAL skill → REAL notification."""
     s = app.state
@@ -149,6 +151,7 @@ async def test_schedule_fire_runs_real_skill_and_notifies(app: Any) -> None:  # 
     ), f"reminder template did not record the fire in history: {history!r}"
 
 
+@pytest.mark.core_loop
 async def test_schedule_fire_suppressed_when_skill_declines(app: Any) -> None:  # noqa: ANN401, F811
     """Closed-window reminder: ``should_fire=False`` → NO notification."""
     s = app.state

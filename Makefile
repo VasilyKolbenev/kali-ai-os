@@ -1,4 +1,4 @@
-.PHONY: dev test lint format install build kernel-dev ui-dev
+.PHONY: dev test test-core-loop lint format install build kernel-dev ui-dev install-hooks
 
 install:
 	uv sync --all-extras
@@ -18,6 +18,18 @@ dev:
 
 test:
 	uv run pytest -v
+
+# Fast, ML-free gate for the "create → works → share" core loop (~5s, no torch/F5/whisper).
+# Re-verifies the voice build→deploy→schedule→dispatch→share path on every change.
+# Uses the venv python directly so it runs without `uv run` (e.g. from the pre-push hook).
+test-core-loop:
+	.venv/Scripts/python.exe -m pytest -m core_loop -q
+
+# Opt-in: route git hooks to scripts/git-hooks so `git push` runs the core-loop gate.
+# Explicit (won't clobber your existing .git/hooks); undo with `git config --unset core.hooksPath`.
+install-hooks:
+	git config core.hooksPath scripts/git-hooks
+	@echo "core.hooksPath -> scripts/git-hooks (pre-push now runs 'make test-core-loop')"
 
 lint:
 	uv run ruff check kernel/ tests/ agents/

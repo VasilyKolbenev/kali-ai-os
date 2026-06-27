@@ -274,6 +274,7 @@ class TestInstallBundleRegistersLive:
         assert "shared-skill" in s.skill_executor.list_skills()
 
 
+@pytest.mark.core_loop
 class TestExportVoiceAgent:
     """A voice-built agent (manifest.yaml + skill.yaml, no SKILL.md) under
     agents_dir is exportable via the plugin-registry fallback (Phase A)."""

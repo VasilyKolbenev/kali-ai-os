@@ -1,0 +1,4 @@
+# Git hooks are executed by /bin/sh|bash and MUST keep LF line endings, even on
+# Windows checkouts (core.autocrlf=true would otherwise rewrite them to CRLF and
+# break the shebang with a "bad interpreter" error on Linux/CI).
+scripts/git-hooks/* text eol=lf

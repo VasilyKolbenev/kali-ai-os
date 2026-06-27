@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -134,6 +134,7 @@ def _stub_router(pipe: Any) -> None:
     pipe._llm.route_streaming = fake_route_streaming  # type: ignore[method-assign]
 
 
+@pytest.mark.core_loop
 async def test_desktop_pipeline_executes_tool_and_speaks_real_result(
     water_skill_state: SimpleNamespace,
 ) -> None:
@@ -175,6 +176,7 @@ async def test_desktop_pipeline_executes_tool_and_speaks_real_result(
     assert pipe.state == PipelineState.IDLE
 
 
+@pytest.mark.core_loop
 async def test_remote_pipeline_executes_tool_and_speaks_real_result(
     water_skill_state: SimpleNamespace,
 ) -> None:
