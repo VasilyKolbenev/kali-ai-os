@@ -51,8 +51,20 @@ from kernel.catalog.installer import install_package
 
 logger = logging.getLogger(__name__)
 
+# Safe-by-default CORS allow-list: the legitimate KALI app origins only.
+# NEVER use "*" here — wildcard origins combined with allow_credentials=True is a
+# browser-attack surface on localhost. An explicit list keeps credentials valid.
+#   - tauri://localhost            : production Tauri WebView origin
+#   - http(s)://tauri.localhost    : Windows WebView2 Tauri origin (see CSP)
+#   - http://localhost:1420        : Vite dev server / Tauri devUrl (ui/vite.config.ts)
+#   - http://127.0.0.1:1420        : same dev server via loopback IP
+# Override/extend via the KALI_CORS_ORIGINS env (comma-separated).
 _DEFAULT_CORS_ORIGINS = [
-    "*"
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
 ]
 
 
@@ -71,6 +83,22 @@ def _cors_origins() -> list[str]:
         if origins:
             return origins
     return list(_DEFAULT_CORS_ORIGINS)
+
+
+def _resolve_host() -> str:
+    """Resolve the bind host for the Python backend.
+
+    Safe-by-default: binds loopback (127.0.0.1) so dev/other launches are not
+    exposed to the LAN. Set ``KALI_HOST=0.0.0.0`` to explicitly opt into LAN
+    exposure (the shipped desktop already injects ``KALI_HOST=127.0.0.1``).
+
+    Note: the Rust :3006 LAN channel (mobile companion) is a separate concern,
+    secured with a per-install token in WS-4 — not by this default.
+
+    Returns:
+        The host interface to bind, from ``KALI_HOST`` or ``"127.0.0.1"``.
+    """
+    return os.environ.get("KALI_HOST", "127.0.0.1")
 
 
 async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
@@ -2387,7 +2415,7 @@ if __name__ == "__main__":
     app = create_app()
     uvicorn.run(
         app,
-        host=os.environ.get("KALI_HOST", "0.0.0.0"),
+        host=_resolve_host(),
         port=int(os.environ.get("KALI_PORT", "3005")),
         log_level="info",
     )
