@@ -28,6 +28,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from kernel.catalog.identity import CommunityIdentity
+
 logger = logging.getLogger(__name__)
 
 # §4 table / view / storage names (single source of truth for the mapping).
@@ -132,6 +134,17 @@ class CatalogClient:
         self._key = os.environ.get("SUPABASE_KEY", "")
         self._client: Any = None
         self._init_attempted = False
+        # Identity layer (3.3): provides the anon device-id and the signed-in
+        # account id (auth.uid() == creator_id). Lazily built so tests can swap
+        # it; explicit method params still override what it supplies.
+        self._identity: CommunityIdentity | None = None
+
+    @property
+    def identity(self) -> "CommunityIdentity":
+        """The community identity provider (device-id + account session)."""
+        if self._identity is None:
+            self._identity = CommunityIdentity()
+        return self._identity
 
     @property
     def is_configured(self) -> bool:
@@ -297,7 +310,7 @@ class CatalogClient:
         *,
         slug: str,
         name: str,
-        creator_id: str,
+        creator_id: str | None = None,
         bundle: bytes,
         description: str | None = None,
         category: str | None = None,
@@ -314,13 +327,17 @@ class CatalogClient:
         gate is a SEAM — the full moderation lifecycle (AST scan + heuristics +
         prose review) is task 3.7; here it is just an injectable predicate.
 
-        Identity wiring is task 3.3: ``creator_id`` is accepted as a parameter (the
-        publishing KALI account), not derived from an auth session here.
+        Identity wiring (task 3.3): ``creator_id`` defaults to the signed-in KALI
+        account's ``auth.uid()`` (via the identity layer). Publish is account-gated
+        — with no explicit ``creator_id`` AND no session it returns ``{"status":
+        "sign-in required"}`` rather than silently publishing as anon. An explicit
+        ``creator_id`` overrides the session (used by tests).
 
         Args:
             slug: Stable identity key (also the Storage object name).
             name: Human-readable title.
-            creator_id: Publishing creator (``creators.id``).
+            creator_id: Publishing creator (``creators.id``); defaults to the
+                signed-in account id when omitted.
             bundle: The packaged bundle bytes to upload to Storage.
             description: Optional description.
             category: Optional category.
@@ -330,8 +347,14 @@ class CatalogClient:
             safety_gate: Optional predicate; True → auto-approve, else pending.
 
         Returns:
-            The inserted row dict, or ``{"status": "unconfigured"}`` on offline/error.
+            The inserted row dict, ``{"status": "sign-in required"}`` when not
+            signed in, or ``{"status": "unconfigured"}`` on offline/error.
         """
+        if creator_id is None:
+            creator_id = self.identity.current_account_id()
+        if creator_id is None:
+            return {"status": "sign-in required"}
+
         client = self._get_client()
         if client is None:
             return dict(_UNCONFIGURED)
@@ -428,15 +451,16 @@ class CatalogClient:
     async def record_install(
         self,
         slug: str,
-        device_id: str,
+        device_id: str | None = None,
         creator_attrib: str | None = None,
     ) -> dict[str, Any]:
         """Record an install event + increment the skill's install counter.
 
         Inserts an ``installs`` row (opaque ``device_id``, no PII; optional
         ``creator_attrib`` for the credited creator) and increments
-        ``skills.install_count``. Identity wiring is task 3.3: ``device_id`` is the
-        anonymous device identity, accepted as a parameter.
+        ``skills.install_count``. Identity wiring (task 3.3): ``device_id`` defaults
+        to the anonymous local device-id (via the identity layer) when omitted; an
+        explicit value overrides it (used by tests).
 
         NOTE (seam): the increment is a read-modify-write (read current count →
         write +1), which is NOT atomic under concurrency. The production-correct
@@ -446,7 +470,8 @@ class CatalogClient:
 
         Args:
             slug: The installed skill's slug.
-            device_id: Opaque anonymous device id (no PII).
+            device_id: Opaque anonymous device id (no PII); defaults to the local
+                device-id when omitted.
             creator_attrib: Optional creator credited for this install.
 
         Returns:
@@ -456,6 +481,8 @@ class CatalogClient:
         client = self._get_client()
         if client is None:
             return dict(_UNCONFIGURED)
+        if device_id is None:
+            device_id = self.identity.get_device_id()
         try:
             lookup = (
                 client.table(_SKILLS_TABLE)

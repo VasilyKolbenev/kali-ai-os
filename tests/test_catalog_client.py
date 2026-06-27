@@ -577,3 +577,118 @@ class TestSupabaseNotInstalled:
                 client._get_client()
 
         assert any("supabase" in r.message.lower() for r in caplog.records)
+
+
+# ===========================================================================
+# Identity wiring (3.3) — device-id auto-supplied for installs, account-id
+# (auth.uid) auto-supplied for publish; explicit param override preserved.
+# ===========================================================================
+
+class _FakeIdentity:
+    """Stand-in for kernel.catalog.identity.CommunityIdentity for wiring tests."""
+
+    def __init__(self, *, device_id: str = "dev-fake", account_id: str | None = None):
+        self._device_id = device_id
+        self._account_id = account_id
+
+    def get_device_id(self) -> str:
+        return self._device_id
+
+    def current_account_id(self) -> str | None:
+        return self._account_id
+
+    def is_signed_in(self) -> bool:
+        return self._account_id is not None
+
+
+class TestIdentityWiring:
+    async def test_record_install_auto_supplies_device_id(self) -> None:
+        # No device_id passed → CatalogClient pulls it from the identity layer.
+        mock = _make_supabase_mock(
+            table_rows={
+                "skills": [_approved(install_count=5)],
+                "installs": [{"id": "ins1"}],
+            }
+        )
+        client = _configured_client(mock)
+        client._identity = _FakeIdentity(device_id="auto-device-7")
+
+        result = await client.record_install(slug="weather-bot")
+
+        install_payload = mock._chains["installs"].insert.call_args[0][0]
+        assert install_payload["device_id"] == "auto-device-7"
+        assert result["status"] == "ok"
+
+    async def test_record_install_explicit_device_id_overrides(self) -> None:
+        mock = _make_supabase_mock(
+            table_rows={
+                "skills": [_approved(install_count=5)],
+                "installs": [{"id": "ins1"}],
+            }
+        )
+        client = _configured_client(mock)
+        client._identity = _FakeIdentity(device_id="auto-device-7")
+
+        await client.record_install(slug="weather-bot", device_id="explicit-9")
+
+        install_payload = mock._chains["installs"].insert.call_args[0][0]
+        assert install_payload["device_id"] == "explicit-9"
+
+    async def test_publish_auto_supplies_creator_id_from_session(self) -> None:
+        inserted = _approved(status="pending", install_count=0)
+        mock = _make_supabase_mock([inserted])
+        client = _configured_client(mock)
+        client._identity = _FakeIdentity(account_id="acct-uid-42")
+
+        # creator_id omitted → taken from the signed-in account.
+        result = await client.publish_skill(
+            slug="weather-bot",
+            name="Weather Bot",
+            bundle=b"zip",
+        )
+
+        insert_payload = mock.table.return_value.insert.call_args[0][0]
+        assert insert_payload["creator_id"] == "acct-uid-42"
+        assert result["slug"] == "weather-bot"
+
+    async def test_publish_explicit_creator_id_overrides_session(self) -> None:
+        inserted = _approved(status="pending", install_count=0)
+        mock = _make_supabase_mock([inserted])
+        client = _configured_client(mock)
+        client._identity = _FakeIdentity(account_id="acct-uid-42")
+
+        await client.publish_skill(
+            slug="weather-bot",
+            name="Weather Bot",
+            creator_id="explicit-creator",
+            bundle=b"zip",
+        )
+
+        insert_payload = mock.table.return_value.insert.call_args[0][0]
+        assert insert_payload["creator_id"] == "explicit-creator"
+
+    async def test_publish_requires_sign_in_when_no_session(self) -> None:
+        # Signed-out + no explicit creator_id → honest refusal, NOT a silent
+        # anon publish. Nothing is uploaded or inserted.
+        mock = _make_supabase_mock([_approved(status="pending")])
+        client = _configured_client(mock)
+        client._identity = _FakeIdentity(account_id=None)  # signed out
+
+        result = await client.publish_skill(
+            slug="weather-bot",
+            name="Weather Bot",
+            bundle=b"zip",
+        )
+
+        assert result["status"] == "sign-in required"
+        assert not mock.storage.from_.called  # nothing uploaded
+        assert not mock.table.return_value.insert.called  # nothing inserted
+
+    async def test_record_install_still_works_offline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Identity wiring must not break the graceful-degradation contract.
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.delenv("SUPABASE_KEY", raising=False)
+        result = await CatalogClient().record_install(slug="x", device_id="d")
+        assert result == {"status": "unconfigured"}
