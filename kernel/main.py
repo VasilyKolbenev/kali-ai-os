@@ -1934,6 +1934,49 @@ def create_app(
         local = await client.local_search("", resolved_agents_dir)
         return {"results": local}
 
+    # --- Community social layer (like / rate / comment, WS-3 Task 3.4) ---
+    # Each route returns the CatalogClient result VERBATIM so an honest
+    # "sign-in required" (rate/comment when signed out) reaches the UI as such,
+    # never a fake success. Likes are anon (device-id); rate/comment are
+    # account-gated inside the client. All degrade gracefully when offline.
+
+    @app.post("/catalog/{slug}/like")
+    async def catalog_like(slug: str, request: Request) -> dict[str, Any]:
+        """Like a skill as the anonymous local device (idempotent, no sign-in)."""
+        return await request.app.state.catalog_client.like(slug)
+
+    @app.delete("/catalog/{slug}/like")
+    async def catalog_unlike(slug: str, request: Request) -> dict[str, Any]:
+        """Remove this device's like from a skill."""
+        return await request.app.state.catalog_client.unlike(slug)
+
+    @app.post("/catalog/{slug}/rating")
+    async def catalog_rating(slug: str, request: Request) -> dict[str, Any]:
+        """Set this account's 1-5 star rating (account-gated; honest sign-in)."""
+        body = await request.json()
+        return await request.app.state.catalog_client.set_rating(
+            slug, body.get("stars")
+        )
+
+    @app.post("/catalog/{slug}/comment")
+    async def catalog_comment(slug: str, request: Request) -> dict[str, Any]:
+        """Post a comment (account-gated; defaults to pending moderation)."""
+        body = await request.json()
+        return await request.app.state.catalog_client.post_comment(
+            slug, body.get("body", "")
+        )
+
+    @app.get("/catalog/{slug}/comments")
+    async def catalog_comments(slug: str, request: Request) -> dict[str, Any]:
+        """List a skill's approved comments (newest first)."""
+        comments = await request.app.state.catalog_client.list_comments(slug)
+        return {"comments": comments}
+
+    @app.get("/catalog/{slug}/social")
+    async def catalog_social(slug: str, request: Request) -> dict[str, Any]:
+        """Aggregate a skill's social signals (likes + ratings + viewer state)."""
+        return await request.app.state.catalog_client.get_social(slug)
+
     # --- Agent Skills (SKILL.md spec) endpoints ---
 
     def _get_skills_catalog():

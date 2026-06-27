@@ -41,7 +41,7 @@ def _make_table_chain(rows: list[dict] | None = None) -> MagicMock:
     chain = MagicMock()
     chain.execute.return_value = result
     # Fluent verbs return the same chain so calls compose.
-    for verb in ("select", "insert", "update", "upsert", "ilike", "eq",
+    for verb in ("select", "insert", "update", "upsert", "delete", "ilike", "eq",
                  "neq", "order", "limit"):
         getattr(chain, verb).return_value = chain
 
@@ -50,7 +50,7 @@ def _make_table_chain(rows: list[dict] | None = None) -> MagicMock:
     single_result.data = rows[0] if rows else None
     single_chain = MagicMock()
     single_chain.execute.return_value = single_result
-    for verb in ("select", "insert", "update", "upsert", "ilike", "eq",
+    for verb in ("select", "insert", "update", "upsert", "delete", "ilike", "eq",
                  "neq", "order", "limit"):
         getattr(single_chain, verb).return_value = single_chain
     chain.single.return_value = single_chain

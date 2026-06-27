@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kernel.catalog.identity import CommunityIdentity
+from kernel.catalog.social import SocialMixin
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +122,17 @@ def _map_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
-class CatalogClient:
+class CatalogClient(SocialMixin):
     """Supabase-backed §4 marketplace catalog client.
 
     The Supabase client (supabase-py) is constructed lazily and degrades gracefully:
     every method returns an empty/None/"unconfigured" result when Supabase is not
     configured or the library is unavailable — never raising.
+
+    The community social surface (like / rate / comment / get_social, WS-3 Task
+    3.4) is provided by :class:`kernel.catalog.social.SocialMixin` — split into its
+    own module to keep this file under the size guard while staying callable on the
+    one ``catalog_client`` instance the routes hold.
     """
 
     def __init__(self) -> None:

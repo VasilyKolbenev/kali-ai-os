@@ -489,3 +489,151 @@ class TestWebSocket:
                 ws.send_json({"type": "unknown.type", "data": {}})
                 response = ws.receive_json()
                 assert response["type"] == "error"
+
+
+class _StubSocialCatalog:
+    """A stand-in catalog_client recording social calls + returning canned results.
+
+    Lets the route tests assert the slug/body wiring AND that the route passes the
+    CatalogClient result through VERBATIM (notably an honest "sign-in required",
+    never a fake success).
+    """
+
+    def __init__(self, results: dict[str, object] | None = None) -> None:
+        self.results = results or {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def _record(self, name: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append((name, args, kwargs))
+        return self.results.get(name, {"status": "ok"})
+
+    async def like(self, slug: str):  # type: ignore[no-untyped-def]
+        return self._record("like", slug)
+
+    async def unlike(self, slug: str):  # type: ignore[no-untyped-def]
+        return self._record("unlike", slug)
+
+    async def set_rating(self, slug: str, stars: int):  # type: ignore[no-untyped-def]
+        return self._record("set_rating", slug, stars)
+
+    async def post_comment(self, slug: str, body: str):  # type: ignore[no-untyped-def]
+        return self._record("post_comment", slug, body)
+
+    async def list_comments(self, slug: str):  # type: ignore[no-untyped-def]
+        return self._record("list_comments", slug)
+
+    async def get_social(self, slug: str):  # type: ignore[no-untyped-def]
+        return self._record("get_social", slug)
+
+
+class TestCatalogSocialRoutes:
+    """WS-3 Task 3.4 — social routes pass the CatalogClient result through verbatim."""
+
+    async def test_like_route_calls_client_and_returns_result(
+        self, app, client: AsyncClient
+    ) -> None:
+        stub = _StubSocialCatalog({"like": {"status": "ok", "liked": True}})
+        app.state.catalog_client = stub
+
+        resp = await client.post("/catalog/weather-bot/like")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok", "liked": True}
+        assert stub.calls[0] == ("like", ("weather-bot",), {})
+
+    async def test_unlike_route(self, app, client: AsyncClient) -> None:
+        stub = _StubSocialCatalog({"unlike": {"status": "ok", "liked": False}})
+        app.state.catalog_client = stub
+
+        resp = await client.request("DELETE", "/catalog/weather-bot/like")
+
+        assert resp.status_code == 200
+        assert resp.json()["liked"] is False
+        assert stub.calls[0][0] == "unlike"
+
+    async def test_rating_route_passes_stars_from_body(
+        self, app, client: AsyncClient
+    ) -> None:
+        stub = _StubSocialCatalog({"set_rating": {"status": "ok", "stars": 4}})
+        app.state.catalog_client = stub
+
+        resp = await client.post("/catalog/weather-bot/rating", json={"stars": 4})
+
+        assert resp.status_code == 200
+        assert resp.json()["stars"] == 4
+        assert stub.calls[0] == ("set_rating", ("weather-bot", 4), {})
+
+    async def test_rating_route_signed_out_passthrough(
+        self, app, client: AsyncClient
+    ) -> None:
+        # The honest "sign-in required" must reach the UI as such — NOT a 200 "ok".
+        stub = _StubSocialCatalog({"set_rating": {"status": "sign-in required"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post("/catalog/weather-bot/rating", json={"stars": 5})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "sign-in required"}
+
+    async def test_comment_route_passes_body(
+        self, app, client: AsyncClient
+    ) -> None:
+        stub = _StubSocialCatalog({"post_comment": {"status": "pending"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/comment", json={"body": "nice"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        assert stub.calls[0] == ("post_comment", ("weather-bot", "nice"), {})
+
+    async def test_comment_route_signed_out_passthrough(
+        self, app, client: AsyncClient
+    ) -> None:
+        stub = _StubSocialCatalog({"post_comment": {"status": "sign-in required"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/comment", json={"body": "nice"}
+        )
+
+        assert resp.json() == {"status": "sign-in required"}
+
+    async def test_list_comments_route(self, app, client: AsyncClient) -> None:
+        stub = _StubSocialCatalog(
+            {"list_comments": [{"body": "great", "status": "approved"}]}
+        )
+        app.state.catalog_client = stub
+
+        resp = await client.get("/catalog/weather-bot/comments")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["comments"][0]["body"] == "great"
+        assert stub.calls[0] == ("list_comments", ("weather-bot",), {})
+
+    async def test_social_route_returns_aggregate(
+        self, app, client: AsyncClient
+    ) -> None:
+        stub = _StubSocialCatalog(
+            {
+                "get_social": {
+                    "like_count": 3,
+                    "rating_count": 2,
+                    "avg_rating": 3.0,
+                    "liked": True,
+                    "rated": 4,
+                }
+            }
+        )
+        app.state.catalog_client = stub
+
+        resp = await client.get("/catalog/weather-bot/social")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["like_count"] == 3
+        assert body["avg_rating"] == 3.0
+        assert stub.calls[0] == ("get_social", ("weather-bot",), {})
