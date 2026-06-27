@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, Sparkles, Wrench, X } from "lucide-react";
 import { api } from "../../api/client";
-import type { AgentCapability, CatalogSkill, CatalogSource, InstalledSkill } from "../../api/types";
+import type {
+  AgentCapability, CatalogSkill, CatalogSource,
+  CommunityCard as CommunityCardData, InstalledSkill,
+} from "../../api/types";
 import { useAppStore } from "../../stores/appStore";
 import { CURATED, type CategoryId, type CuratedEntry } from "./curated";
 import { CommunitySection, CuratedStore } from "./CuratedStore";
 import { MineSection, type MyAgent } from "./StoreMine";
 import { SetupDialog, type CardState } from "./StoreCards";
 import { ConsentDialog } from "./ConsentDialog";
+import { MagicLinkDialog } from "./MagicLinkDialog";
 import { AdvancedStore, PublishDialog, type PublishDialogState } from "./AdvancedStore";
 
 type ToastType = "success" | "error" | "info";
 type ViewId = "main" | "advanced";
 type SectionId = "mine" | "showcase" | "community";
-
-const COMMUNITY_SOURCE_ID = "kali";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "mine", label: "Мои" },
@@ -43,10 +45,13 @@ export function AgentStore() {
   const [consents, setConsents] = useState<Record<string, "approved" | "revoked">>({});
   const [toast, setToast] = useState<{ msg: string; type: ToastType } | null>(null);
 
-  // Community (kali source)
-  const [community, setCommunity] = useState<CatalogSkill[]>([]);
+  // Community (merged Supabase UGC ∪ GitHub curated ∪ local)
+  const [community, setCommunity] = useState<CommunityCardData[]>([]);
   const [communityLoading, setCommunityLoading] = useState(false);
   const communityLoadedRef = useRef(false);
+  // Magic-link sign-in prompt — raised when a signed-out rate/comment returns
+  // "sign-in required" (honest, not a fake success). NOT OAuth.
+  const [signInReason, setSignInReason] = useState<string | null>(null);
 
   // Advanced view
   const [sources, setSources] = useState<CatalogSource[]>([]);
@@ -105,14 +110,16 @@ export function AgentStore() {
     }
   };
 
-  // Lazy community fetch on first visit
+  // Lazy community fetch on first visit — the merged feed (Supabase UGC ∪
+  // GitHub curated ∪ local), deduped server-side. Degrades to the empty-state
+  // invite when the route is unreachable (no error wall).
   useEffect(() => {
     if (section !== "community" || communityLoadedRef.current) return;
     communityLoadedRef.current = true;
     void (async () => {
       setCommunityLoading(true);
       try {
-        const res = await api.skillsCatalogList(COMMUNITY_SOURCE_ID, "");
+        const res = await api.catalogCommunity("");
         setCommunity(res.results || []);
       } catch {
         setCommunity([]); // graceful: empty state invites to publish first
@@ -306,13 +313,19 @@ export function AgentStore() {
     setBusyId(null);
   };
 
-  const handleInstallCommunity = async (skill: CatalogSkill) => {
-    setInstallingName(skill.name);
+  // Install a community card: UGC (Supabase slug) via the bundle-download route,
+  // curated (GitHub source_id+name) via the existing skill-install path.
+  const handleInstallCommunity = async (card: CommunityCardData) => {
+    setInstallingName(card.name);
     try {
-      const res = await api.skillInstall(skill.source_id, skill.name);
+      const res = card.source === "ugc" && card.slug
+        ? await api.catalogCommunityInstall(card.slug)
+        : await api.skillInstall(card.source_id || "", card.name);
       if (res.status === "ok") {
         await refreshInstalled();
-        showToast(`«${skill.name}» установлен`, "success");
+        showToast(`«${card.name}» установлен`, "success");
+      } else if (res.status === "unconfigured") {
+        showToast("Каталог сообщества пока недоступен", "info");
       } else {
         showToast(res.message || "Не получилось установить", "error");
       }
@@ -504,11 +517,12 @@ export function AgentStore() {
             )}
             {section === "community" && (
               <CommunitySection
-                skills={community}
+                cards={community}
                 loading={communityLoading}
                 installedNames={installedNames}
                 installingName={installingName}
                 onInstall={handleInstallCommunity}
+                onRequireSignIn={setSignInReason}
                 searchQuery={searchQuery}
               />
             )}
@@ -556,6 +570,14 @@ export function AgentStore() {
             entry={setupEntry}
             onClose={() => setSetupEntry(null)}
             onSaved={() => handleSetupSaved(setupEntry)}
+          />
+        )}
+
+        {signInReason && (
+          <MagicLinkDialog
+            reason={signInReason}
+            onClose={() => setSignInReason(null)}
+            onSignedIn={() => showToast("Вход выполнен", "success")}
           />
         )}
 

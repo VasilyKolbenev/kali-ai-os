@@ -98,6 +98,57 @@ export interface CatalogSkill {
   web_url: string;
 }
 
+// --- Community (merged «Сообщество» feed: Supabase UGC ∪ GitHub curated) ---
+export type CommunitySource = "ugc" | "curated" | "local";
+
+/** One uniform community card from GET /catalog/community. UGC cards carry a
+    slug + social counts; curated cards carry source_id+name for GitHub install. */
+export interface CommunityCard {
+  source: CommunitySource;
+  slug: string;
+  name: string;
+  description: string;
+  category: string | null;
+  version: string;
+  creator_id: string | null;
+  creator_handle: string | null;
+  install_count: number;
+  like_count: number;
+  rating_count: number;
+  avg_rating: number;
+  liked: boolean;
+  rated: number | null;
+  installed: boolean;
+  source_id: string | null;
+  trust: string;
+}
+
+/** Aggregate social signal for a skill (GET /catalog/{slug}/social). */
+export interface CommunitySocial {
+  status?: string;
+  like_count: number;
+  rating_count: number;
+  avg_rating: number;
+  liked: boolean;
+  rated: number | null;
+}
+
+/** A public (approved) comment row (GET /catalog/{slug}/comments). */
+export interface CommunityComment {
+  id?: string;
+  skill_id?: string;
+  user_id?: string;
+  body: string;
+  status?: string;
+  created_at?: string;
+}
+
+/** Current KALI account session (GET /community/account). */
+export interface CommunityAccount {
+  signed_in: boolean;
+  account_id: string | null;
+}
+
 export interface InstalledSkill {
   name: string;
   description: string;

@@ -78,6 +78,67 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force }),
     }),
+
+  // --- Community (merged «Сообщество»: Supabase UGC ∪ GitHub curated) ---
+  // GET /catalog/community merges the §4 Supabase approved set with the GitHub
+  // curated shelf (deduped), degrading to curated ∪ local when Supabase is off.
+  catalogCommunity: (q?: string) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    const qs = params.toString();
+    return fetchJSON<{ results: import("./types").CommunityCard[]; count: number }>(
+      `/catalog/community${qs ? "?" + qs : ""}`,
+    );
+  },
+  // Install a Supabase UGC skill by slug (Storage download → live install).
+  // Curated GitHub cards install via skillInstall(source_id, name) instead.
+  catalogCommunityInstall: (slug: string) =>
+    fetchJSON<{ status: string; reason?: string; message?: string }>(
+      "/catalog/community/install",
+      { method: "POST", body: JSON.stringify({ slug }) },
+    ),
+  // Likes: anon device-id, no sign-in. Rate/comment: account-gated — the result
+  // surfaces an honest {status:"sign-in required"} (never a fake success).
+  catalogSocial: (slug: string) =>
+    fetchJSON<import("./types").CommunitySocial>(`/catalog/${encodeURIComponent(slug)}/social`),
+  catalogLike: (slug: string) =>
+    fetchJSON<{ status: string; liked?: boolean }>(`/catalog/${encodeURIComponent(slug)}/like`, {
+      method: "POST",
+    }),
+  catalogUnlike: (slug: string) =>
+    fetchJSON<{ status: string; liked?: boolean }>(`/catalog/${encodeURIComponent(slug)}/like`, {
+      method: "DELETE",
+    }),
+  catalogRate: (slug: string, stars: number) =>
+    fetchJSON<{ status: string; stars?: number }>(`/catalog/${encodeURIComponent(slug)}/rating`, {
+      method: "POST",
+      body: JSON.stringify({ stars }),
+    }),
+  catalogComments: (slug: string) =>
+    fetchJSON<{ comments: import("./types").CommunityComment[] }>(
+      `/catalog/${encodeURIComponent(slug)}/comments`,
+    ),
+  catalogComment: (slug: string, body: string) =>
+    fetchJSON<{ status: string }>(`/catalog/${encodeURIComponent(slug)}/comment`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+
+  // --- Community account (KALI magic-link sign-in — NOT OAuth) ---
+  communityAccount: () =>
+    fetchJSON<import("./types").CommunityAccount>("/community/account"),
+  communityMagicLink: (email: string) =>
+    fetchJSON<{ status: string; reason?: string }>("/community/account/magic-link", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  communityVerify: (email: string, token: string) =>
+    fetchJSON<{ status: string; reason?: string }>("/community/account/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, token }),
+    }),
+  communitySignOut: () =>
+    fetchJSON<{ status: string }>("/community/account/sign-out", { method: "POST" }),
   skillInstall: (source_id: string, name: string, overwrite = false) =>
     fetchJSON<{ status: string; skill_name?: string; install_path?: string; message?: string; warnings?: string[] }>(
       "/skills/install",

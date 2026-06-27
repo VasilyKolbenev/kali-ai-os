@@ -782,3 +782,186 @@ class TestCatalogModerationRoutes:
         assert resp.status_code == 200
         assert resp.json()["flags"] == [{"id": "f1"}]
         assert stub.calls[0] == ("list_flags", (), {})
+
+
+class _StubMergeCatalog:
+    """A catalog_client stand-in for the /catalog/community merge route.
+
+    Returns canned Supabase UGC (``browse``/``search``), social aggregates, and
+    local results so the route's merge + dedup + degradation can be asserted
+    without a live Supabase or GitHub.
+    """
+
+    def __init__(
+        self,
+        *,
+        ugc: list[dict] | None = None,
+        local: list[dict] | None = None,
+        social: dict[str, dict] | None = None,
+    ) -> None:
+        self._ugc = ugc or []
+        self._local = local or []
+        self._social = social or {}
+
+    async def browse(self, category=None, limit=50):  # type: ignore[no-untyped-def]
+        return list(self._ugc)
+
+    async def search(self, query, category=None, limit=10):  # type: ignore[no-untyped-def]
+        q = (query or "").lower()
+        return [r for r in self._ugc if q in r.get("name", "").lower()]
+
+    async def get_social(self, slug):  # type: ignore[no-untyped-def]
+        return self._social.get(slug, {})
+
+    async def local_search(self, query, agents_dir=None):  # type: ignore[no-untyped-def]
+        return list(self._local)
+
+
+class _StubGithubCatalog:
+    """A SkillsCatalog stand-in: curated entries with NO network refresh."""
+
+    def __init__(self, entries: list[dict] | None = None, *, raise_refresh=False) -> None:
+        self._entries = entries or []
+        self._raise_refresh = raise_refresh
+
+    def refresh_source(self, source_id, force=False):  # type: ignore[no-untyped-def]
+        if self._raise_refresh:
+            raise RuntimeError("github offline")
+        return []
+
+    def list_by_source(self, source_id):  # type: ignore[no-untyped-def]
+        return [_CuratedEntry(e) for e in self._entries]
+
+
+class _CuratedEntry:
+    """Minimal CatalogEntry-like object exposing name/description/to_dict()."""
+
+    def __init__(self, d: dict) -> None:
+        self._d = d
+        self.name = d.get("name", "")
+        self.description = d.get("description", "")
+
+    def to_dict(self) -> dict:
+        return dict(self._d)
+
+
+class TestCatalogCommunityRoute:
+    """WS-3 Task 3.5 — /catalog/community merges Supabase UGC ∪ GitHub curated."""
+
+    async def test_merges_ugc_and_curated_deduped(
+        self, app, client: AsyncClient
+    ) -> None:
+        app.state.catalog_client = _StubMergeCatalog(
+            ugc=[
+                {"slug": "weather-bot", "name": "Weather Bot", "description": "w"},
+                {"slug": "shared", "name": "Shared", "description": "s"},
+            ],
+            social={"weather-bot": {"like_count": 5, "rating_count": 2, "avg_rating": 4.0}},
+        )
+        # A curated entry that duplicates "shared" by name must be deduped out.
+        app.state.skills_catalog = _StubGithubCatalog(
+            entries=[
+                {"name": "pdf-skill", "description": "p", "source_id": "kali",
+                 "trust": "official", "metadata": {}, "repo_owner": "anthropics"},
+                {"name": "Shared", "description": "dup", "source_id": "kali",
+                 "trust": "official", "metadata": {}, "repo_owner": "x"},
+            ]
+        )
+
+        resp = await client.get("/catalog/community")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        cards = body["results"]
+        names = [c["name"] for c in cards]
+        # UGC first (both), then the curated remainder (pdf-skill only — "Shared"
+        # deduped against the UGC slug "shared").
+        assert names == ["Weather Bot", "Shared", "pdf-skill"]
+        assert body["count"] == 3
+        sources = {c["name"]: c["source"] for c in cards}
+        assert sources["Weather Bot"] == "ugc"
+        assert sources["pdf-skill"] == "curated"
+        # Social counts enriched the UGC card.
+        weather = next(c for c in cards if c["name"] == "Weather Bot")
+        assert weather["like_count"] == 5
+        assert weather["avg_rating"] == 4.0
+
+    async def test_degrades_to_curated_and_local_when_supabase_offline(
+        self, app, client: AsyncClient
+    ) -> None:
+        # Supabase unconfigured → browse returns [] (no UGC). The route must NOT
+        # error — it returns curated ∪ local instead.
+        app.state.catalog_client = _StubMergeCatalog(
+            ugc=[],
+            local=[{"name": "local-agent", "description": "l", "version": "1.0.0"}],
+        )
+        app.state.skills_catalog = _StubGithubCatalog(
+            entries=[
+                {"name": "pdf-skill", "description": "p", "source_id": "kali",
+                 "trust": "official", "metadata": {}, "repo_owner": "anthropics"},
+            ]
+        )
+
+        resp = await client.get("/catalog/community")
+
+        assert resp.status_code == 200
+        names = [c["name"] for c in resp.json()["results"]]
+        assert "pdf-skill" in names      # curated survives
+        assert "local-agent" in names    # local fallback survives
+        # No exception, no UGC.
+        assert all(c["source"] != "ugc" for c in resp.json()["results"])
+
+    async def test_degrades_when_github_refresh_raises(
+        self, app, client: AsyncClient
+    ) -> None:
+        # A GitHub refresh failure must not error the route — UGC still returns.
+        app.state.catalog_client = _StubMergeCatalog(
+            ugc=[{"slug": "weather-bot", "name": "Weather Bot", "description": "w"}],
+        )
+        app.state.skills_catalog = _StubGithubCatalog(raise_refresh=True)
+
+        resp = await client.get("/catalog/community")
+
+        assert resp.status_code == 200
+        names = [c["name"] for c in resp.json()["results"]]
+        assert names == ["Weather Bot"]
+
+
+class TestCommunityAccountRoutes:
+    """WS-3 Task 3.3/3.5 — magic-link account routes (NOT OAuth)."""
+
+    async def test_account_status_signed_out(
+        self, app, client: AsyncClient
+    ) -> None:
+        identity = MagicMock()
+        identity.current_account_id.return_value = None
+        app.state.catalog_client = MagicMock(identity=identity)
+
+        resp = await client.get("/community/account")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"signed_in": False, "account_id": None}
+
+    async def test_magic_link_requires_email(
+        self, app, client: AsyncClient
+    ) -> None:
+        app.state.catalog_client = MagicMock()
+
+        resp = await client.post("/community/account/magic-link", json={})
+
+        assert resp.status_code == 400
+
+    async def test_magic_link_passes_email_through(
+        self, app, client: AsyncClient
+    ) -> None:
+        identity = MagicMock()
+        identity.request_magic_link.return_value = {"status": "sent"}
+        app.state.catalog_client = MagicMock(identity=identity)
+
+        resp = await client.post(
+            "/community/account/magic-link", json={"email": "a@b.ru"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "sent"}
+        identity.request_magic_link.assert_called_once_with("a@b.ru")

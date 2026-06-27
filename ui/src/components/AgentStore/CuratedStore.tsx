@@ -1,8 +1,9 @@
-import { Download, Loader2, Mic, Share2 } from "lucide-react";
-import type { CatalogSkill } from "../../api/types";
+import { Loader2, Mic, Share2 } from "lucide-react";
+import type { CommunityCard as CommunityCardData } from "../../api/types";
 import { useAppStore } from "../../stores/appStore";
 import { CATEGORIES, searchCurated, type CategoryId, type CuratedEntry } from "./curated";
 import { StoreCard, type CardState } from "./StoreCards";
+import { CommunityCard } from "./CommunityCard";
 
 /** Hero tile — creation is the headline action of the Мастерская. */
 export function CreateByVoiceHero() {
@@ -89,15 +90,18 @@ export function CuratedStore({
   );
 }
 
-/** «Сообщество» — skills published by KALI users, shared openly. */
+/** «Сообщество» — the merged feed (Supabase UGC ∪ GitHub curated ∪ local),
+    deduped server-side. UGC cards carry like/rate/comment; curated cards install
+    only. Empty/offline degrades to the «Стань первым» invite (no error wall). */
 export function CommunitySection({
-  skills, loading, installedNames, installingName, onInstall, searchQuery,
+  cards, loading, installedNames, installingName, onInstall, onRequireSignIn, searchQuery,
 }: {
-  skills: CatalogSkill[];
+  cards: CommunityCardData[];
   loading: boolean;
   installedNames: Set<string>;
   installingName: string | null;
-  onInstall: (skill: CatalogSkill) => void;
+  onInstall: (card: CommunityCardData) => void;
+  onRequireSignIn: (reason: string) => void;
   searchQuery: string;
 }) {
   if (loading) {
@@ -111,9 +115,9 @@ export function CommunitySection({
 
   const q = searchQuery.trim().toLowerCase();
   const visible = q
-    ? skills.filter((s) =>
-        s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
-    : skills;
+    ? cards.filter((c) =>
+        c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
+    : cards;
 
   if (visible.length === 0) {
     return (
@@ -130,46 +134,16 @@ export function CommunitySection({
 
   return (
     <div className="grid gap-2 stagger">
-      {visible.map((skill) => {
-        const installed = installedNames.has(skill.name);
-        const busy = installingName === skill.name;
-        return (
-          <div
-            key={skill.name}
-            className="glass glass-interactive p-5 flex items-center gap-4 rounded-2xl"
-          >
-            <div className="text-2xl w-12 h-12 flex items-center justify-center rounded-xl bg-white/5 shrink-0">
-              🤝
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-base font-medium truncate">{skill.name}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--j-purple)]/15
-                  text-[var(--j-purple,#a855f7)] border border-[var(--j-purple)]/30">
-                  работает везде
-                </span>
-              </div>
-              <div className="text-sm text-white/50 truncate mt-1">{skill.description}</div>
-            </div>
-            {installed ? (
-              <span className="px-3 py-1.5 text-xs rounded-lg bg-[var(--j-green)]/10 text-[var(--j-green)] shrink-0">
-                Установлено
-              </span>
-            ) : (
-              <button
-                disabled={busy}
-                onClick={() => onInstall(skill)}
-                className="px-4 py-2 text-sm rounded-lg bg-[var(--j-cyan)]/15 text-[var(--j-cyan)]
-                  hover:bg-[var(--j-cyan)]/25 transition flex items-center gap-1.5 shrink-0
-                  border border-[var(--j-cyan)]/30 disabled:opacity-50"
-              >
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                {busy ? "Секунду…" : "Установить"}
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {visible.map((card) => (
+        <CommunityCard
+          key={card.slug || `${card.source}:${card.name}`}
+          card={card}
+          installed={card.installed || installedNames.has(card.name)}
+          installing={installingName === card.name}
+          onInstall={onInstall}
+          onRequireSignIn={onRequireSignIn}
+        />
+      ))}
     </div>
   );
 }

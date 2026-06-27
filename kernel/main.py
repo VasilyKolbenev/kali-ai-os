@@ -1934,6 +1934,162 @@ def create_app(
         local = await client.local_search("", resolved_agents_dir)
         return {"results": local}
 
+    @app.get("/catalog/community")
+    async def catalog_community(request: Request, q: str = "") -> dict[str, Any]:
+        """Merged «Сообщество» feed: Supabase ``approved`` UGC ∪ GitHub curated.
+
+        Returns one deduped, source-tagged card list (``source`` ∈
+        ``ugc``/``curated``/``local``) so the tab renders a single card surface.
+        UGC cards carry the §4 social counts (likes/ratings) + creator handle;
+        curated cards carry the GitHub install handle (``source_id``+``name``).
+
+        Graceful degradation (preserved contract): when Supabase is
+        unconfigured/offline the UGC list is ``[]`` (``CatalogClient.browse``
+        already degrades), so the feed becomes curated ∪ locally-installed with
+        NO error wall. A failed GitHub refresh likewise yields the cached/empty
+        curated set rather than raising.
+
+        Args:
+            q: Optional case-insensitive substring filter over name/description.
+        """
+        from kernel.catalog.merge import merge_community
+
+        client = request.app.state.catalog_client
+
+        # Supabase approved UGC (search when a query is given, else browse all).
+        ugc = await (client.search(q) if q else client.browse())
+
+        # GitHub curated shelf — refresh the curated source so a cold start has
+        # data; refresh_source returns cached/[] on a network failure (no raise).
+        catalog = _get_skills_catalog()
+        curated_dicts: list[dict[str, Any]] = []
+        try:
+            catalog.refresh_source("kali")
+            entries = catalog.list_by_source("kali")
+            if q:
+                qlow = q.lower()
+                entries = [
+                    e for e in entries
+                    if qlow in e.name.lower() or qlow in e.description.lower()
+                ]
+            curated_dicts = [e.to_dict() for e in entries]
+        except Exception as exc:  # noqa: BLE001 — degrade to no curated set
+            logger.warning("community: curated refresh failed: %s", exc)
+
+        # Locally-installed agents — the offline fallback so the tab is never
+        # empty/error-walled when Supabase is down.
+        local = await client.local_search(q, resolved_agents_dir)
+
+        # Enrich UGC cards with live social counts (best-effort; missing → zeros).
+        social_by_slug: dict[str, dict[str, Any]] = {}
+        for row in ugc:
+            slug = (row.get("slug") or "").strip()
+            if not slug:
+                continue
+            try:
+                social_by_slug[slug] = await client.get_social(slug)
+            except Exception:  # noqa: BLE001 — a missing aggregate degrades to zeros
+                continue
+
+        results = merge_community(
+            ugc, curated_dicts, local, social_by_slug=social_by_slug
+        )
+        return {"results": results, "count": len(results)}
+
+    @app.post("/catalog/community/install")
+    async def catalog_community_install(request: Request) -> dict[str, Any]:
+        """Install a Supabase UGC skill by slug (download bundle → live install).
+
+        Body: ``{"slug": "<skills.slug>"}``. Routes through
+        ``CatalogClient.install_skill`` (Storage download → AST safety gate →
+        register into the live runtime) and records an install attribution.
+        Degrades to ``{"status": "unconfigured"}`` when Supabase is offline.
+        Curated GitHub cards use ``/skills/install`` (source_id+name) instead.
+        """
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        slug = (body or {}).get("slug", "").strip()
+        if not slug:
+            return JSONResponse(
+                status_code=400, content={"status": "error", "reason": "slug_required"}
+            )
+        client = request.app.state.catalog_client
+        result = await client.install_skill(
+            slug,
+            agents_dir=resolved_agents_dir,
+            plugin_registry=getattr(request.app.state, "plugin_registry", None),
+            skill_executor=getattr(request.app.state, "skill_executor", None),
+            agent_runtime=getattr(request.app.state, "agent_runtime", None),
+        )
+        # Best-effort attribution (no PII) — never block the install on a counter.
+        if result.get("status") not in {"unconfigured", "error"}:
+            try:
+                await client.record_install(slug)
+            except Exception:  # noqa: BLE001 — attribution is best-effort
+                pass
+        return result
+
+    # --- Community account (magic-link sign-in, WS-3 Task 3.3/3.5) ---
+    # KALI's OWN account: email → Supabase magic-link OTP. NEVER Google/Apple
+    # OAuth (§7 anti-pivot). Anonymous browse/install/like need no account; only
+    # rate/comment are account-gated — these routes surface the honest sign-in
+    # prompt the UI shows when a signed-out write returns "sign-in required".
+
+    @app.get("/community/account")
+    async def community_account(request: Request) -> dict[str, Any]:
+        """Report the current KALI account session (signed-in id, if any).
+
+        Returns ``{"signed_in": bool, "account_id": str | None}`` — used by the
+        community UI to decide whether a rate/comment needs the sign-in prompt.
+        Degrades to signed-out when Supabase is offline.
+        """
+        identity = request.app.state.catalog_client.identity
+        account_id = identity.current_account_id()
+        return {"signed_in": account_id is not None, "account_id": account_id}
+
+    @app.post("/community/account/magic-link")
+    async def community_magic_link(request: Request) -> dict[str, Any]:
+        """Send a magic-link / OTP email (Supabase ``sign_in_with_otp``).
+
+        Body: ``{"email": "<address>"}``. Returns the identity layer result
+        VERBATIM (``{"status": "sent"}`` / ``"unconfigured"`` / ``"error"``) so
+        the UI shows honest status — never a fake success. NOT OAuth.
+        """
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        email = (body or {}).get("email", "").strip()
+        if not email:
+            return JSONResponse(
+                status_code=400, content={"status": "error", "reason": "email_required"}
+            )
+        return request.app.state.catalog_client.identity.request_magic_link(email)
+
+    @app.post("/community/account/verify")
+    async def community_verify(request: Request) -> dict[str, Any]:
+        """Exchange the emailed OTP for a session (Supabase ``verify_otp``).
+
+        Body: ``{"email": "<address>", "token": "<code>"}``. Returns the identity
+        result verbatim (``{"status": "signed_in"}`` / ``"error"`` / ...).
+        """
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        email = (body or {}).get("email", "").strip()
+        token = (body or {}).get("token", "").strip()
+        if not email or not token:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "reason": "email_and_token_required"},
+            )
+        return request.app.state.catalog_client.identity.verify_magic_link(email, token)
+
+    @app.post("/community/account/sign-out")
+    async def community_sign_out(request: Request) -> dict[str, Any]:
+        """Sign out of the KALI account + clear the persisted session."""
+        return request.app.state.catalog_client.identity.sign_out()
+
     # --- Community social layer (like / rate / comment, WS-3 Task 3.4) ---
     # Each route returns the CatalogClient result VERBATIM so an honest
     # "sign-in required" (rate/comment when signed out) reaches the UI as such,
