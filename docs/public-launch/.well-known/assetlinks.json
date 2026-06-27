@@ -1,0 +1,28 @@
+[
+  {
+    "_comment": [
+      "TEMPLATE — Android App Links (Digital Asset Links). WS-5.7.",
+      "Host this at  https://<OWNED_DOMAIN>/.well-known/assetlinks.json  (HTTPS, content-type application/json, no redirect).",
+      "It lets the canonical https share link  https://<domain>/import?n=&d=  open KALI directly",
+      "(AndroidManifest needs an https intent-filter with android:autoVerify=\"true\" alongside the kali:// one).",
+      "",
+      "GO-LIVE TODO (Vasily — domain + keystore are hard-gates):",
+      "  1. Register the owned domain (kali.app is parked/unowned) and set ShareConfig.linkBase + window.KALI_DIST.linkBase to it.",
+      "  2. Replace REPLACE_WITH_RELEASE_SHA256_FINGERPRINT with the upload/release signing cert's SHA-256:",
+      "       keytool -list -v -keystore <release.jks> -alias <alias>   (copy the SHA256 line, colon-separated upper-hex)",
+      "     If enrolled in Play App Signing, ALSO add Google's app-signing-key SHA-256 (Play Console > App integrity) as a second fingerprint.",
+      "  3. Verify after hosting:  https://developers.google.com/digital-asset-links/tools/generator",
+      "package_name 'ai.kali.mobile' matches applicationId in mobile/android/app/build.gradle.kts."
+    ],
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ai.kali.mobile",
+      "sha256_cert_fingerprints": [
+        "REPLACE_WITH_RELEASE_SHA256_FINGERPRINT"
+      ]
+    }
+  }
+]

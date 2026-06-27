@@ -1,0 +1,16 @@
+# Cloudflare Pages / Netlify static rewrites (WS-5.7).
+# The canonical share link is  https://<domain>/import?n=&d=  but a static host
+# has no /import file, so it 404s without a rewrite. A 200 rewrite serves
+# index.html WHILE preserving the query string (the n=&d= payload the landing's
+# deferred-install redirector reads). NOT a 30x redirect — a redirect to "/"
+# would still work via the landing's /?n=&d= fallback, but the rewrite keeps the
+# clean /import path that assetlinks.json / apple-app-site-association point at.
+#
+# Host setup TODO (Vasily, once the owned domain + Cloudflare Pages exist):
+#   - drop this file at the site root (Cloudflare Pages reads /_redirects automatically)
+#   - Netlify uses the same syntax; Vercel needs an equivalent rule in vercel.json
+#   - the landing ALSO handles /?n=&d= so the loop degrades gracefully if rewrites are missing
+
+/import      /index.html   200
+/import/*    /index.html   200
+/a/*         /index.html   200

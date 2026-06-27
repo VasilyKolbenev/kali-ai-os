@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "TEMPLATE — iOS Universal Links (Apple App Site Association). WS-5.7.",
+    "Host at  https://<OWNED_DOMAIN>/.well-known/apple-app-site-association  (HTTPS, content-type application/json,",
+    "NO .json extension, NO redirect). Lets  https://<domain>/import?n=&d=  open KALI on iPhone/iPad.",
+    "Requires (iOS milestone, see master-plan WS-4.1): Apple Developer Program, an 'applinks:<domain>' Associated Domains",
+    "entitlement in the app, and CFBundleURLTypes/CFBundleURLSchemes=['kali'] in Info.plist for the kali:// fallback.",
+    "",
+    "GO-LIVE TODO (Vasily — Apple Dev account + Team ID are hard-gates):",
+    "  1. Replace REPLACE_WITH_APPLE_TEAM_ID with the 10-char Apple Developer Team ID (appID = <TeamID>.ai.kali.mobile).",
+    "  2. Confirm the bundle id 'ai.kali.mobile' matches PRODUCT_BUNDLE_IDENTIFIER after WS-4.2 (today still com.example.kaliMobile).",
+    "  3. Validate after hosting:  https://app-site-association.cdn-apple.com/a/v1/<domain>"
+  ],
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "REPLACE_WITH_APPLE_TEAM_ID.ai.kali.mobile",
+        "paths": [
+          "/import",
+          "/import/*",
+          "/a/*"
+        ]
+      }
+    ]
+  }
+}

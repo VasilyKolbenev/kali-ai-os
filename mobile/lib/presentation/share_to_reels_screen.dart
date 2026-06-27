@@ -66,11 +66,14 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
       final body = resp.data as Map<String, dynamic>?;
       final data = body?['data'];
       if (resp.statusCode == 200 && body?['status'] == 'ok' && data is String) {
-        final link = Uri(
-          scheme: 'kali',
-          host: 'import',
-          queryParameters: {'n': widget.agentName, 'd': data},
-        ).toString();
+        // Canonical deep-link format lives in ShareConfig (single source of
+        // truth, WS-5.7). `customLink` = `kali://import?n=&d=` — the on-device
+        // fallback carrier that works today. Flip to `ShareConfig.importLink`
+        // (https Universal/App Link) once the owned domain + assetlinks/AASA
+        // are hosted; same `n`/`d` payload, so the landing maps it 1:1.
+        final link =
+            ShareConfig.customLink(name: widget.agentName, bundle: data)
+                .toString();
         setState(() {
           _link = link;
           _loading = false;
