@@ -350,3 +350,78 @@ class TestDeclarationScopedExecute:
         # Without the network grant, network.request denied even if approved.
         enforcer.register_agent("nonet", self._agent(capabilities=["telegram.send"]))
         assert enforcer.can_execute("nonet", "network.request") is False
+
+
+class TestDestructiveDeclarationOvergrant:
+    """M2.1 tightening: a shared DOMAIN-NOUN token must not authorize a
+    destructive action through branch (a). Only a shared *destructive verb*
+    (or a mutating access-class suffix via branch (b)) authorizes."""
+
+    def _agent(self, *, capabilities: list[str]) -> AgentManifest:
+        return AgentManifest(
+            name="agent",
+            version="1.0.0",
+            description="Test",
+            capabilities=capabilities,
+            permissions=PermissionSet(grants=[], user_approved=True),
+        )
+
+    def test_read_only_cap_does_not_authorize_send_via_domain_noun(self) -> None:
+        # THE FALSE-ALLOW being closed: email.read (read-only) shares only the
+        # domain noun "email" with send_email — must NOT authorize it.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent("reader", self._agent(capabilities=["email.read"]))
+        assert enforcer.can_execute("reader", "execute:send_email") is False
+
+    def test_read_only_cap_does_not_authorize_delete_via_domain_noun(self) -> None:
+        # email.read shares "email" with delete_email — still must NOT authorize.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent("reader", self._agent(capabilities=["email.read"]))
+        assert enforcer.can_execute("reader", "execute:delete_email") is False
+
+    def test_calendar_read_does_not_authorize_delete_event(self) -> None:
+        # Already correct (calendar.read shares no token with delete_event) —
+        # lock it so the tightening cannot regress it.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent("reader", self._agent(capabilities=["calendar.read"]))
+        assert enforcer.can_execute("reader", "execute:delete_event") is False
+
+    def test_literal_destructive_verb_match_allowed_via_branch_a(self) -> None:
+        # Branch (a) still authorizes when the shared token IS a destructive
+        # verb: calendar.delete ↔ delete_event share "delete" ∈ DESTRUCTIVE_VERBS.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "cal", self._agent(capabilities=["calendar.delete"])
+        )
+        assert enforcer.can_execute("cal", "execute:delete_event") is True
+
+    # --- Regression locks: legitimate mutating access-class mappings that go
+    # --- through branch (b) and MUST remain allowed (18-agent invariants).
+    def test_calendar_write_allows_delete_event(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "cal", self._agent(capabilities=["calendar.read", "calendar.write"])
+        )
+        assert enforcer.can_execute("cal", "execute:delete_event") is True
+
+    def test_telegram_send_allows_send_message(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "tg", self._agent(capabilities=["telegram.send", "telegram.notify"])
+        )
+        assert enforcer.can_execute("tg", "execute:send_message") is True
+
+    def test_email_send_allows_send_email(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "mail",
+            self._agent(capabilities=["email.read", "email.send", "email.search"]),
+        )
+        assert enforcer.can_execute("mail", "execute:send_email") is True
+
+    def test_tasks_write_allows_delete_task(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "tasks", self._agent(capabilities=["tasks.read", "tasks.write"])
+        )
+        assert enforcer.can_execute("tasks", "execute:delete_task") is True

@@ -94,12 +94,21 @@ class PermissionEnforcer:
     def _declares_destructive_action(self, agent_name: str, action: str) -> bool:
         """Return True if the agent DECLARED authority for a destructive action.
 
-        A destructive action is considered declared when either (a) a token of
-        the action verb appears in one of the agent's declared capabilities
-        (covers a literal ``{domain}.{verb}`` declaration), or (b) the agent
-        declares a capability whose suffix is a recognised destructive/mutating
-        access class (``write``/``send``/``delete``/``notify``…), which is how
-        bundled agents declare that they mutate or send.
+        A destructive action is considered declared when either (a) the action
+        and a declared capability share a token that is itself a *destructive
+        verb* (covers a literal ``{domain}.{verb}`` declaration such as
+        ``calendar.delete`` ↔ ``delete_event``), or (b) the agent declares a
+        capability whose suffix is a recognised destructive/mutating access
+        class (``write``/``send``/``delete``/``notify``…), which is how bundled
+        agents declare that they mutate or send.
+
+        Branch (a) requires the *shared* token to be in
+        :data:`DESTRUCTIVE_VERBS` rather than any shared token: a read-only
+        capability shares its DOMAIN NOUN with destructive actions in the same
+        domain (``email.read`` ↔ ``send_email``/``delete_email`` share
+        ``"email"``), and a domain-noun overlap must NOT authorize a destructive
+        action (M2.1 tightening — closes a read-only-authorizes-destructive
+        false-allow).
 
         Args:
             agent_name: Unique agent identifier.
@@ -116,10 +125,24 @@ class PermissionEnforcer:
             cap_tokens = _TOKEN_RE.findall(cap.lower())
             if not cap_tokens:
                 continue
-            # (a) the action verb is named in the capability, or
-            if action_tokens & set(cap_tokens):
+            # (a) action and capability share a token that is a destructive
+            # verb (a literal verb-class declaration, e.g. ``calendar.delete``).
+            # A shared domain noun (``email`` in ``email.read`` ↔ ``send_email``)
+            # is NOT sufficient — only a shared destructive verb authorizes.
+            if action_tokens & set(cap_tokens) & DESTRUCTIVE_VERBS:
                 return True
             # (b) the capability's access-class suffix is destructive-class.
+            # NOTE (intentional access-class granularity): bundled agents declare
+            # mutation by access class (``calendar.write``, ``telegram.send``),
+            # and the action string carries no domain (``delete_event`` shares no
+            # token with ``calendar.write``). So ONE mutating-class capability
+            # authorizes EVERY destructive verb for that agent — a known
+            # cross-domain blanket grant accepted as the inherent coarseness of
+            # access-class declarations (all 18 bundled agents rely on it). A
+            # domain-scoped check here would break the legitimate
+            # ``calendar.write → delete_event`` mapping. FOLLOW-UP: tighten via
+            # per-action capability declarations (e.g. ``{domain}.{verb}`` or an
+            # explicit allowed-actions list) so access can be scoped to domain.
             if cap_tokens[-1] in DESTRUCTIVE_CAPABILITY_SUFFIXES:
                 return True
         return False
