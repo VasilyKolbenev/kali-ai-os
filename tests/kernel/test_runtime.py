@@ -93,10 +93,18 @@ class TestAgentRuntime:
 
 
 class _FakeProtocol:
-    """Minimal AgentProtocol stand-in that records executed actions."""
+    """Minimal AgentProtocol stand-in that records executed actions.
 
-    def __init__(self) -> None:
+    ``is_running`` is controllable to simulate a present-but-dead subprocess.
+    """
+
+    def __init__(self, *, running: bool = True) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.running = running
+
+    @property
+    def is_running(self) -> bool:
+        return self.running
 
     async def execute(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((action, args))
@@ -157,3 +165,102 @@ class TestDispatchPermissionGate:
         result = await rt.dispatch("weather", "get_weather", {"city": "Moscow"})
         assert result == {"status": "ok"}
         assert proto.calls == [("get_weather", {"city": "Moscow"})]
+
+
+class TestIsLoadedEnsureLoaded:
+    """Task 2.7: liveness-aware is_loaded + self-healing ensure_loaded.
+
+    Guards the divergent-liveness bug: a present-but-dead subprocess (still in
+    ``_agents`` because only ``unload_agent`` removes it) must NOT pass as
+    loaded, and ``ensure_loaded`` must transparently re-spawn it.
+    """
+
+    def _runtime(self) -> AgentRuntime:
+        return AgentRuntime(
+            registry=PluginRegistry(Path(".")),
+            agents_dir=Path("."),
+            event_bus=EventBus(),
+        )
+
+    def test_is_loaded_false_when_absent(self) -> None:
+        rt = self._runtime()
+        assert rt.is_loaded("ghost") is False
+
+    def test_is_loaded_true_for_live_protocol(self) -> None:
+        rt = self._runtime()
+        rt._agents["live"] = _FakeProtocol(running=True)  # type: ignore[assignment]
+        assert rt.is_loaded("live") is True
+
+    def test_is_loaded_false_for_present_but_dead_protocol(self) -> None:
+        rt = self._runtime()
+        # Simulates a crashed/exited subprocess still parked in _agents.
+        rt._agents["dead"] = _FakeProtocol(running=False)  # type: ignore[assignment]
+        assert rt.is_loaded("dead") is False
+
+    async def test_ensure_loaded_noop_when_already_live(self) -> None:
+        rt = self._runtime()
+        proto = _FakeProtocol(running=True)
+        rt._agents["live"] = proto  # type: ignore[assignment]
+
+        async def _fail_load(name: str) -> None:
+            raise AssertionError("load_agent must not be called for a live agent")
+
+        rt.load_agent = _fail_load  # type: ignore[assignment]
+        await rt.ensure_loaded("live")
+        assert rt._agents["live"] is proto  # unchanged
+
+    async def test_ensure_loaded_loads_when_absent(self) -> None:
+        rt = self._runtime()
+        loaded: list[str] = []
+
+        async def _load(name: str) -> None:
+            loaded.append(name)
+            rt._agents[name] = _FakeProtocol(running=True)  # type: ignore[assignment]
+
+        rt.load_agent = _load  # type: ignore[assignment]
+        await rt.ensure_loaded("fresh")
+        assert loaded == ["fresh"]
+        assert rt.is_loaded("fresh") is True
+
+    async def test_ensure_loaded_respawns_dead_agent(self) -> None:
+        rt = self._runtime()
+        dead = _FakeProtocol(running=False)
+        rt._agents["svc"] = dead  # type: ignore[assignment]
+        unloaded: list[str] = []
+        loaded: list[str] = []
+
+        async def _unload(name: str) -> None:
+            unloaded.append(name)
+            rt._agents.pop(name, None)
+
+        async def _load(name: str) -> None:
+            loaded.append(name)
+            rt._agents[name] = _FakeProtocol(running=True)  # type: ignore[assignment]
+
+        rt.unload_agent = _unload  # type: ignore[assignment]
+        rt.load_agent = _load  # type: ignore[assignment]
+
+        await rt.ensure_loaded("svc")
+
+        # Stale entry unloaded, then a fresh live protocol loaded.
+        assert unloaded == ["svc"]
+        assert loaded == ["svc"]
+        assert rt.is_loaded("svc") is True
+        assert rt._agents["svc"] is not dead
+
+    async def test_ensure_loaded_then_dispatch_succeeds_after_respawn(self) -> None:
+        rt = self._runtime()
+        rt._agents["svc"] = _FakeProtocol(running=False)  # type: ignore[assignment]
+
+        async def _unload(name: str) -> None:
+            rt._agents.pop(name, None)
+
+        async def _load(name: str) -> None:
+            rt._agents[name] = _FakeProtocol(running=True)  # type: ignore[assignment]
+
+        rt.unload_agent = _unload  # type: ignore[assignment]
+        rt.load_agent = _load  # type: ignore[assignment]
+
+        await rt.ensure_loaded("svc")
+        result = await rt.dispatch("svc", "do", {"x": 1})
+        assert result == {"status": "ok"}

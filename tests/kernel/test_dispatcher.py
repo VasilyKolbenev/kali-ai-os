@@ -58,8 +58,44 @@ class TestToolDispatcher:
 
     async def test_dispatch_auto_loads_agent(self, dispatcher: ToolDispatcher) -> None:
         dispatcher._runtime.dispatch = AsyncMock(return_value={"result": "ok"})
-        dispatcher._runtime.load_agent = AsyncMock()
-        dispatcher._runtime._agents = {}
+        dispatcher._runtime.ensure_loaded = AsyncMock()
 
         await dispatcher.dispatch("calendar__get_events", {"date": "today"})
-        dispatcher._runtime.load_agent.assert_called_once_with("calendar")
+        dispatcher._runtime.ensure_loaded.assert_called_once_with("calendar")
+
+    async def test_dispatch_respawns_dead_agent_then_dispatches(
+        self, dispatcher: ToolDispatcher
+    ) -> None:
+        # A dead-but-present agent must be transparently re-loaded by the
+        # dispatcher (via ensure_loaded) rather than surfacing a confusing
+        # "not loaded" / "closed stdout" error from runtime.dispatch.
+        class _Proto:
+            def __init__(self, *, running: bool) -> None:
+                self.running = running
+                self.calls: list[str] = []
+
+            @property
+            def is_running(self) -> bool:
+                return self.running
+
+            async def execute(self, action: str, args: dict) -> dict:
+                self.calls.append(action)
+                return {"result": "ok"}
+
+        rt = dispatcher._runtime
+        dead = _Proto(running=False)
+        rt._agents["calendar"] = dead  # type: ignore[assignment]
+
+        async def _unload(name: str) -> None:
+            rt._agents.pop(name, None)
+
+        async def _load(name: str) -> None:
+            rt._agents[name] = _Proto(running=True)  # type: ignore[assignment]
+
+        rt.unload_agent = _unload  # type: ignore[assignment]
+        rt.load_agent = _load  # type: ignore[assignment]
+
+        result = await dispatcher.dispatch("calendar__get_events", {"date": "today"})
+        assert result == {"result": "ok"}
+        # The fresh, live protocol handled the call (not the dead one).
+        assert rt._agents["calendar"] is not dead

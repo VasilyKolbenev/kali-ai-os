@@ -112,6 +112,32 @@ class AgentRuntime:
             )
         )
 
+    def is_loaded(self, name: str) -> bool:
+        """Return True only if the agent is present AND its process is alive.
+
+        Membership in ``_agents`` is process-presence, not liveness: a crashed
+        or exited subprocess stays parked there (only ``unload_agent`` removes
+        it). Liveness is the protocol's ``is_running`` signal, so a
+        present-but-dead agent reports False.
+        """
+        protocol = self._agents.get(name)
+        return protocol is not None and protocol.is_running
+
+    async def ensure_loaded(self, name: str) -> None:
+        """Guarantee a live agent for ``name``, re-spawning a dead one if needed.
+
+        Idempotent when the agent is already live. If it is present but dead,
+        the stale entry is unloaded before a fresh load; if absent, it is
+        loaded.
+        """
+        if self.is_loaded(name):
+            return
+        if name in self._agents:
+            # Present but dead — clear the stale subprocess before re-spawning.
+            logger.info("Agent '%s' present but not running — re-spawning", name)
+            await self.unload_agent(name)
+        await self.load_agent(name)
+
     async def dispatch(self, agent_name: str, action: str, args: dict[str, Any]) -> dict[str, Any]:
         protocol = self._agents.get(agent_name)
         if protocol is None:

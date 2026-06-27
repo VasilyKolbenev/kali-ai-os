@@ -1,12 +1,9 @@
 """Tool call dispatcher — routes LLM tool calls to agents."""
 
-import logging
 from typing import Any
 
 from kernel.agent_runtime.runtime import AgentRuntime
 from kernel.plugin_registry import PluginRegistry
-
-logger = logging.getLogger(__name__)
 
 
 class ToolDispatcher:
@@ -33,8 +30,10 @@ class ToolDispatcher:
         if manifest is None:
             raise ValueError(f"Agent '{agent_name}' not found in registry")
 
-        if agent_name not in self._runtime._agents:
-            logger.info("Auto-loading agent '%s' for tool call", agent_name)
-            await self._runtime.load_agent(agent_name)
+        # Liveness-aware: ensure a *live* agent before dispatching. A
+        # present-but-dead subprocess (still parked in the runtime) is
+        # transparently re-spawned here, instead of surfacing a confusing
+        # "not loaded" / "closed stdout" error from the dispatch below.
+        await self._runtime.ensure_loaded(agent_name)
 
         return await self._runtime.dispatch(agent_name, action, arguments)
