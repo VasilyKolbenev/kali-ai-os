@@ -17,5 +17,5 @@ final dioProvider = Provider<Dio>((ref) {
 String? apiUrl(String path, WidgetRef ref) {
   final ip = ref.read(serverIpProvider);
   if (ip == null) return null;
-  return 'http://$ip:3006$path';
+  return ServerConfig.api(ip, path);
 }

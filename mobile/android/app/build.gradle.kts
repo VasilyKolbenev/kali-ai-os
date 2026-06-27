@@ -1,14 +1,34 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Release signing is read from a gitignored `android/keystore.properties` (or
+// the matching env vars in CI). The real upload keystore is provided out of
+// band by the maintainer; see keystore.properties.example. When the file is
+// absent we fall back to debug signing so `flutter run --release` and clean
+// checkouts still build.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        load(FileInputStream(keystorePropertiesFile))
+    }
+}
+
+fun signingProp(key: String, env: String): String? =
+    keystoreProperties.getProperty(key) ?: System.getenv(env)
+
+val hasReleaseSigning =
+    signingProp("storeFile", "KALI_UPLOAD_STORE_FILE") != null
+
 android {
-    // namespace stays as the original code package (MainActivity lives here);
-    // the store identity is applicationId below. Full package rename is a
-    // later polish item — not worth the MainActivity move risk right now.
-    namespace = "com.example.kali_mobile"
+    // namespace matches the store identity; MainActivity lives in this package
+    // (android/app/src/main/kotlin/ai/kali/mobile/MainActivity.kt).
+    namespace = "ai.kali.mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -26,11 +46,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = signingProp("storeFile", "KALI_UPLOAD_STORE_FILE")?.let { file(it) }
+                storePassword = signingProp("storePassword", "KALI_UPLOAD_STORE_PASSWORD")
+                keyAlias = signingProp("keyAlias", "KALI_UPLOAD_KEY_ALIAS")
+                keyPassword = signingProp("keyPassword", "KALI_UPLOAD_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the real upload key when keystore.properties (or env) provides
+            // one; otherwise fall back to debug so local/release builds still run.
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

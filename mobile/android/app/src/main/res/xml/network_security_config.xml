@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext (HTTP/WS) policy for the KALI mobile client.
+
+  The app talks to the Desktop KALI over the LOCAL network on http/ws (port
+  3006). On a real phone the user enters their Desktop's LAN IP at runtime
+  (192.168.x.x / 10.x / 172.16-31.x — see connection_screen.dart), and on the
+  emulator the host bridge is 10.0.2.2. Those addresses cannot all be
+  enumerated ahead of time.
+
+  Android's network-security-config does NOT support CIDR ranges inside
+  <domain> (it only matches exact hostnames / IP literals — verified against
+  developer.android.com/privacy-and-security/security-config), so an
+  "RFC 1918 only" rule cannot be expressed declaratively. We therefore permit
+  cleartext at the base config and document it as LAN-only by app design. The
+  fixed dev/emulator hosts are listed explicitly for clarity.
+
+  This is deliberately scoped to be TIGHTENED once the cloud/relay switch lands
+  (the public endpoint will be HTTPS): at that point base cleartext flips to
+  false and only the explicit local hosts below keep cleartext for local dev.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Loopback + Android emulator host bridge (fixed, known addresses). -->
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

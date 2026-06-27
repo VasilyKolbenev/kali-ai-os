@@ -1,4 +1,4 @@
-package com.example.kali_mobile
+package ai.kali.mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

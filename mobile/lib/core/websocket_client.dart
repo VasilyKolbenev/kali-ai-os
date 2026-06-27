@@ -3,6 +3,8 @@ import 'dart:developer';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'config.dart';
+
 final wsClientProvider = Provider((ref) => WebSocketClient());
 
 class WebSocketClient {
@@ -31,7 +33,7 @@ class WebSocketClient {
     _serverIp = ipAddress;
 
     // Default to port 3006 for Desktop KALI (Rust proxy)
-    final wsUrl = Uri.parse('ws://$ipAddress:3006/ws');
+    final wsUrl = Uri.parse(ServerConfig.ws(ipAddress));
 
     try {
       final channel = WebSocketChannel.connect(wsUrl);

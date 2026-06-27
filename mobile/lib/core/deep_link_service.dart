@@ -72,7 +72,7 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
     messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
     try {
       final resp = await ref.read(dioProvider).post(
-        'http://$ip:3006/skills/install-bundle',
+        ServerConfig.api(ip, '/skills/install-bundle'),
         data: {
           'data': data,
           if (name != null && name.isNotEmpty) 'name': name,

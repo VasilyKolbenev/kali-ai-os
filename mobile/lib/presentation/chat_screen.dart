@@ -74,7 +74,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     try {
       final response = await _dio.post(
-        'http://$ip:3006/chat',
+        ServerConfig.api(ip, '/chat'),
         data: {'text': text},
       );
       

@@ -60,8 +60,8 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
       return;
     }
     try {
-      final url =
-          'http://$ip:3006/skills/${Uri.encodeComponent(widget.agentName)}/export';
+      final url = ServerConfig.api(
+          ip, '/skills/${Uri.encodeComponent(widget.agentName)}/export');
       final resp = await ref.read(dioProvider).get(url);
       final body = resp.data as Map<String, dynamic>?;
       final data = body?['data'];
