@@ -1,9 +1,51 @@
 import sys
+import os
 import argparse
-import urllib.request
 import urllib.parse
 import json
 from html.parser import HTMLParser
+from urllib.parse import urlparse
+
+# Bundled inside KALI — make the kernel package importable so egress can flow
+# through the fail-closed SSRF guard instead of raw urllib (the --url is
+# user/voice-supplied, a third-party-reachable SSRF path).
+sys.path.insert(
+    0,
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+)
+from kernel.sandbox.http_client import (  # noqa: E402
+    HttpRequest,
+    SandboxHttpClient,
+    SandboxHttpError,
+)
+
+_AGENT = "web-surfer"
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_DDG_HOST = "lite.duckduckgo.com"
+
+
+def _guarded_get(url: str, allowed_hosts: list[str]) -> str:
+    """GET ``url`` through the SSRF-guarded client and return the body text.
+
+    The guard blocks private/loopback/link-local targets (SSRF), re-checks every
+    redirect, and enforces the host whitelist. Raises ``SandboxHttpError`` on a
+    block or transport failure — callers translate that into an error string.
+
+    Args:
+        url: Absolute URL to fetch.
+        allowed_hosts: Host whitelist passed to the guard.
+
+    Returns:
+        The decoded response body.
+    """
+    client = SandboxHttpClient(_AGENT, allowed_domains=allowed_hosts)
+    resp = client.request(
+        HttpRequest(url=url, headers={"User-Agent": _USER_AGENT}, timeout=10.0)
+    )
+    return resp.body.decode("utf-8", errors="ignore")
 
 class TextExtractor(HTMLParser):
     def __init__(self):
@@ -25,52 +67,46 @@ class TextExtractor(HTMLParser):
             if clean:
                 self.text.append(clean)
 
+def _extract_text(html: str) -> str:
+    """Strip scripts/styles and collapse an HTML document to visible text."""
+    extractor = TextExtractor()
+    extractor.feed(html)
+    return " ".join(extractor.text)
+
+
 def fetch_url(url: str) -> str:
-    req = urllib.request.Request(
-        url,
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-    )
+    # The URL is user/voice-supplied — route through the SSRF guard, which
+    # blocks private/loopback/link-local hosts and re-checks redirects. The
+    # configured target host is whitelisted (the user explicitly asked for it);
+    # the private-IP block still rejects an internal target regardless.
+    host = (urlparse(url).hostname or "").lower()
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode('utf-8', errors='ignore')
-            extractor = TextExtractor()
-            extractor.feed(html)
-            text = " ".join(extractor.text)
-            # Limit to ~4000 chars to avoid overloading LLM context
-            if len(text) > 4000:
-                text = text[:4000] + "... [TRUNCATED]"
-            return text
-    except Exception as e:
+        html = _guarded_get(url, allowed_hosts=[host] if host else [])
+    except SandboxHttpError as e:
         return f"Error fetching URL: {str(e)}"
+    text = _extract_text(html)
+    # Limit to ~4000 chars to avoid overloading LLM context
+    if len(text) > 4000:
+        text = text[:4000] + "... [TRUNCATED]"
+    return text
 
 def search_duckduckgo(query: str) -> str:
-    # DuckDuckGo Lite HTML version
+    # DuckDuckGo Lite HTML version — fixed host, fetched via GET through the
+    # guard (the guard's whitelist is the DDG host).
     encoded_query = urllib.parse.quote_plus(query)
-    url = f"https://lite.duckduckgo.com/lite/"
-    data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-    )
+    url = f"https://{_DDG_HOST}/lite/?q={encoded_query}"
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode('utf-8', errors='ignore')
-            # Very basic extraction: DDG lite has result snippets
-            extractor = TextExtractor()
-            extractor.feed(html)
-            text = " ".join(extractor.text)
-            # Find where results start
-            if "Web Results" in text:
-                text = text[text.find("Web Results"):]
-            if len(text) > 4000:
-                text = text[:4000] + "... [TRUNCATED]"
-            return text
-    except Exception as e:
+        html = _guarded_get(url, allowed_hosts=[_DDG_HOST])
+    except SandboxHttpError as e:
         return f"Error searching: {str(e)}"
+    # Very basic extraction: DDG lite has result snippets
+    text = _extract_text(html)
+    # Find where results start
+    if "Web Results" in text:
+        text = text[text.find("Web Results"):]
+    if len(text) > 4000:
+        text = text[:4000] + "... [TRUNCATED]"
+    return text
 
 def main():
     parser = argparse.ArgumentParser(description="Web Surfer Agent Tool")

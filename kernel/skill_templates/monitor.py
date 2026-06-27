@@ -4,9 +4,13 @@ import logging
 import os
 from datetime import datetime
 from typing import Any
-from urllib import request as urllib_request
-from urllib.error import URLError
+from urllib.parse import urlparse
 
+from kernel.sandbox.http_client import (
+    HttpRequest,
+    SandboxHttpClient,
+    SandboxHttpError,
+)
 from kernel.skill_templates.base import SkillTemplate
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,12 @@ class MonitorTemplate(SkillTemplate):
         url (str): URL to check.
         expected_status (int): Expected HTTP status code (default 200).
     """
+
+    #: Optional per-agent rate limiter. ``None`` disables rate limiting. Left
+    #: as a class attribute (not a constructor arg) so the template registry can
+    #: keep instantiating templates with ``(skill_name, data_dir)`` only; the
+    #: skill runtime may inject a limiter per instance when one is available.
+    _rate_limiter: Any = None
 
     @property
     def template_name(self) -> str:
@@ -98,21 +108,54 @@ class MonitorTemplate(SkillTemplate):
         return {"url": url, "status_code": status_code, "is_ok": is_ok, "checked_at": now_str}
 
     def _fetch_status(self, url: str) -> tuple[int | None, str | None]:
-        """Perform a real HTTP request and return (status_code, error).
+        """Perform a guarded HTTP request and return (status_code, error).
+
+        The URL is user/voice-supplied, so egress goes through
+        :class:`~kernel.sandbox.http_client.SandboxHttpClient` — the fail-closed
+        SSRF defense (private-IP/loopback/link-local block + redirect re-check +
+        rate limit). The block is unconditional: even a whitelisted host that
+        resolves to ``169.254.169.254`` / ``127.0.0.1`` / RFC1918 is rejected,
+        so a voice-built monitor cannot reach internal infrastructure.
+
+        The configured target host is whitelisted by default (the user
+        explicitly chose this URL to monitor); ``config['allowed_domains']`` may
+        narrow/extend it. Any block or transport failure maps to the existing
+        contract: ``status_code is None`` with an error message.
 
         Args:
             url: URL to request.
 
         Returns:
-            Tuple of (status_code, error_message). On network error,
-            status_code is None and error_message is set.
+            Tuple of (status_code, error_message). On any block or network
+            error, status_code is None and error_message is set.
         """
+        client = self._build_http_client(url)
         try:
-            with urllib_request.urlopen(url, timeout=10) as resp:  # noqa: S310
-                return resp.status, None
-        except URLError as exc:
-            logger.warning("Monitor '%s' request failed: %s", self.skill_name, exc)
+            resp = client.request(HttpRequest(url=url, timeout=10.0))
+            return resp.status, None
+        except SandboxHttpError as exc:
+            # Covers DomainBlockedError (SSRF / not whitelisted), RateLimitError,
+            # and transport failures — all surface as a failed check.
+            logger.warning("Monitor '%s' request blocked/failed: %s", self.skill_name, exc)
             return None, str(exc)
+
+    def _build_http_client(self, url: str) -> SandboxHttpClient:
+        """Build the SSRF-guarded client for a monitor target.
+
+        Args:
+            url: The configured target URL.
+
+        Returns:
+            A :class:`SandboxHttpClient` whitelisting the target host (or the
+            explicit ``allowed_domains`` config), with the optional rate limiter.
+        """
+        host = (urlparse(url).hostname or "").lower()
+        allowed = [host] if host else []
+        return SandboxHttpClient(
+            self.skill_name,
+            allowed_domains=allowed,
+            rate_limiter=self._rate_limiter,
+        )
 
     async def _history(self) -> dict[str, Any]:
         """Return check history with aggregate ok/fail counts.
