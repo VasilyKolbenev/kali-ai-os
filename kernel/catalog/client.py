@@ -1,18 +1,130 @@
-"""Catalog client — thin Supabase wrapper with graceful degradation."""
+"""Catalog client — Supabase wrapper for the §4 community marketplace model.
+
+Targets the normalized §4 schema (supabase/migrations/*.sql): the `skills` catalog
+(status pending/approved/flagged/removed), `creators` profiles (handle + self-declared
+socials, display-only), and `installs` (attribution + trending input). It REPLACES the
+2026-04-13 flat-`packages` prototype.
+
+Scope (WS-3 Task 3.2 — catalog CRUD only):
+    * read approved skills (``search`` / ``browse`` / ``trending`` / ``get_skill``),
+    * ``publish_skill`` — upload the bundle to Storage + insert a ``pending`` row,
+    * creator profile CRUD (``get_creator`` / ``upsert_creator``),
+    * ``record_install`` — attribution row + ``skills.install_count`` increment,
+    * ``local_search`` — locally installed agents (preserved from the prototype).
+
+Out of scope (separate tasks): social like/rate/comment (3.4), identity/auth wiring
+(3.3 — methods accept ``device_id`` / ``creator_id`` params), the moderation lifecycle
+(3.7 — the publish safety gate is a SEAM, defaulting to ``status='pending'``).
+
+Graceful degradation (preserved contract): when Supabase is unconfigured or supabase-py
+is unavailable, reads return ``[]`` / ``None`` and writes return ``{"status":
+"unconfigured"}`` — never an exception. The «Сообщество» UI relies on this to
+degrade to the GitHub-curated set + locally installed skills.
+"""
 
 import logging
 import os
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
+# §4 table / view / storage names (single source of truth for the mapping).
+_SKILLS_TABLE = "skills"
+_TRENDING_VIEW = "trending_skills"
+_CREATORS_TABLE = "creators"
+_INSTALLS_TABLE = "installs"
+_BUNDLE_BUCKET = "skill-bundles"
+_STATUS_APPROVED = "approved"
+_STATUS_PENDING = "pending"
+_UNCONFIGURED: dict[str, str] = {"status": "unconfigured"}
+
+# Columns selected for a catalog skill (the trending_skills view is a subset, so
+# reads tolerate missing keys via Skill.from_row).
+_SKILL_COLUMNS = (
+    "id, slug, name, description, category, creator_id, bundle_path, "
+    "version, template, format, status, install_count, created_at, updated_at"
+)
+
+
+@dataclass(frozen=True)
+class Skill:
+    """A catalog skill row mapped from the §4 ``skills`` table (or trending view).
+
+    Attributes:
+        slug: Stable URL/identity key (``skills.slug``).
+        name: Human-readable title.
+        description: Optional long description.
+        category: Optional category label.
+        creator_id: FK to ``creators.id`` (the publishing account).
+        bundle_path: Storage object path of the published bundle (Phase B).
+        version: Semantic version string.
+        template: Optional builder template id.
+        format: On-disk descriptor format (``SKILL.md`` / ``skill.yaml``).
+        status: Moderation status (``pending``/``approved``/``flagged``/``removed``).
+        install_count: Cached install counter (attribution / trending input).
+        id: Server-assigned UUID (absent until inserted).
+    """
+
+    slug: str
+    name: str
+    description: str | None = None
+    category: str | None = None
+    creator_id: str | None = None
+    bundle_path: str | None = None
+    version: str = "1.0.0"
+    template: str | None = None
+    format: str | None = None
+    status: str | None = None
+    install_count: int = 0
+    id: str | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "Skill":
+        """Map a Supabase row dict to a ``Skill``, tolerating missing optionals.
+
+        Args:
+            row: A ``skills`` (or ``trending_skills`` view) row.
+
+        Returns:
+            The typed ``Skill``.
+        """
+        return cls(
+            slug=row.get("slug", ""),
+            name=row.get("name", ""),
+            description=row.get("description"),
+            category=row.get("category"),
+            creator_id=row.get("creator_id"),
+            bundle_path=row.get("bundle_path"),
+            version=row.get("version") or "1.0.0",
+            template=row.get("template"),
+            format=row.get("format"),
+            status=row.get("status"),
+            install_count=int(row.get("install_count") or 0),
+            id=row.get("id"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a plain dict (carries ``name`` + ``slug`` for consumers)."""
+        return asdict(self)
+
+
+def _map_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Map a list of skill rows to dicts via ``Skill``, dropping unmappable ones."""
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            out.append(Skill.from_row(row).to_dict())
+    return out
+
 
 class CatalogClient:
-    """Supabase-backed catalog client.
+    """Supabase-backed §4 marketplace catalog client.
 
-    Degrades gracefully when Supabase is not configured or supabase-py
-    is not installed — all methods return empty results instead of raising.
+    The Supabase client (supabase-py) is constructed lazily and degrades gracefully:
+    every method returns an empty/None/"unconfigured" result when Supabase is not
+    configured or the library is unavailable — never raising.
     """
 
     def __init__(self) -> None:
@@ -46,88 +158,338 @@ class CatalogClient:
             self._client = create_client(self._url, self._key)
         except ImportError:
             logger.warning("supabase-py not installed — catalog offline")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — degrade on any init failure
             logger.error("Failed to init Supabase client: %s", exc)
 
         return self._client
+
+    # ------------------------------------------------------------------ reads
 
     async def search(
         self,
         query: str,
         category: str | None = None,
         limit: int = 10,
-    ) -> list[dict]:
-        """Search catalog packages by keyword.
+    ) -> list[dict[str, Any]]:
+        """Search approved catalog skills by keyword.
 
         Args:
-            query: Full-text search string.
-            category: Optional category filter.
+            query: Substring matched against ``skills.name``.
+            category: Optional ``skills.category`` filter.
             limit: Maximum number of results.
 
         Returns:
-            List of matching package dicts, empty on error/offline.
+            Mapped skill dicts (``status='approved'`` only), ``[]`` on offline/error.
         """
         client = self._get_client()
         if client is None:
             return []
-
         try:
             escaped = query.replace("%", "\\%").replace("_", "\\_")
             req = (
-                client.table("packages")
-                .select("*")
+                client.table(_SKILLS_TABLE)
+                .select(_SKILL_COLUMNS)
+                .eq("status", _STATUS_APPROVED)
                 .ilike("name", f"%{escaped}%")
                 .limit(limit)
             )
             if category:
                 req = req.eq("category", category)
             result = req.execute()
-            return result.data or []
-        except Exception as exc:
+            return _map_rows(result.data)
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
             logger.error("catalog.search failed: %s", exc)
             return []
 
-    async def get_package(self, name: str) -> dict | None:
-        """Fetch a single package by name.
+    async def browse(
+        self,
+        category: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List approved skills (optionally by category), newest first.
 
         Args:
-            name: Exact package name.
+            category: Optional ``skills.category`` filter.
+            limit: Maximum number of results.
 
         Returns:
-            Package dict or None if not found / offline.
+            Mapped skill dicts, ``[]`` on offline/error.
         """
         client = self._get_client()
         if client is None:
-            return None
+            return []
+        try:
+            req = (
+                client.table(_SKILLS_TABLE)
+                .select(_SKILL_COLUMNS)
+                .eq("status", _STATUS_APPROVED)
+                .order("created_at", desc=True)
+                .limit(limit)
+            )
+            if category:
+                req = req.eq("category", category)
+            result = req.execute()
+            return _map_rows(result.data)
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.browse failed: %s", exc)
+            return []
 
+    async def trending(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return trending skills from the ``trending_skills`` view.
+
+        The view is already restricted to ``status='approved'`` and ordered by a
+        derived score (installs + likes + rating, recency-decayed).
+
+        Args:
+            limit: Maximum number of results.
+
+        Returns:
+            Mapped skill dicts ordered by trending score, ``[]`` on offline/error.
+        """
+        client = self._get_client()
+        if client is None:
+            return []
         try:
             result = (
-                client.table("packages").select("*").eq("name", name).single().execute()
+                client.table(_TRENDING_VIEW)
+                .select("*")
+                .limit(limit)
+                .execute()
             )
-            return result.data
-        except Exception as exc:
-            logger.error("catalog.get_package failed for %r: %s", name, exc)
-            return None
+            return _map_rows(result.data)
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.trending failed: %s", exc)
+            return []
 
-    async def publish(self, metadata: dict) -> dict:
-        """Publish a new package to the catalog.
+    async def get_skill(self, slug: str) -> dict[str, Any] | None:
+        """Fetch a single approved skill by slug.
 
         Args:
-            metadata: Package metadata dict (name, version, description, …).
+            slug: Exact ``skills.slug``.
 
         Returns:
-            Inserted row dict, or empty dict on error/offline.
+            Mapped skill dict, or None if not found / not approved / offline.
         """
         client = self._get_client()
         if client is None:
-            return {}
-
+            return None
         try:
-            result = client.table("packages").insert(metadata).execute()
-            return result.data[0] if result.data else {}
-        except Exception as exc:
-            logger.error("catalog.publish failed: %s", exc)
-            return {}
+            result = (
+                client.table(_SKILLS_TABLE)
+                .select(_SKILL_COLUMNS)
+                .eq("slug", slug)
+                .eq("status", _STATUS_APPROVED)
+                .maybe_single()
+                .execute()
+            )
+            data = result.data if result is not None else None
+            if not data:
+                return None
+            return Skill.from_row(data).to_dict()
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.get_skill failed for %r: %s", slug, exc)
+            return None
+
+    # ----------------------------------------------------------------- writes
+
+    async def publish_skill(
+        self,
+        *,
+        slug: str,
+        name: str,
+        creator_id: str,
+        bundle: bytes,
+        description: str | None = None,
+        category: str | None = None,
+        version: str = "1.0.0",
+        template: str | None = None,
+        skill_format: str = "SKILL.md",
+        safety_gate: Callable[..., bool] | None = None,
+    ) -> dict[str, Any]:
+        """Publish a skill: upload the bundle to Storage + insert a `skills` row.
+
+        The bundle is uploaded to the ``skill-bundles`` Storage bucket and the row's
+        ``bundle_path`` points at it. The row defaults to ``status='pending'``; it is
+        auto-``approved`` only when ``safety_gate`` is supplied and returns True. The
+        gate is a SEAM — the full moderation lifecycle (AST scan + heuristics +
+        prose review) is task 3.7; here it is just an injectable predicate.
+
+        Identity wiring is task 3.3: ``creator_id`` is accepted as a parameter (the
+        publishing KALI account), not derived from an auth session here.
+
+        Args:
+            slug: Stable identity key (also the Storage object name).
+            name: Human-readable title.
+            creator_id: Publishing creator (``creators.id``).
+            bundle: The packaged bundle bytes to upload to Storage.
+            description: Optional description.
+            category: Optional category.
+            version: Semantic version (defaults ``1.0.0``).
+            template: Optional builder template id.
+            skill_format: On-disk descriptor format (``SKILL.md``/``skill.yaml``).
+            safety_gate: Optional predicate; True → auto-approve, else pending.
+
+        Returns:
+            The inserted row dict, or ``{"status": "unconfigured"}`` on offline/error.
+        """
+        client = self._get_client()
+        if client is None:
+            return dict(_UNCONFIGURED)
+        try:
+            bundle_path = f"{slug}/{slug}.kali-agent"
+            client.storage.from_(_BUNDLE_BUCKET).upload(
+                bundle_path,
+                bundle,
+                {"content-type": "application/zip", "upsert": "true"},
+            )
+
+            approved = bool(safety_gate and safety_gate(slug=slug, bundle=bundle))
+            row = {
+                "slug": slug,
+                "name": name,
+                "description": description,
+                "category": category,
+                "creator_id": creator_id,
+                "bundle_path": bundle_path,
+                "version": version,
+                "template": template,
+                "format": skill_format,
+                "status": _STATUS_APPROVED if approved else _STATUS_PENDING,
+            }
+            result = client.table(_SKILLS_TABLE).insert(row).execute()
+            if result.data:
+                return result.data[0]
+            return row
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.publish_skill failed for %r: %s", slug, exc)
+            return dict(_UNCONFIGURED)
+
+    async def get_creator(self, handle: str) -> dict[str, Any] | None:
+        """Fetch a creator profile by handle.
+
+        Args:
+            handle: The unique ``creators.handle``.
+
+        Returns:
+            Creator row (id, handle, socials), or None if not found / offline.
+        """
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            result = (
+                client.table(_CREATORS_TABLE)
+                .select("id, handle, socials, created_at")
+                .eq("handle", handle)
+                .maybe_single()
+                .execute()
+            )
+            data = result.data if result is not None else None
+            return data or None
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.get_creator failed for %r: %s", handle, exc)
+            return None
+
+    async def upsert_creator(
+        self,
+        *,
+        creator_id: str,
+        handle: str,
+        socials: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a creator profile (handle + self-declared socials).
+
+        ``socials`` are DISPLAY strings only (TikTok/IG/YT/Telegram/site handles) —
+        never OAuth tokens or platform credentials (§2/§7 anti-pivot). Identity
+        wiring is task 3.3: ``creator_id`` is accepted as a parameter (it equals the
+        account's ``auth.users.id``), not derived from an auth session here.
+
+        Args:
+            creator_id: The account id (``creators.id`` == ``auth.users.id``).
+            handle: The unique public handle.
+            socials: Optional self-declared display links.
+
+        Returns:
+            The upserted row, or ``{"status": "unconfigured"}`` on offline/error.
+        """
+        client = self._get_client()
+        if client is None:
+            return dict(_UNCONFIGURED)
+        try:
+            row = {"id": creator_id, "handle": handle, "socials": socials or {}}
+            result = client.table(_CREATORS_TABLE).upsert(row).execute()
+            if result.data:
+                return result.data[0]
+            return row
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.upsert_creator failed for %r: %s", handle, exc)
+            return dict(_UNCONFIGURED)
+
+    async def record_install(
+        self,
+        slug: str,
+        device_id: str,
+        creator_attrib: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an install event + increment the skill's install counter.
+
+        Inserts an ``installs`` row (opaque ``device_id``, no PII; optional
+        ``creator_attrib`` for the credited creator) and increments
+        ``skills.install_count``. Identity wiring is task 3.3: ``device_id`` is the
+        anonymous device identity, accepted as a parameter.
+
+        NOTE (seam): the increment is a read-modify-write (read current count →
+        write +1), which is NOT atomic under concurrency. The production-correct
+        path is a Postgres ``rpc`` (atomic ``install_count = install_count + 1``) or
+        a DB trigger on ``installs`` — deferred to the live-Supabase wiring. Here it
+        is RMW so it is exercisable against the mock without a live function.
+
+        Args:
+            slug: The installed skill's slug.
+            device_id: Opaque anonymous device id (no PII).
+            creator_attrib: Optional creator credited for this install.
+
+        Returns:
+            ``{"status": "ok", "install_count": N}`` on success, or
+            ``{"status": "unconfigured"}`` / ``{"status": "error"}`` otherwise.
+        """
+        client = self._get_client()
+        if client is None:
+            return dict(_UNCONFIGURED)
+        try:
+            lookup = (
+                client.table(_SKILLS_TABLE)
+                .select("id, install_count")
+                .eq("slug", slug)
+                .maybe_single()
+                .execute()
+            )
+            skill = lookup.data if lookup is not None else None
+            if not skill:
+                logger.warning("record_install: unknown slug %r", slug)
+                return {"status": "error", "reason": "unknown_skill"}
+
+            skill_id = skill["id"]
+            new_count = int(skill.get("install_count") or 0) + 1
+
+            client.table(_INSTALLS_TABLE).insert(
+                {
+                    "skill_id": skill_id,
+                    "device_id": device_id,
+                    "creator_attrib": creator_attrib,
+                }
+            ).execute()
+
+            client.table(_SKILLS_TABLE).update(
+                {"install_count": new_count}
+            ).eq("id", skill_id).execute()
+
+            return {"status": "ok", "install_count": new_count}
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.record_install failed for %r: %s", slug, exc)
+            return {"status": "error"}
+
+    # ------------------------------------------------------------- local read
 
     async def local_search(
         self,
@@ -136,12 +498,16 @@ class CatalogClient:
     ) -> list[dict[str, Any]]:
         """Search locally installed agents/skills by name/description.
 
+        Preserved from the prototype — the «Сообщество» backend (kernel/main.py)
+        merges local results with the cloud catalog and degrades to local-only when
+        Supabase is offline.
+
         Args:
-            query: Search string (empty returns all).
-            agents_dir: Path to agents directory. Defaults to agents/.
+            query: Search string (empty returns all installed).
+            agents_dir: Path to the agents directory. Defaults to ``agents/``.
 
         Returns:
-            List of matching package dicts with installed=True.
+            List of matching local package dicts with ``installed=True``.
         """
         if agents_dir is None:
             agents_dir = Path("agents")
@@ -158,49 +524,31 @@ class CatalogClient:
             try:
                 import yaml  # type: ignore[import-untyped]
 
-                with open(manifest_path, encoding="utf-8") as f:
-                    manifest = yaml.safe_load(f)
+                with open(manifest_path, encoding="utf-8") as fh:
+                    manifest = yaml.safe_load(fh)
                 name: str = manifest.get("name", "")
                 desc: str = manifest.get("description", "")
-                if query_lower and query_lower not in name.lower() and query_lower not in desc.lower():
+                if (
+                    query_lower
+                    and query_lower not in name.lower()
+                    and query_lower not in desc.lower()
+                ):
                     continue
-                results.append({
-                    "name": name,
-                    "description": desc,
-                    "type": "skill" if (agent_dir / "skill.yaml").exists() else "agent",
-                    "category": "local",
-                    "downloads": 0,
-                    "rating_avg": 0,
-                    "trust_level": "official",
-                    "version": manifest.get("version", "1.0.0"),
-                    "installed": True,
-                })
-            except Exception:
+                results.append(
+                    {
+                        "name": name,
+                        "description": desc,
+                        "type": "skill"
+                        if (agent_dir / "skill.yaml").exists()
+                        else "agent",
+                        "category": "local",
+                        "downloads": 0,
+                        "rating_avg": 0,
+                        "trust_level": "official",
+                        "version": manifest.get("version", "1.0.0"),
+                        "installed": True,
+                    }
+                )
+            except Exception:  # noqa: BLE001 — skip an unreadable manifest
                 continue
         return results
-
-    async def trending(self, limit: int = 10) -> list[dict]:
-        """Return top packages sorted by download count.
-
-        Args:
-            limit: Maximum number of results.
-
-        Returns:
-            List of package dicts ordered by downloads desc, empty on error/offline.
-        """
-        client = self._get_client()
-        if client is None:
-            return []
-
-        try:
-            result = (
-                client.table("packages")
-                .select("*")
-                .order("downloads", desc=True)
-                .limit(limit)
-                .execute()
-            )
-            return result.data or []
-        except Exception as exc:
-            logger.error("catalog.trending failed: %s", exc)
-            return []
