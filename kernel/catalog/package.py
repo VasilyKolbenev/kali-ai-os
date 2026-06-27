@@ -1,4 +1,13 @@
-"""Package format (.kali-agent) — pack, unpack, inspect."""
+"""Package format (.kali-agent) — pack, unpack, inspect.
+
+This is the Phase B canonical cloud-catalog format: a zip with per-file
+``checksums.json`` and zip-slip-guarded extraction. A voice-built skill ships
+only ``manifest.yaml`` + ``skill.yaml`` (no ``SKILL.md``); to keep the receiver's
+strict ``SKILL.md`` loader happy, :func:`pack` synthesizes a spec-valid
+``SKILL.md`` when absent — reusing the exact Phase A synthesis from
+``kernel.skills.publisher`` so the two bundle formats agree byte-for-byte on
+what the synthesized descriptor looks like.
+"""
 
 import hashlib
 import json
@@ -11,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _CHECKSUMS_FILE = "checksums.json"
 _MANIFEST_FILE = "manifest.yaml"
+_SKILL_MD_FILE = "SKILL.md"
+_SKILL_YAML_FILE = "skill.yaml"
 
 
 def _sha256(path: Path) -> str:
@@ -27,6 +38,31 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _synthesized_skill_md(agent_dir: Path) -> bytes | None:
+    """Return synthesized SKILL.md bytes for a voice-built skill, else None.
+
+    A voice-built skill (``skill.yaml`` present, ``SKILL.md`` absent) needs a
+    spec-valid ``SKILL.md`` so the receiver's strict loader accepts the unpacked
+    package. The synthesis is the Phase A one in ``kernel.skills.publisher`` —
+    reused (not duplicated) so the .kali-agent zip and the .tar.gz P2P bundle
+    carry an identical descriptor. SKILL.md-backed skills return None (packed
+    verbatim, byte-identical to before).
+
+    Args:
+        agent_dir: The skill/agent directory being packed.
+
+    Returns:
+        The synthesized ``SKILL.md`` bytes, or None when no synthesis applies.
+    """
+    if (agent_dir / _SKILL_MD_FILE).is_file():
+        return None
+    if not (agent_dir / _SKILL_YAML_FILE).is_file():
+        return None
+    from kernel.skills.publisher import _synthesize_skill_md
+
+    return _synthesize_skill_md(agent_dir)
 
 
 def pack(agent_dir: Path, output_path: Path | None = None) -> Path:
@@ -62,12 +98,22 @@ def pack(agent_dir: Path, output_path: Path | None = None) -> Path:
         str(p.relative_to(agent_dir)): _sha256(p) for p in files
     }
 
+    # Voice-built skills (skill.yaml, no SKILL.md): synthesize a spec-valid
+    # SKILL.md (Phase A logic) so the receiver's strict loader accepts the
+    # package; its checksum covers the synthesized bytes like any other member.
+    synth_skill_md = _synthesized_skill_md(agent_dir)
+    if synth_skill_md is not None:
+        checksums[_SKILL_MD_FILE] = hashlib.sha256(synth_skill_md).hexdigest()
+
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in files:
             zf.write(file, file.relative_to(agent_dir))
+        if synth_skill_md is not None:
+            zf.writestr(_SKILL_MD_FILE, synth_skill_md)
         zf.writestr(_CHECKSUMS_FILE, json.dumps(checksums, indent=2))
 
-    logger.info("Packed %s → %s (%d files)", agent_dir.name, output_path, len(files))
+    member_count = len(files) + (1 if synth_skill_md is not None else 0)
+    logger.info("Packed %s → %s (%d files)", agent_dir.name, output_path, member_count)
     return output_path
 
 

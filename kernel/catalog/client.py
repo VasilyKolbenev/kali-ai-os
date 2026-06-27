@@ -123,6 +123,28 @@ def _map_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+def _pack_kali_agent(skill_dir: Path) -> bytes:
+    """Pack a skill directory into Phase B ``.kali-agent`` zip bytes.
+
+    Packs into a throwaway temp dir (never AppData) and returns the bytes ready
+    for Storage upload. Voice-built skills gain a synthesized ``SKILL.md`` inside
+    the zip via :func:`kernel.catalog.package.pack`.
+
+    Args:
+        skill_dir: The on-disk skill directory to package.
+
+    Returns:
+        The packaged ``.kali-agent`` zip as bytes.
+    """
+    import tempfile
+
+    from kernel.catalog.package import pack
+
+    with tempfile.TemporaryDirectory(prefix="kali-pack-") as tmp:
+        out = pack(skill_dir, Path(tmp) / f"{skill_dir.name}.kali-agent")
+        return out.read_bytes()
+
+
 class CatalogClient(SocialMixin, ModerationMixin):
     """Supabase-backed §4 marketplace catalog client.
 
@@ -320,7 +342,8 @@ class CatalogClient(SocialMixin, ModerationMixin):
         slug: str,
         name: str,
         creator_id: str | None = None,
-        bundle: bytes,
+        bundle: bytes | None = None,
+        skill_dir: "Path | str | None" = None,
         description: str | None = None,
         category: str | None = None,
         version: str = "1.0.0",
@@ -328,13 +351,20 @@ class CatalogClient(SocialMixin, ModerationMixin):
         skill_format: str = "SKILL.md",
         safety_gate: Callable[..., bool] | None = None,
     ) -> dict[str, Any]:
-        """Publish a skill: upload the bundle to Storage + insert a `skills` row.
+        """Publish a skill: upload a `.kali-agent` bundle to Storage + insert a row.
 
-        The bundle is uploaded to the ``skill-bundles`` Storage bucket and the row's
-        ``bundle_path`` points at it. The row is auto-``approved`` only when the
-        ``safety_gate`` predicate returns True, else it stays ``status='pending'``
-        for manual review. When no gate is injected the default is the combined
-        §5C :func:`kernel.catalog.moderation.auto_approve_gate` — AST scan of any
+        The Phase B catalog format is the ``.kali-agent`` zip. Pass ``skill_dir``
+        to pack the on-disk skill directory into one (voice-built skills gain a
+        synthesized ``SKILL.md`` inside the zip — see :func:`kernel.catalog.package.pack`);
+        the packed bytes are uploaded to the ``skill-bundles`` Storage bucket and
+        the row's ``bundle_path`` points at it. ``bundle`` (pre-packed bytes) is
+        still accepted for callers that already have a packaged payload — exactly
+        one of ``skill_dir`` / ``bundle`` must be given.
+
+        The row is auto-``approved`` only when the ``safety_gate`` predicate
+        returns True, else it stays ``status='pending'`` for manual review. When no
+        gate is injected the default is the combined §5C
+        :func:`kernel.catalog.moderation.auto_approve_gate` — AST scan of any
         bundled ``scripts/*.py`` AND a prose content gate over the SKILL.md body +
         description (so a script-less malicious Markdown skill is NOT auto-approved
         on the AST pass alone). An explicit ``safety_gate`` overrides the default.
@@ -350,7 +380,9 @@ class CatalogClient(SocialMixin, ModerationMixin):
             name: Human-readable title.
             creator_id: Publishing creator (``creators.id``); defaults to the
                 signed-in account id when omitted.
-            bundle: The packaged bundle bytes to upload to Storage.
+            bundle: Pre-packaged bundle bytes (mutually exclusive with ``skill_dir``).
+            skill_dir: Skill directory to pack into a ``.kali-agent`` zip and upload
+                (mutually exclusive with ``bundle``).
             description: Optional description.
             category: Optional category.
             version: Semantic version (defaults ``1.0.0``).
@@ -364,6 +396,9 @@ class CatalogClient(SocialMixin, ModerationMixin):
             The inserted row dict, ``{"status": "sign-in required"}`` when not
             signed in, or ``{"status": "unconfigured"}`` on offline/error.
         """
+        if (bundle is None) == (skill_dir is None):
+            return {"status": "error", "reason": "exactly one of bundle/skill_dir required"}
+
         if creator_id is None:
             creator_id = self.identity.current_account_id()
         if creator_id is None:
@@ -373,6 +408,9 @@ class CatalogClient(SocialMixin, ModerationMixin):
         if client is None:
             return dict(_UNCONFIGURED)
         try:
+            if skill_dir is not None:
+                bundle = _pack_kali_agent(Path(skill_dir))
+            assert bundle is not None  # narrowed by the mutual-exclusion check
             bundle_path = f"{slug}/{slug}.kali-agent"
             client.storage.from_(_BUNDLE_BUCKET).upload(
                 bundle_path,
@@ -403,6 +441,69 @@ class CatalogClient(SocialMixin, ModerationMixin):
         except Exception as exc:  # noqa: BLE001 — graceful degradation
             logger.error("catalog.publish_skill failed for %r: %s", slug, exc)
             return dict(_UNCONFIGURED)
+
+    async def install_skill(
+        self,
+        slug: str,
+        *,
+        agents_dir: "Path",
+        plugin_registry: Any | None = None,
+        skill_executor: Any | None = None,
+        agent_runtime: Any | None = None,
+    ) -> dict[str, Any]:
+        """Install a catalog skill: download its ``.kali-agent`` zip + unpack/install.
+
+        Looks up the approved skill's ``bundle_path``, downloads that object from the
+        ``skill-bundles`` Storage bucket, writes it to a temp file, and installs it
+        through :func:`kernel.catalog.installer.install_package` — which preserves the
+        zip-slip / checksum guards and registers a voice-built (``skill.yaml``) skill
+        into the live registry so it is immediately LLM-callable. No AppData writes
+        occur here beyond the installer's own atomic deploy into ``agents_dir``.
+
+        Graceful degradation (preserved contract): returns ``{"status":
+        "unconfigured"}`` when Supabase is offline and ``{"status": "error", ...}``
+        on any download/unpack failure — never raises.
+
+        Args:
+            slug: The approved skill's slug to install.
+            agents_dir: Directory the skill is installed into.
+            plugin_registry: Live ``PluginRegistry`` to register the skill into.
+            skill_executor: Optional ``SkillExecutor`` (back-compat deploy path).
+            agent_runtime: Optional ``AgentRuntime`` for code-backed agents.
+
+        Returns:
+            The installer result dict, or ``{"status": "unconfigured"}`` when offline.
+        """
+        client = self._get_client()
+        if client is None:
+            return dict(_UNCONFIGURED)
+        try:
+            skill = await self.get_skill(slug)
+            bundle_path = (skill or {}).get("bundle_path")
+            if not bundle_path:
+                return {"status": "error", "reason": "unknown_skill"}
+
+            data = client.storage.from_(_BUNDLE_BUCKET).download(bundle_path)
+            if not data:
+                return {"status": "error", "reason": "empty_download"}
+
+            import tempfile
+
+            from kernel.catalog.installer import install_package
+
+            with tempfile.TemporaryDirectory(prefix="kali-install-") as tmp:
+                pkg = Path(tmp) / f"{slug}.kali-agent"
+                pkg.write_bytes(bytes(data))
+                return await install_package(
+                    pkg,
+                    agents_dir=Path(agents_dir),
+                    skill_executor=skill_executor,
+                    plugin_registry=plugin_registry,
+                    agent_runtime=agent_runtime,
+                )
+        except Exception as exc:  # noqa: BLE001 — graceful degradation
+            logger.error("catalog.install_skill failed for %r: %s", slug, exc)
+            return {"status": "error"}
 
     async def get_creator(self, handle: str) -> dict[str, Any] | None:
         """Fetch a creator profile by handle.

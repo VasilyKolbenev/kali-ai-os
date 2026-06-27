@@ -247,3 +247,147 @@ class TestRoundTrip:
             restored = dest / rel
             assert restored.exists(), f"Missing: {rel}"
             assert restored.read_bytes() == orig.read_bytes(), f"Content differs: {rel}"
+
+
+# ---------------------------------------------------------------------------
+# Phase B voice-skill packaging — a voice-built skill (manifest.yaml +
+# skill.yaml, NO SKILL.md) must pack into a .kali-agent zip with a synthesized,
+# spec-valid SKILL.md so the receiver's strict SKILL.md loader accepts it —
+# the same synthesis the Phase A .tar.gz P2P bundle uses (publisher).
+# ---------------------------------------------------------------------------
+
+def _make_voice_skill(base: Path, name: str = "water-tracker") -> Path:
+    """A voice-built skill: manifest.yaml + skill.yaml, NO SKILL.md."""
+    skill_dir = base / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "description": "Track water intake daily",
+                "protocol": "skill",
+                "tools": [
+                    {"name": "log", "description": "Log a data point", "parameters": {}}
+                ],
+                "capabilities": [f"{name}.log"],
+                "permissions": [],
+            }
+        )
+    )
+    (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+    return skill_dir
+
+
+class TestVoiceSkillPack:
+    def test_pack_synthesizes_skill_md_for_voice_skill(self, tmp_path: Path) -> None:
+        """A voice skill with no SKILL.md gets a synthesized one inside the zip,
+        alongside its manifest.yaml + skill.yaml (so it stays runnable)."""
+        skill_dir = _make_voice_skill(tmp_path / "src")
+        out = pack(skill_dir, tmp_path / "out.kali-agent")
+
+        with zipfile.ZipFile(out) as zf:
+            names = set(zf.namelist())
+            assert "SKILL.md" in names, "synthesized SKILL.md missing from package"
+            assert "manifest.yaml" in names
+            assert "skill.yaml" in names
+            skill_md = zf.read("SKILL.md").decode("utf-8")
+
+        # The synthesized frontmatter name must equal the dir name so the
+        # receiver's load_skill(expected_name=dir) validates after extraction.
+        assert "name: water-tracker" in skill_md
+        # checksums cover the synthesized member too (verified on unpack).
+        with zipfile.ZipFile(out) as zf:
+            checksums = json.loads(zf.read("checksums.json"))
+        assert "SKILL.md" in checksums
+
+    def test_pack_does_not_resynthesize_when_skill_md_present(
+        self, tmp_path: Path
+    ) -> None:
+        """A SKILL.md-backed skill is packed verbatim — no synthesis, the author's
+        SKILL.md is preserved byte-for-byte."""
+        skill_dir = _make_voice_skill(tmp_path / "src", name="has-md")
+        original = (
+            "---\n"
+            "name: has-md\n"
+            "description: Author-written skill with a real description here.\n"
+            "compatibility: protocol=skill\n"
+            "---\n\n# has-md\n\nReal body.\n"
+        )
+        skill_md_path = skill_dir / "SKILL.md"
+        skill_md_path.write_text(original, encoding="utf-8")
+        on_disk = skill_md_path.read_bytes()  # source of truth (OS newline policy)
+
+        out = pack(skill_dir, tmp_path / "out.kali-agent")
+        with zipfile.ZipFile(out) as zf:
+            assert zf.read("SKILL.md") == on_disk
+
+    def test_voice_skill_zip_unpacks_and_is_llm_callable(self, tmp_path: Path) -> None:
+        """The Phase B keystone (mirrors the Phase A .tar.gz round-trip): a
+        voice-built skill packs into a .kali-agent zip, unpacks with the
+        synthesized SKILL.md + carried skill.yaml, and once registered its tool
+        is offered to the LLM."""
+        from kernel.plugin_registry import PluginRegistry
+
+        skill_dir = _make_voice_skill(tmp_path / "src")
+        pkg = pack(skill_dir, tmp_path / "out.kali-agent")
+
+        dest = tmp_path / "installed" / "water-tracker"
+        unpack(pkg, dest)
+        assert (dest / "SKILL.md").is_file()    # synthesized
+        assert (dest / "skill.yaml").is_file()  # carried
+        assert (dest / "manifest.yaml").is_file()
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        reg = PluginRegistry(agents)
+        reg.register_dir(dest)
+        tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+        assert "water-tracker__log" in tool_names
+
+    def test_voice_skill_install_package_registers_callable(
+        self, tmp_path: Path
+    ) -> None:
+        """install_package on a voice-skill .kali-agent zip unpacks AND registers
+        it into the live registry so it is immediately LLM-callable (the §4
+        reconciliation), without needing a SkillExecutor."""
+        import asyncio
+
+        from kernel.catalog.installer import install_package
+        from kernel.plugin_registry import PluginRegistry
+
+        skill_dir = _make_voice_skill(tmp_path / "src")
+        pkg = pack(skill_dir, tmp_path / "out.kali-agent")
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        reg = PluginRegistry(agents)
+
+        result = asyncio.run(
+            install_package(pkg, agents_dir=agents, plugin_registry=reg)
+        )
+        assert result["status"] == "installed", result
+        assert result["name"] == "water-tracker"
+
+        tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+        assert "water-tracker__log" in tool_names
+
+    def test_voice_skill_install_zip_slip_still_blocked(self, tmp_path: Path) -> None:
+        """Wiring synthesis + registration must NOT weaken zip-slip protection —
+        a malicious member path is still rejected on install."""
+        import asyncio
+
+        from kernel.catalog.installer import install_package
+
+        malicious = tmp_path / "evil.kali-agent"
+        with zipfile.ZipFile(malicious, "w") as zf:
+            zf.writestr("checksums.json", json.dumps({}))
+            zf.writestr("manifest.yaml", yaml.dump({"name": "evil", "version": "1.0.0"}))
+            zf.writestr("../../etc/passwd", "hacked")
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        result = asyncio.run(install_package(malicious, agents_dir=agents))
+        assert result["status"] == "error"
+        assert "slip" in result["message"].lower()
+        assert not (tmp_path / "etc").exists()

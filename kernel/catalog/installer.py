@@ -85,14 +85,27 @@ async def install_package(
             shutil.rmtree(agent_dir)
             return {"status": "unsafe", "name": name, "issues": safety.issues}
 
-    # Deploy skill
+    # Deploy skill (voice-built or SKILL.md): a skill.yaml-backed skill becomes
+    # LLM-callable only once it is registered into the live PluginRegistry — the
+    # §4 reconciliation (register_dir → _is_callable sees skill.yaml). Mirrors the
+    # Phase A bundle path so a .kali-agent voice skill round-trips the same way.
     skill_yaml = agent_dir / "skill.yaml"
-    if skill_yaml.exists() and skill_executor:
-        try:
-            skill_executor.load_skill(agent_dir)
-            return {"status": "installed", "name": name, "type": "skill"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+    if skill_yaml.exists():
+        if skill_executor is not None:
+            try:
+                skill_executor.load_skill(agent_dir)
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
+        if plugin_registry is not None:
+            try:
+                if plugin_registry.register_dir(agent_dir) is None:
+                    return {
+                        "status": "error",
+                        "message": f"Skill '{name}' is not a valid skill/agent directory",
+                    }
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
+        return {"status": "installed", "name": name, "type": "skill"}
 
     # Deploy agent
     if plugin_registry and agent_runtime:

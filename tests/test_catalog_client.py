@@ -85,8 +85,10 @@ def _make_supabase_mock(
         client_mock.table.return_value = chain
 
     # Storage chain: client.storage.from_(bucket).upload(path, data, opts)
+    #            and: client.storage.from_(bucket).download(path) -> bytes
     storage_bucket = MagicMock()
     storage_bucket.upload.return_value = MagicMock()
+    storage_bucket.download.return_value = b""
     client_mock.storage.from_.return_value = storage_bucket
 
     return client_mock
@@ -692,3 +694,159 @@ class TestIdentityWiring:
         monkeypatch.delenv("SUPABASE_KEY", raising=False)
         result = await CatalogClient().record_install(slug="x", device_id="d")
         assert result == {"status": "unconfigured"}
+
+
+# ===========================================================================
+# Phase B catalog format (WS-3 Task 3.6) — publish packs the skill DIR into a
+# .kali-agent zip and uploads THAT to Storage; install downloads the zip and
+# unpacks→installs it. The .kali-agent zip is the canonical cloud-catalog
+# format; the Phase A .tar.gz P2P route is untouched.
+# ===========================================================================
+
+def _make_voice_skill_dir(base, name: str = "water-tracker"):
+    """A voice-built skill dir: manifest.yaml + skill.yaml, NO SKILL.md."""
+    import yaml
+
+    skill_dir = base / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "manifest.yaml").write_text(
+        yaml.dump(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "description": "Track water intake daily",
+                "protocol": "skill",
+                "tools": [
+                    {"name": "log", "description": "Log a data point", "parameters": {}}
+                ],
+                "capabilities": [f"{name}.log"],
+                "permissions": [],
+            }
+        )
+    )
+    (skill_dir / "skill.yaml").write_text(yaml.dump({"template": "tracker", "config": {}}))
+    return skill_dir
+
+
+class TestPublishPacksKaliAgentZip:
+    async def test_publish_with_skill_dir_packs_and_uploads_zip(self, tmp_path) -> None:
+        """publish_skill(skill_dir=...) packs the dir into a .kali-agent zip and
+        uploads the zip bytes — a voice skill gains a synthesized SKILL.md inside."""
+        import zipfile
+
+        skill_dir = _make_voice_skill_dir(tmp_path / "src")
+        inserted = _approved(slug="water-tracker", name="Water Tracker", status="pending")
+        mock = _make_supabase_mock([inserted])
+        client = _configured_client(mock)
+
+        result = await client.publish_skill(
+            slug="water-tracker",
+            name="Water Tracker",
+            creator_id="22222222-2222-2222-2222-222222222222",
+            skill_dir=skill_dir,
+        )
+
+        bucket = mock.storage.from_.return_value
+        assert bucket.upload.called
+        up_args, _ = bucket.upload.call_args
+        # The uploaded payload is a real .kali-agent zip with a synthesized SKILL.md.
+        uploaded_bytes = next(a for a in up_args if isinstance(a, (bytes, bytearray)))
+        import io
+
+        with zipfile.ZipFile(io.BytesIO(uploaded_bytes)) as zf:
+            names = set(zf.namelist())
+        assert "SKILL.md" in names
+        assert "skill.yaml" in names
+        assert "manifest.yaml" in names
+        assert "checksums.json" in names
+
+        insert_payload = mock.table.return_value.insert.call_args[0][0]
+        assert insert_payload["bundle_path"].endswith(".kali-agent")
+        assert result["slug"] == "water-tracker"
+
+    async def test_publish_skill_dir_unconfigured_when_offline(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.delenv("SUPABASE_KEY", raising=False)
+        skill_dir = _make_voice_skill_dir(tmp_path / "src")
+        client = CatalogClient()
+        client._identity = _FakeIdentity(account_id="acct")  # signed in
+
+        result = await client.publish_skill(
+            slug="water-tracker", name="W", skill_dir=skill_dir
+        )
+        assert result == {"status": "unconfigured"}
+
+    async def test_publish_bundle_bytes_path_still_supported(self) -> None:
+        """The pre-packed bundle=bytes path is preserved (back-compat)."""
+        inserted = _approved(status="pending", install_count=0)
+        mock = _make_supabase_mock([inserted])
+        client = _configured_client(mock)
+
+        result = await client.publish_skill(
+            slug="weather-bot",
+            name="Weather Bot",
+            creator_id="c",
+            bundle=b"PK\x03\x04 prepacked",
+        )
+        assert mock.storage.from_.return_value.upload.called
+        assert result["slug"] == "weather-bot"
+
+
+class TestInstallDownloadsKaliAgentZip:
+    async def test_install_skill_downloads_unpacks_and_registers(self, tmp_path) -> None:
+        """install_skill downloads the .kali-agent zip from Storage, unpacks it,
+        and installs it through the voice-skill-capable installer → LLM-callable."""
+        from kernel.catalog.package import pack
+        from kernel.plugin_registry import PluginRegistry
+
+        # Server-side: a published voice skill, packed as a .kali-agent zip.
+        skill_dir = _make_voice_skill_dir(tmp_path / "src")
+        pkg = pack(skill_dir, tmp_path / "water-tracker.kali-agent")
+        zip_bytes = pkg.read_bytes()
+
+        row = _approved(
+            slug="water-tracker",
+            name="Water Tracker",
+            bundle_path="water-tracker/water-tracker.kali-agent",
+        )
+        mock = _make_supabase_mock([row])
+        mock.storage.from_.return_value.download.return_value = zip_bytes
+        client = _configured_client(mock)
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        reg = PluginRegistry(agents)
+
+        result = await client.install_skill(
+            "water-tracker", agents_dir=agents, plugin_registry=reg
+        )
+
+        # Downloaded from the bundle_path object in Storage.
+        assert mock.storage.from_.return_value.download.called
+        dl_args, _ = mock.storage.from_.return_value.download.call_args
+        assert any("water-tracker" in str(a) for a in dl_args)
+
+        assert result["status"] == "installed", result
+        tool_names = {t["function"]["name"] for t in reg.get_all_tools()}
+        assert "water-tracker__log" in tool_names
+
+    async def test_install_skill_unconfigured_when_offline(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.delenv("SUPABASE_KEY", raising=False)
+        result = await CatalogClient().install_skill(
+            "anything", agents_dir=tmp_path / "agents"
+        )
+        assert result == {"status": "unconfigured"}
+
+    async def test_install_skill_error_is_graceful(self, tmp_path) -> None:
+        bad = MagicMock()
+        bad.table.side_effect = Exception("db down")
+        client = _configured_client(bad)
+        result = await client.install_skill(
+            "x", agents_dir=tmp_path / "agents"
+        )
+        assert result["status"] in ("unconfigured", "error")
