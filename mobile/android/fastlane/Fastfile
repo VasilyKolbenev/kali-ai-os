@@ -1,0 +1,85 @@
+# fastlane Fastfile — Android (Google Play) release scaffolding.
+#
+# SCAFFOLDING: blocked on a Google Play Console account + an upload keystore +
+# a service-account JSON with the "Release apps to testing tracks" permission.
+# Every lane is inert until those exist — secrets are read from the environment,
+# nothing is hardcoded, and no credential lives in the repo.
+#
+# Secrets / env (supplied by CI via ci/mobile-android.yml, or locally):
+#   PLAY_SERVICE_ACCOUNT_JSON   — base64 of the Play service-account JSON key.
+#   ANDROID_KEYSTORE_BASE64     — base64 of the upload keystore (.jks).
+#   KALI_UPLOAD_STORE_FILE      — path to the decoded keystore (set by :build).
+#   KALI_UPLOAD_STORE_PASSWORD  — keystore password   (read by build.gradle.kts).
+#   KALI_UPLOAD_KEY_ALIAS       — upload key alias     (read by build.gradle.kts).
+#   KALI_UPLOAD_KEY_PASSWORD    — upload key password  (read by build.gradle.kts).
+#
+# The keystore env-var names match the signingConfigs.release wiring in
+# app/build.gradle.kts (WS-4.5), so the Gradle build picks up the upload key with
+# no keystore.properties file present.
+
+default_platform(:android)
+
+# Repo root is two levels up from android/fastlane/.
+PROJECT_ROOT = File.expand_path("../../..", __dir__)
+MOBILE_ROOT  = File.expand_path("..", __dir__).freeze   # mobile/android
+FLUTTER_ROOT = File.expand_path("..", MOBILE_ROOT).freeze # mobile/
+
+# Decode a base64 secret into a gitignored file under android/ and return its
+# path. Returns nil when the secret is unset so callers can no-op cleanly.
+def decode_secret(env_name, filename)
+  data = ENV[env_name]
+  return nil if data.nil? || data.strip.empty?
+  out = File.join(MOBILE_ROOT, filename)
+  File.binwrite(out, Base64.decode64(data))
+  out
+end
+
+platform :android do
+  desc "Decode the upload keystore and assemble a signed release AAB via Flutter."
+  lane :build do
+    require "base64"
+
+    # Materialize the upload keystore from ANDROID_KEYSTORE_BASE64 if provided.
+    # *.jks is gitignored (android/.gitignore), so it never gets committed.
+    keystore = decode_secret("ANDROID_KEYSTORE_BASE64", "upload-keystore.jks")
+    if keystore
+      ENV["KALI_UPLOAD_STORE_FILE"] ||= keystore
+      UI.message("Upload keystore staged at #{keystore}")
+    else
+      UI.important("ANDROID_KEYSTORE_BASE64 unset — Gradle will fall back to debug signing.")
+    end
+
+    # Flutter owns the Android build; drive it from the flutter project root.
+    Dir.chdir(FLUTTER_ROOT) do
+      sh("flutter", "build", "appbundle", "--release")
+    end
+
+    aab = File.join(FLUTTER_ROOT, "build", "app", "outputs", "bundle", "release", "app-release.aab")
+    UI.success("Release AAB: #{aab}")
+    aab
+  end
+
+  desc "Upload the release AAB to the Play Console internal track via supply."
+  lane :deploy_play do
+    require "base64"
+
+    json_key = decode_secret("PLAY_SERVICE_ACCOUNT_JSON", "play-service-account.json")
+    UI.user_error!(
+      "PLAY_SERVICE_ACCOUNT_JSON is required to upload to Play (none provided)."
+    ) if json_key.nil?
+
+    aab = build
+
+    upload_to_play_store(
+      track: "internal",
+      aab: aab,
+      json_key: json_key,
+      release_status: "draft",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+    UI.success("Uploaded to Play internal track (draft).")
+  end
+end

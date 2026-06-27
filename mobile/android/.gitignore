@@ -13,3 +13,10 @@ key.properties
 keystore.properties
 **/*.keystore
 **/*.jks
+
+# fastlane runtime-decoded secrets + generated artifacts (never commit).
+play-service-account.json
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/
+fastlane/README.md

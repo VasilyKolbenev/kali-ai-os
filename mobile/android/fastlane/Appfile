@@ -1,0 +1,11 @@
+# fastlane Appfile — Android (Google Play).
+# https://docs.fastlane.tools/advanced/#appfile
+#
+# The package name matches the release applicationId wired in
+# app/build.gradle.kts (WS-4.5) and the iOS bundle id (ai.kali.mobile).
+#
+# The Play Console service-account credentials are NOT stored here. `supply`
+# reads them from the PLAY_SERVICE_ACCOUNT_JSON env/secret at runtime (see the
+# Fastfile), so no key path is hardcoded.
+
+package_name("ai.kali.mobile")

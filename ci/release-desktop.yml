@@ -1,0 +1,115 @@
+name: release-desktop
+
+# Windows desktop installer release pipeline (KALI Premium).
+#
+# SCAFFOLDING — staged under ci/ because the push token lacks the GitHub
+# `workflow` scope (commits touching .github/workflows/ are rejected). To
+# activate: re-home this file to .github/workflows/release-desktop.yml via the
+# GitHub web UI or a workflow-scoped push. See ci/README.md.
+#
+# It is MANUAL-ONLY (workflow_dispatch) so it never auto-runs on push: the heavy
+# backend + Tauri + InnoSetup build (~9 GB content, ~15-30 min compression) only
+# happens on an explicit dispatch. Code signing is env-gated exactly like
+# scripts/build_installer_premium.bat (WS-5.2): when the KALI_SIGN_CERT secret is
+# absent, signtool is skipped and an UNSIGNED installer is produced — the job
+# still succeeds. With no secrets configured the workflow is fully inert.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: "Attempt Authenticode signing (requires KALI_SIGN_CERT secret)"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Decode the optional code-signing certificate from the KALI_SIGN_CERT
+      # secret (base64-encoded .pfx) into a temp file and export the env vars the
+      # build script reads. When the secret is empty this is a clean no-op and the
+      # downstream build produces an unsigned installer (WS-5.2 semantics).
+      - name: Stage code-signing certificate (optional)
+        shell: pwsh
+        env:
+          KALI_SIGN_CERT_B64: ${{ secrets.KALI_SIGN_CERT }}
+          KALI_SIGN_PASS: ${{ secrets.KALI_SIGN_PASS }}
+          KALI_SIGN_TR_URL: ${{ secrets.KALI_SIGN_TR_URL }}
+          SIGN_REQUESTED: ${{ inputs.sign }}
+        run: |
+          if ($env:KALI_SIGN_CERT_B64 -and ($env:SIGN_REQUESTED -ne 'false')) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'kali-sign.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:KALI_SIGN_CERT_B64))
+            "KALI_SIGN_CERT=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            if ($env:KALI_SIGN_PASS) { "KALI_SIGN_PASS=$env:KALI_SIGN_PASS" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+            if ($env:KALI_SIGN_TR_URL) { "KALI_SIGN_TR_URL=$env:KALI_SIGN_TR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+            Write-Host "Code-signing cert staged — installer will be signed."
+          } else {
+            Write-Host "No KALI_SIGN_CERT secret (or signing disabled) — UNSIGNED build (this is OK)."
+          }
+
+      - name: Install backend dependencies (uv)
+        run: uv sync
+
+      - name: Install UI dependencies (npm)
+        working-directory: ui
+        run: npm ci
+
+      # PyInstaller onedir backend → dist_premium\kali-backend\kali-backend.exe
+      - name: Build backend (PyInstaller premium)
+        run: uv run --with pyinstaller python scripts/build_backend_premium.py
+
+      # Tauri release → src-tauri\target\release\kali-desktop.exe
+      # (build_installer_premium.bat expects this exact path).
+      - name: Build Tauri desktop shell
+        run: npm --prefix ui exec -- tauri build
+
+      # Stage artifacts + run InnoSetup + sign (env-gated, no-op without cert).
+      # Requires Inno Setup 6 on the runner.
+      - name: Install Inno Setup 6
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer (InnoSetup + signtool)
+        env:
+          KALI_SIGN_TR_URL: ${{ secrets.KALI_SIGN_TR_URL }}
+        run: scripts/build_installer_premium.bat
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kali-premium-installer
+          path: dist_premium/installer/KALI-Premium-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14

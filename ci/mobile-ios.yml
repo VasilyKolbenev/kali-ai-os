@@ -1,0 +1,82 @@
+name: mobile-ios
+
+# iOS (App Store Connect / TestFlight) release pipeline — Flutter IPA + fastlane.
+#
+# SCAFFOLDING — staged under ci/ (push token lacks the `workflow` scope). To
+# activate: re-home to .github/workflows/mobile-ios.yml. See ci/README.md.
+#
+# MANUAL-ONLY (workflow_dispatch), runs on macos-latest (iOS cannot build off a
+# Mac). BLOCKED on a paid Apple Developer account + an App Store Connect API key
+# + provisioning/signing assets — until those exist this is inert config. With
+# no secrets the build step still attempts an unsigned archive for smoke value;
+# the pilot/release lanes fail fast (clear message) instead of uploading.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "fastlane lane to run"
+        type: choice
+        required: true
+        default: build
+        options:
+          - build
+          - pilot
+          - release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    env:
+      # App Store Connect API key (base64 .p8 + ids). Consumed by the Fastfile's
+      # asc_api_key helper; the lanes no-op cleanly when these are unset.
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ITC_TEAM_ID: ${{ secrets.ITC_TEAM_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Ruby + fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+
+      - name: Install fastlane
+        run: gem install fastlane --no-document
+
+      - name: Flutter pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Run fastlane lane (${{ inputs.lane }})
+        working-directory: mobile/ios
+        run: fastlane ios ${{ inputs.lane }}
+
+      - name: Upload IPA artifact
+        if: ${{ inputs.lane == 'build' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kali-mobile-ipa
+          path: mobile/build/ios/ipa/*.ipa
+          if-no-files-found: warn
+          retention-days: 14

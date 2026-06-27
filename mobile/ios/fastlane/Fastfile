@@ -1,0 +1,95 @@
+# fastlane Fastfile — iOS (App Store Connect / TestFlight) release scaffolding.
+#
+# SCAFFOLDING: blocked on a Mac build host + a paid Apple Developer Program
+# account + an App Store Connect API key. iOS cannot build off a Mac, so these
+# lanes activate only on the macos-latest runner (ci/mobile-ios.yml) once those
+# accounts exist. Credentials are read from the environment — nothing hardcoded.
+#
+# Secrets / env (supplied by CI via ci/mobile-ios.yml, or locally):
+#   APP_STORE_CONNECT_API_KEY_ID        — App Store Connect API key id.
+#   APP_STORE_CONNECT_API_ISSUER_ID     — issuer id for that key.
+#   APP_STORE_CONNECT_API_KEY           — base64 of the .p8 private key.
+#   MATCH_PASSWORD / signing            — provisioning handled out of band (a
+#                                         signing-setup step is left as a TODO
+#                                         for when the Apple account exists).
+
+default_platform(:ios)
+
+BUNDLE_ID = "ai.kali.mobile".freeze
+
+# Repo / project roots relative to ios/fastlane/.
+MOBILE_IOS_ROOT = File.expand_path("..", __dir__).freeze   # mobile/ios
+FLUTTER_ROOT    = File.expand_path("../..", __dir__).freeze # mobile/
+
+# Build the App Store Connect API token from the *_API_KEY_ID / _ISSUER_ID /
+# _API_KEY (base64 .p8) secrets. Returns nil when unset so lanes no-op cleanly.
+def asc_api_key
+  key_id    = ENV["APP_STORE_CONNECT_API_KEY_ID"]
+  issuer_id = ENV["APP_STORE_CONNECT_API_ISSUER_ID"]
+  key_b64   = ENV["APP_STORE_CONNECT_API_KEY"]
+  return nil if [key_id, issuer_id, key_b64].any? { |v| v.nil? || v.strip.empty? }
+
+  app_store_connect_api_key(
+    key_id: key_id,
+    issuer_id: issuer_id,
+    key_content: key_b64,
+    is_key_content_base64: true,
+    in_house: false,
+  )
+end
+
+platform :ios do
+  desc "Build a signed release IPA via Flutter (requires a Mac + signing assets)."
+  lane :build do
+    Dir.chdir(FLUTTER_ROOT) do
+      # `flutter build ipa` drives xcodebuild + archive/export under the hood.
+      sh("flutter", "build", "ipa", "--release")
+    end
+
+    ipa = Dir.glob(File.join(FLUTTER_ROOT, "build", "ios", "ipa", "*.ipa")).first
+    UI.user_error!("No IPA produced under build/ios/ipa/") if ipa.nil?
+    UI.success("Release IPA: #{ipa}")
+    ipa
+  end
+
+  desc "Upload the release IPA to TestFlight (pilot)."
+  lane :pilot do
+    api_key = asc_api_key
+    UI.user_error!(
+      "App Store Connect API key secrets are required for TestFlight upload."
+    ) if api_key.nil?
+
+    ipa = build
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      ipa: ipa,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+    )
+    UI.success("Uploaded to TestFlight.")
+  end
+
+  desc "Submit the release IPA to App Store review via deliver."
+  lane :release do
+    api_key = asc_api_key
+    UI.user_error!(
+      "App Store Connect API key secrets are required for App Store delivery."
+    ) if api_key.nil?
+
+    ipa = build
+
+    upload_to_app_store(
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      ipa: ipa,
+      submit_for_review: false,
+      precheck_include_in_app_purchases: false,
+      skip_metadata: true,
+      skip_screenshots: true,
+      force: true,
+    )
+    UI.success("Uploaded to App Store Connect (not submitted for review).")
+  end
+end

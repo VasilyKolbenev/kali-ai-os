@@ -1,0 +1,96 @@
+name: mobile-android
+
+# Android (Google Play) release pipeline — Flutter AAB + fastlane supply.
+#
+# SCAFFOLDING — staged under ci/ (push token lacks the `workflow` scope). To
+# activate: re-home to .github/workflows/mobile-android.yml. See ci/README.md.
+#
+# MANUAL-ONLY (workflow_dispatch). Two inputs pick the work: `build` just
+# assembles the release AAB (dry-run — no upload, no secrets required to reach
+# Gradle); `deploy_play` uploads to the Play internal track (needs the Play
+# service-account + keystore secrets). Without secrets the build still produces
+# an AAB (debug-signed via build.gradle.kts fallback); the deploy lane fails
+# fast with a clear message rather than uploading garbage.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "fastlane lane to run"
+        type: choice
+        required: true
+        default: build
+        options:
+          - build
+          - deploy_play
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # Signing keystore (decoded by the fastlane :build lane from the base64
+      # secret). Names match signingConfigs.release in app/build.gradle.kts.
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KALI_UPLOAD_STORE_PASSWORD: ${{ secrets.KALI_UPLOAD_STORE_PASSWORD }}
+      KALI_UPLOAD_KEY_ALIAS: ${{ secrets.KALI_UPLOAD_KEY_ALIAS }}
+      KALI_UPLOAD_KEY_PASSWORD: ${{ secrets.KALI_UPLOAD_KEY_PASSWORD }}
+      # Play Console upload credentials (base64 service-account JSON).
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Ruby + fastlane (bundler cache)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+
+      - name: Install fastlane
+        run: gem install fastlane --no-document
+
+      - name: Flutter pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      # `flutter build appbundle` is also driven inside the fastlane :build lane,
+      # but running it here first surfaces Flutter/Gradle errors with cleaner logs
+      # and warms the build cache for the lane.
+      - name: Build release AAB (Flutter)
+        working-directory: mobile
+        run: flutter build appbundle --release
+
+      - name: Run fastlane lane (${{ inputs.lane }})
+        working-directory: mobile/android
+        run: fastlane android ${{ inputs.lane }}
+
+      - name: Upload AAB artifact
+        if: ${{ inputs.lane == 'build' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kali-mobile-aab
+          path: mobile/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 14
