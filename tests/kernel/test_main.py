@@ -171,6 +171,79 @@ class TestConfigPatchEndpoint:
         assert received[0].payload["sections"] == ["voice"]
 
 
+class TestLlmProviderSwitch:
+    """WS-2 #2.5 — the Settings provider/model picker must actually switch the
+    LLM router. The router reads its provider/model from ``config.llm`` (the
+    ConfigManager source of truth), NOT from ``os.environ``. So the picker has
+    to write through ``PATCH /config`` — exactly like ``VoiceSettings`` —
+    otherwise it shows "saved" while the router keeps the old brain.
+
+    The chat path constructs ``LLMRouter(app.state.config_manager.config.llm)``
+    fresh per request, so a config write takes effect on the next message.
+    """
+
+    async def test_post_settings_does_not_switch_router_provider(
+        self, app, client: AsyncClient
+    ) -> None:
+        """Regression pin: the OLD path (``POST /settings``) writes env only and
+        does NOT change the router's source of truth — this is the bug."""
+        cm = app.state.config_manager
+        before = cm.config.llm.cloud_provider
+
+        resp = await client.post(
+            "/settings",
+            json={"provider": "deepseek", "deepseek_model": "deepseek-chat"},
+        )
+        assert resp.status_code == 200
+
+        # The router reads config.llm, which POST /settings never touched.
+        assert cm.config.llm.cloud_provider == before
+        assert cm.config.llm.cloud_provider != "deepseek"
+
+    async def test_config_patch_switches_router_source_of_truth(
+        self, app, client: AsyncClient
+    ) -> None:
+        """The FIX: routing provider+model through ``PATCH /config`` changes the
+        value a freshly-built router (the ``/chat`` path) will use."""
+        from kernel.llm_router import LLMRouter
+
+        cm = app.state.config_manager
+
+        resp = await client.patch(
+            "/config",
+            json={"llm": {"cloud_provider": "openai", "cloud_model": "gpt-4.1"}},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Source of truth changed...
+        assert cm.config.llm.cloud_provider == "openai"
+        assert cm.config.llm.cloud_model == "gpt-4.1"
+
+        # ...so the router the chat handler builds now targets the new provider.
+        router = LLMRouter(cm.config.llm)
+        assert router.config.cloud_provider == "openai"
+        assert router.config.cloud_model == "gpt-4.1"
+
+    async def test_config_patch_llm_leaves_other_sections_intact(
+        self, client: AsyncClient
+    ) -> None:
+        """An ``llm`` patch is surgical — it must not disturb voice/server."""
+        before = (await client.get("/config")).json()
+
+        resp = await client.patch(
+            "/config",
+            json={"llm": {"cloud_provider": "google", "cloud_model": "gemini-2.5-flash"}},
+        )
+        assert resp.status_code == 200
+
+        after = (await client.get("/config")).json()
+        assert after["llm"]["cloud_provider"] == "google"
+        assert after["voice"] == before["voice"]
+        assert after["server"] == before["server"]
+        # local-side LLM fields are preserved by the merge patch
+        assert after["llm"]["local_provider"] == before["llm"]["local_provider"]
+
+
 class TestNotificationsEndpoint:
     async def test_send_notification(self, client: AsyncClient) -> None:
         resp = await client.post(

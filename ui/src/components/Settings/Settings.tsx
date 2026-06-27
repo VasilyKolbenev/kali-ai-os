@@ -19,6 +19,21 @@ const LANGUAGES = [
   { id: "zh", label: "中文" },
 ];
 
+/**
+ * The model the active provider should run. The picker keeps a model per
+ * provider (openai_model, anthropic_model, ...); the router needs the single
+ * active one. Falls back to the OpenAI model so the patch is never empty.
+ */
+function activeCloudModel(llm: LlmSettingsValue): string {
+  const byProvider: Record<string, string> = {
+    openai: llm.openai_model,
+    anthropic: llm.anthropic_model,
+    google: llm.google_model,
+    deepseek: llm.deepseek_model,
+  };
+  return byProvider[llm.provider] ?? llm.openai_model;
+}
+
 function emptySettings(): SettingsData {
   return {
     llm: {
@@ -61,6 +76,17 @@ export function Settings() {
     setSaving(true);
     setSaved(false);
     try {
+      // Provider + model are the router's source of truth and live in the YAML
+      // config (config.llm), which the LLM router reads — NOT env. Route them
+      // through the crash-safe PATCH /config path (same as VoiceSettings) so the
+      // switch actually takes effect; otherwise "Сохранено" is a false success.
+      await api.updateConfig({
+        llm: {
+          cloud_provider: settings.llm.provider,
+          cloud_model: activeCloudModel(settings.llm),
+        },
+      });
+      // API keys + language stay in env/.env (the SDKs read keys from there).
       await api.updateSettings({
         provider: settings.llm.provider,
         openai_key: settings.llm.openai_key,
