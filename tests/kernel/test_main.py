@@ -525,6 +525,22 @@ class _StubSocialCatalog:
     async def get_social(self, slug: str):  # type: ignore[no-untyped-def]
         return self._record("get_social", slug)
 
+    # --- moderation lifecycle (WS-3 Task 3.7) ---
+    async def report(self, target_type, target_id, reason=None):  # type: ignore[no-untyped-def]
+        return self._record("report", target_type, target_id, reason=reason)
+
+    async def set_skill_status(self, slug, status):  # type: ignore[no-untyped-def]
+        return self._record("set_skill_status", slug, status)
+
+    async def set_comment_status(self, comment_id, status):  # type: ignore[no-untyped-def]
+        return self._record("set_comment_status", comment_id, status)
+
+    async def list_pending(self):  # type: ignore[no-untyped-def]
+        return self._record("list_pending")
+
+    async def list_flags(self):  # type: ignore[no-untyped-def]
+        return self._record("list_flags")
+
 
 class TestCatalogSocialRoutes:
     """WS-3 Task 3.4 — social routes pass the CatalogClient result through verbatim."""
@@ -637,3 +653,132 @@ class TestCatalogSocialRoutes:
         assert body["like_count"] == 3
         assert body["avg_rating"] == 3.0
         assert stub.calls[0] == ("get_social", ("weather-bot",), {})
+
+
+class TestCatalogModerationRoutes:
+    """WS-3 Task 3.7 — report is PUBLIC; transitions/queue are MODERATOR-ONLY (403)."""
+
+    async def test_report_route_is_public(self, app, client: AsyncClient) -> None:
+        # No moderator token needed — the report button is open to everyone.
+        stub = _StubSocialCatalog({"report": {"status": "ok"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/report", json={"reason": "spam"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert stub.calls[0] == (
+            "report",
+            ("skill", "weather-bot"),
+            {"reason": "spam"},
+        )
+
+    async def test_set_skill_status_forbidden_without_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("KALI_MODERATOR_TOKEN", raising=False)
+        stub = _StubSocialCatalog({"set_skill_status": {"status": "ok"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/status", json={"status": "approved"}
+        )
+
+        assert resp.status_code == 403
+        # The privileged transition must NOT have been called.
+        assert stub.calls == []
+
+    async def test_set_skill_status_allowed_with_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KALI_MODERATOR_TOKEN", "secret-mod")
+        stub = _StubSocialCatalog(
+            {"set_skill_status": {"status": "ok", "skill_status": "approved"}}
+        )
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/status",
+            json={"status": "approved"},
+            headers={"X-Moderator-Token": "secret-mod"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["skill_status"] == "approved"
+        assert stub.calls[0] == ("set_skill_status", ("weather-bot", "approved"), {})
+
+    async def test_set_skill_status_wrong_token_forbidden(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KALI_MODERATOR_TOKEN", "secret-mod")
+        stub = _StubSocialCatalog({"set_skill_status": {"status": "ok"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/weather-bot/status",
+            json={"status": "approved"},
+            headers={"X-Moderator-Token": "WRONG"},
+        )
+
+        assert resp.status_code == 403
+        assert stub.calls == []
+
+    async def test_set_comment_status_requires_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("KALI_MODERATOR_TOKEN", raising=False)
+        stub = _StubSocialCatalog({"set_comment_status": {"status": "ok"}})
+        app.state.catalog_client = stub
+
+        resp = await client.post(
+            "/catalog/comments/c1/status", json={"status": "removed"}
+        )
+
+        assert resp.status_code == 403
+        assert stub.calls == []
+
+    async def test_list_pending_forbidden_without_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("KALI_MODERATOR_TOKEN", raising=False)
+        stub = _StubSocialCatalog({"list_pending": [{"slug": "a"}]})
+        app.state.catalog_client = stub
+
+        resp = await client.get("/catalog/moderation/pending")
+
+        assert resp.status_code == 403
+        assert stub.calls == []
+
+    async def test_list_pending_allowed_with_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KALI_MODERATOR_TOKEN", "secret-mod")
+        stub = _StubSocialCatalog({"list_pending": [{"slug": "a"}, {"slug": "b"}]})
+        app.state.catalog_client = stub
+
+        resp = await client.get(
+            "/catalog/moderation/pending",
+            headers={"X-Moderator-Token": "secret-mod"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["pending"] == [{"slug": "a"}, {"slug": "b"}]
+        assert stub.calls[0] == ("list_pending", (), {})
+
+    async def test_list_flags_allowed_with_token(
+        self, app, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KALI_MODERATOR_TOKEN", "secret-mod")
+        stub = _StubSocialCatalog({"list_flags": [{"id": "f1"}]})
+        app.state.catalog_client = stub
+
+        resp = await client.get(
+            "/catalog/moderation/flags",
+            headers={"X-Moderator-Token": "secret-mod"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["flags"] == [{"id": "f1"}]
+        assert stub.calls[0] == ("list_flags", (), {})

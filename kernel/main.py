@@ -1977,6 +1977,100 @@ def create_app(
         """Aggregate a skill's social signals (likes + ratings + viewer state)."""
         return await request.app.state.catalog_client.get_social(slug)
 
+    # --- Community moderation lifecycle (WS-3 Task 3.7, §5C) ---
+    # The report route is PUBLIC (the report button — anon or signed-in). The
+    # status-transition + queue routes are MODERATION-ONLY: gated behind
+    # `_require_moderator`, which checks an `X-Moderator-Token` header against the
+    # KALI_MODERATOR_TOKEN env/config flag and returns 403 otherwise. This is the
+    # auth SEAM only — the real moderation authority is a human gate (Vasily
+    # reviews at MVP), and the privileged CatalogClient transitions run with the
+    # Supabase service_role key in production (never the public anon client).
+
+    def _require_moderator(request: Request):
+        """Return a 403 JSONResponse when the caller is not an authorized moderator.
+
+        Returns None when authorized (the route proceeds). The check is a simple
+        shared-secret seam: the `X-Moderator-Token` header must equal the
+        `KALI_MODERATOR_TOKEN` env value. When no token is configured the endpoint
+        is CLOSED (always 403) — moderation never defaults to open. This is the
+        auth seam only; the real authority is a human gate (Vasily at MVP).
+        """
+        from fastapi.responses import JSONResponse
+
+        expected = os.environ.get("KALI_MODERATOR_TOKEN")
+        provided = request.headers.get("x-moderator-token")
+        if not expected or not provided or provided != expected:
+            return JSONResponse(
+                status_code=403,
+                content={"status": "forbidden", "reason": "moderator_only"},
+            )
+        return None
+
+    @app.post("/catalog/{slug}/report")
+    async def catalog_report(slug: str, request: Request) -> dict[str, Any]:
+        """File a moderation flag against a skill (PUBLIC report button).
+
+        Body: ``{"reason": "<optional free text>"}``. Reports a skill by slug —
+        the client resolves the slug to the skill id; for now the route passes the
+        slug through as the target id so the queue carries an actionable handle.
+        """
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 — tolerate an empty/invalid body
+            body = {}
+        return await request.app.state.catalog_client.report(
+            "skill", slug, reason=(body or {}).get("reason")
+        )
+
+    @app.post("/catalog/{slug}/status")
+    async def catalog_set_skill_status(slug: str, request: Request):
+        """Transition a skill's moderation status (MODERATOR-ONLY).
+
+        Body: ``{"status": "approved"|"flagged"|"removed"|"pending"}``.
+        """
+        denied = _require_moderator(request)
+        if denied is not None:
+            return denied
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return await request.app.state.catalog_client.set_skill_status(
+            slug, (body or {}).get("status", "")
+        )
+
+    @app.post("/catalog/comments/{comment_id}/status")
+    async def catalog_set_comment_status(comment_id: str, request: Request):
+        """Transition a comment's moderation status (MODERATOR-ONLY)."""
+        denied = _require_moderator(request)
+        if denied is not None:
+            return denied
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return await request.app.state.catalog_client.set_comment_status(
+            comment_id, (body or {}).get("status", "")
+        )
+
+    @app.get("/catalog/moderation/pending")
+    async def catalog_list_pending(request: Request):
+        """List skills awaiting manual review (MODERATOR-ONLY)."""
+        denied = _require_moderator(request)
+        if denied is not None:
+            return denied
+        rows = await request.app.state.catalog_client.list_pending()
+        return {"pending": rows}
+
+    @app.get("/catalog/moderation/flags")
+    async def catalog_list_flags(request: Request):
+        """List the moderation report queue (MODERATOR-ONLY)."""
+        denied = _require_moderator(request)
+        if denied is not None:
+            return denied
+        rows = await request.app.state.catalog_client.list_flags()
+        return {"flags": rows}
+
     # --- Agent Skills (SKILL.md spec) endpoints ---
 
     def _get_skills_catalog():

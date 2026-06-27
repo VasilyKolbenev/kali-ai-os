@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kernel.catalog.identity import CommunityIdentity
+from kernel.catalog.moderation import ModerationMixin, auto_approve_gate
 from kernel.catalog.social import SocialMixin
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ def _map_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
-class CatalogClient(SocialMixin):
+class CatalogClient(SocialMixin, ModerationMixin):
     """Supabase-backed §4 marketplace catalog client.
 
     The Supabase client (supabase-py) is constructed lazily and degrades gracefully:
@@ -130,9 +131,11 @@ class CatalogClient(SocialMixin):
     configured or the library is unavailable — never raising.
 
     The community social surface (like / rate / comment / get_social, WS-3 Task
-    3.4) is provided by :class:`kernel.catalog.social.SocialMixin` — split into its
-    own module to keep this file under the size guard while staying callable on the
-    one ``catalog_client`` instance the routes hold.
+    3.4) is provided by :class:`kernel.catalog.social.SocialMixin`, and the
+    moderation lifecycle (report / status transitions / queue reads, WS-3 Task
+    3.7) by :class:`kernel.catalog.moderation.ModerationMixin` — both split into
+    their own modules to keep this file under the size guard while staying
+    callable on the one ``catalog_client`` instance the routes hold.
     """
 
     def __init__(self) -> None:
@@ -328,10 +331,13 @@ class CatalogClient(SocialMixin):
         """Publish a skill: upload the bundle to Storage + insert a `skills` row.
 
         The bundle is uploaded to the ``skill-bundles`` Storage bucket and the row's
-        ``bundle_path`` points at it. The row defaults to ``status='pending'``; it is
-        auto-``approved`` only when ``safety_gate`` is supplied and returns True. The
-        gate is a SEAM — the full moderation lifecycle (AST scan + heuristics +
-        prose review) is task 3.7; here it is just an injectable predicate.
+        ``bundle_path`` points at it. The row is auto-``approved`` only when the
+        ``safety_gate`` predicate returns True, else it stays ``status='pending'``
+        for manual review. When no gate is injected the default is the combined
+        §5C :func:`kernel.catalog.moderation.auto_approve_gate` — AST scan of any
+        bundled ``scripts/*.py`` AND a prose content gate over the SKILL.md body +
+        description (so a script-less malicious Markdown skill is NOT auto-approved
+        on the AST pass alone). An explicit ``safety_gate`` overrides the default.
 
         Identity wiring (task 3.3): ``creator_id`` defaults to the signed-in KALI
         account's ``auth.uid()`` (via the identity layer). Publish is account-gated
@@ -350,7 +356,9 @@ class CatalogClient(SocialMixin):
             version: Semantic version (defaults ``1.0.0``).
             template: Optional builder template id.
             skill_format: On-disk descriptor format (``SKILL.md``/``skill.yaml``).
-            safety_gate: Optional predicate; True → auto-approve, else pending.
+            safety_gate: Optional predicate ``(slug, bundle, description) -> bool``;
+                True → auto-approve, else pending. Defaults to the combined §5C
+                ``auto_approve_gate`` (AST + prose) when omitted.
 
         Returns:
             The inserted row dict, ``{"status": "sign-in required"}`` when not
@@ -372,7 +380,10 @@ class CatalogClient(SocialMixin):
                 {"content-type": "application/zip", "upsert": "true"},
             )
 
-            approved = bool(safety_gate and safety_gate(slug=slug, bundle=bundle))
+            gate = safety_gate if safety_gate is not None else auto_approve_gate
+            approved = bool(
+                gate(slug=slug, bundle=bundle, description=description)
+            )
             row = {
                 "slug": slug,
                 "name": name,
