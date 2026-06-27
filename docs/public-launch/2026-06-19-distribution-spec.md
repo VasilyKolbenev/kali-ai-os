@@ -11,6 +11,8 @@
 
 ## 0. Current state (verified against code, not aspiration)
 
+> **Update 2026-06-27 (WS-5.5 / 5.6 config cleanup):** The inert `plugins.updater` block was **deleted** from `src-tauri/tauri.conf.json` — it advertised a placeholder pubkey + the **unowned** `api.kali-os.com` host while the plugin was never wired (no `tauri-plugin-updater` in `Cargo.toml`/`lib.rs`), so shipping it was a config-only risk (domain-squat → attacker update host) with zero runtime behavior. **Re-enable path (human-gated, needs the owned domain + provisioned host):** add `tauri-plugin-updater` to `Cargo.toml` + register in `lib.rs` + `tauri signer generate` a real keypair to replace the placeholder pubkey, point endpoints at the real update host, and version the **app-shell separately from the ~1.35 GB model payload** so a routine update is MBs not ~4.9 GB (see §4 below). Separately, `bundle.targets` was changed from `["msi"]` to `[]`: the shipped Windows distributable is the **InnoSetup** `.exe` (`scripts/installer_premium.iss` via `scripts/build_installer_premium.bat`), NOT a Tauri-bundler MSI — `tauri build` is run only to produce `kali-desktop.exe`, which the `.iss` then packages, so the bundler emitting a stray MSI nobody ships was misleading. The orphaned `scripts/installer_lite.nsi` (NSIS Lite SKU, never built by any active script/Makefile/CI — only stale doc references) was **retired** for a single authoritative installer pipeline.
+
 | Dimension | Reality on disk today | Evidence |
 |---|---|---|
 | Desktop installer | InnoSetup DiskSpanning: `.exe` stub (4,135,680 B) + `-1.bin` (2,095,864,064 B) + `-2.bin` (2,100,000,000 B) + `-3.bin` (748,818,898 B) = **~4.94 GB** | `dist_premium/installer/` (ls verified); `scripts/installer_premium.iss:32-33` |
