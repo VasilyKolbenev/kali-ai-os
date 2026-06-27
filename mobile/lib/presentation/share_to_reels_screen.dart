@@ -1,5 +1,9 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../core/config.dart';
@@ -7,6 +11,7 @@ import '../core/http_client.dart';
 import '../core/l10n.dart';
 import '../core/share_config.dart';
 import '../core/theme.dart';
+import 'widgets/share_agent_card.dart';
 
 /// Share an agent to social apps via the OS native share sheet (no platform
 /// OAuth — the user posts under their own account).
@@ -97,12 +102,47 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
   Future<void> _share(BuildContext context, L10n t) async {
     if (_link == null) return;
     final box = context.findRenderObject() as RenderBox?;
+    final origin =
+        box != null ? box.localToGlobal(Offset.zero) & box.size : null;
+
+    // Upgrade the payload to a rendered agent-card PNG when we can produce one;
+    // otherwise fall back to the original text + (caption-embedded) link share.
+    final pngPath = await _renderCardPng(context, t);
+
     await SharePlus.instance.share(ShareParams(
       text: _caption(t),
       subject: t.shareAgentTitle,
-      sharePositionOrigin:
-          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+      files: pngPath != null ? [XFile(pngPath)] : null,
+      sharePositionOrigin: origin,
     ));
+  }
+
+  /// Renders the [ShareAgentCard] to a PNG and writes it to a temp file,
+  /// returning the path. Returns null on any failure so [_share] degrades to
+  /// the text + link share instead of crashing (honest fallback).
+  Future<String?> _renderCardPng(BuildContext context, L10n t) async {
+    final link = _link;
+    if (link == null) return null;
+    try {
+      final card = ShareAgentCard(
+        agentName: widget.agentName,
+        agentDescription: widget.agentDescription,
+        link: link,
+        scanLabel: t.shareScanToInstall,
+        tagline: t.reelsCaption,
+      );
+      final Uint8List? bytes =
+          await captureCardToPngBytes(context, card, pixelRatio: 3.0);
+      if (bytes == null || bytes.isEmpty) return null;
+
+      final dir = await getTemporaryDirectory();
+      final slug = ShareConfig.slugify(widget.agentName);
+      final file = File('${dir.path}/kali_agent_$slug.png');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
