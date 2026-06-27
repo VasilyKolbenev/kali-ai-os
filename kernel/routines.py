@@ -72,13 +72,19 @@ class RoutineManager:
         }
 
     async def execute(self, name: str) -> dict[str, Any]:
-        """Execute a named routine, publishing events for each step.
+        """Publish a ``routine.step`` event for each step of a named routine.
+
+        This does NOT dispatch steps to agents — there is no ``agent_runtime``
+        wiring here — so each step is reported as ``"published"`` (the event
+        was emitted), never ``"executed"``. Reporting ``"executed"`` would be a
+        fake green status for a no-op; honest status is the rule.
 
         Args:
             name: Routine identifier.
 
         Returns:
-            Dict with status, name, and results list.
+            Dict with status (``"published"`` / ``"not_found"``), name, and a
+            results list whose entries carry the honest per-step status.
         """
         steps = self._routines.get(name)
         if not steps:
@@ -91,12 +97,12 @@ class RoutineManager:
                 source="routine-manager",
                 payload={"routine": name, "step": step},
             ))
-            results.append({"step": step, "status": "executed"})
+            results.append({"step": step, "status": "published"})
 
         await self._bus.publish(Event(
             topic="routine.completed",
             source="routine-manager",
-            payload={"routine": name, "steps_executed": len(results)},
+            payload={"routine": name, "steps_published": len(results)},
         ))
 
-        return {"status": "completed", "name": name, "results": results}
+        return {"status": "published", "name": name, "results": results}

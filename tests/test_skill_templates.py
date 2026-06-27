@@ -370,6 +370,88 @@ class TestNotifierTemplate:
         result = await template.execute("broadcast", {}, config)
         assert "error" in result
 
+    # --- notify_channel honesty (WS-2) -------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_notify_honors_notify_channel_key(self, template):
+        """Wizard stores the chosen channel under ``notify_channel`` — honor it.
+
+        Previously the notifier only read ``default_channel`` so the user's
+        choice was silently ignored.
+        """
+        result = await template.execute(
+            "notify", {"message": "Hi"}, {"notify_channel": "чат"},
+        )
+        assert result["channel"] == "чат"
+        assert result["status"] == "sent"
+
+    @pytest.mark.asyncio
+    async def test_notify_channel_arg_overrides_config(self, template):
+        """An explicit ``channel`` arg beats the configured ``notify_channel``."""
+        result = await template.execute(
+            "notify", {"message": "Hi", "channel": "voice"}, {"notify_channel": "телеграм"},
+        )
+        assert result["channel"] == "voice"
+
+    @pytest.mark.asyncio
+    async def test_notify_default_channel_back_compat(self, template):
+        """Legacy ``default_channel`` still works as a fallback."""
+        result = await template.execute(
+            "notify", {"message": "Hi"}, {"default_channel": "voice"},
+        )
+        assert result["channel"] == "voice"
+
+    # --- telegram delivery honesty (WS-2) ----------------------------------
+
+    @pytest.mark.asyncio
+    async def test_telegram_unconfigured_is_not_sent(self, template, monkeypatch):
+        """Telegram channel without a token must NOT claim 'sent'."""
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        result = await template.execute(
+            "notify", {"message": "Alert"}, {"notify_channel": "телеграм"},
+        )
+        assert result["status"] != "sent"
+        assert result["status"] == "unconfigured"
+        assert "reason" in result
+        assert result["channel"] == "телеграм"
+
+    @pytest.mark.asyncio
+    async def test_telegram_unconfigured_history_not_sent(self, template, monkeypatch):
+        """The recorded history entry must also reflect the honest status."""
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        await template.execute("notify", {"message": "Alert"}, {"notify_channel": "telegram"})
+        hist = await template.execute("history", {}, {})
+        assert hist["history"][-1]["status"] == "unconfigured"
+
+    @pytest.mark.asyncio
+    async def test_telegram_configured_invokes_real_send(self, template, monkeypatch):
+        """When configured, the real delivery path is invoked and status is sent."""
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x:y")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+        sent = AsyncMock(return_value={"status": "sent", "message_id": 7})
+        monkeypatch.setattr(template, "_deliver_via_telegram", sent)
+        result = await template.execute(
+            "notify", {"message": "Alert"}, {"notify_channel": "телеграм"},
+        )
+        sent.assert_awaited_once_with("Alert")
+        assert result["status"] == "sent"
+        assert result["channel"] == "телеграм"
+
+    @pytest.mark.asyncio
+    async def test_telegram_send_failure_is_not_sent(self, template, monkeypatch):
+        """A real delivery failure surfaces honestly, never as 'sent'."""
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x:y")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+        failed = AsyncMock(return_value={"status": "error", "message": "network down"})
+        monkeypatch.setattr(template, "_deliver_via_telegram", failed)
+        result = await template.execute(
+            "notify", {"message": "Alert"}, {"notify_channel": "telegram"},
+        )
+        assert result["status"] != "sent"
+        assert result["status"] == "error"
+
 
 # ---------------------------------------------------------------------------
 # LoggerTemplate

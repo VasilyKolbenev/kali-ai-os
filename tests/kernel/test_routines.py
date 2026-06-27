@@ -41,8 +41,23 @@ class TestRoutineManager:
 
         bus.subscribe("routine.*", handler)
         result = await manager.execute("test")
-        assert result["status"] == "completed"
+        # Honest status: events are PUBLISHED, but no agent dispatch executes them.
+        assert result["status"] == "published"
         assert len(received) >= 2  # steps + completed
+
+    async def test_execute_does_not_fake_executed(
+        self, manager: RoutineManager, bus: EventBus,
+    ) -> None:
+        """RoutineManager must not report a green 'executed' for a no-op.
+
+        It publishes ``routine.step`` events but dispatches nothing, so claiming
+        each step was 'executed' is dishonest. Steps are reported as 'published'.
+        """
+        manager.create("test", [{"action": "a"}, {"action": "b"}])
+        result = await manager.execute("test")
+        statuses = [r["status"] for r in result["results"]]
+        assert "executed" not in statuses
+        assert all(s == "published" for s in statuses)
 
     async def test_execute_missing_routine(self, manager: RoutineManager) -> None:
         result = await manager.execute("nonexistent")
