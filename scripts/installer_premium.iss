@@ -24,16 +24,14 @@ UninstallDisplayName={#AppName} {#AppVersion}
 OutputDir=..\dist_premium\installer
 OutputBaseFilename=KALI-Premium-Setup-{#AppVersion}
 Compression=lzma2/ultra64
-; SolidCompression=no — required for DiskSpanning (solid stream can't be split)
-SolidCompression=no
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
 
-; Payload > 4.2 GB limit for single setup.exe — split into slices.
-; Output: KALI-Premium-Setup-0.2.0-beta.exe + -2.bin + -3.bin (all in same folder).
-; User just runs the .exe, it pulls the .bin files from alongside.
-DiskSpanning=yes
-DiskSliceSize=2100000000
+; Single-file output. The legacy DiskSpanning split (.exe + .bin slices) was a
+; workaround for the retired 32-bit 7z SFX 4 GB limit; Inno Setup's 64-bit
+; compiler has no such limit, so we ship one self-contained .exe (no .bin
+; slices for a non-tech user to lose).
+DiskSpanning=no
 
 ; x64 only — we ship CUDA torch which needs 64-bit
 ArchitecturesAllowed=x64compatible

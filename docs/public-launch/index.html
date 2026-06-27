@@ -14,7 +14,7 @@
   dependencies, dark theme matching the desktop app.
 
   PLACEHOLDERS — replace before going live (no real domain/URLs chosen yet):
-    {{DESKTOP_DOWNLOAD_URL}}  — direct link to the Windows installer (.exe + 3 .bin)
+    {{DESKTOP_DOWNLOAD_URL}}  — direct link to the Windows installer (single .exe)
     {{ANDROID_APK_URL}}       — direct link to the Android .apk
     {{CONTACT_EMAIL}}         — public contact / support address
     {{REPO_URL}}              — public source/issues link (today: github.com/VasilyKolbenev/kali-ai-os)
@@ -745,7 +745,7 @@
           <dt>ОС</dt><dd>Windows 10 / 11, 64-bit</dd>
           <dt>Видеокарта</dt><dd>NVIDIA RTX 20-series или новее — для локального голоса</dd>
           <dt>Диск</dt><dd>~9 ГБ после установки, ~12 ГБ свободно на время установки</dd>
-          <dt>Загрузка</dt><dd>~5 ГБ установщик (.exe + 3 файла .bin)</dd>
+          <dt>Загрузка</dt><dd>~5 ГБ установщик — один файл .exe</dd>
           <dt>Прочее</dt><dd>WebView2 — установится автоматически при необходимости</dd>
         </dl>
         <div class="fallback">
@@ -770,9 +770,9 @@
     </div>
 
     <div class="install-note">
-      <b>Важно при установке десктопа:</b> все 4 файла (<code>.exe</code> + три <code>.bin</code>) должны лежать в одной папке — установщик подтянет их сам.
+      <b>Важно при установке десктопа:</b> установщик — один файл <code>.exe</code>, просто скачайте и запустите.
       Это ранняя бета: установщик пока без цифровой подписи, поэтому Windows может показать предупреждение SmartScreen — это ожидаемо для beta-сборки.
-      <span class="en">Desktop install: keep all 4 files in one folder. This beta installer is not yet code-signed, so Windows SmartScreen may warn — expected for a beta build.</span>
+      <span class="en">Desktop install: a single <code>.exe</code> — just download and run it. This beta installer is not yet code-signed, so Windows SmartScreen may warn — expected for a beta build.</span>
     </div>
   </div>
 </section>

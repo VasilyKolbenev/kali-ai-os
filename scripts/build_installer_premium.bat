@@ -1,10 +1,25 @@
 @echo off
 REM Build Premium installer via InnoSetup (replaces 7z SFX — no 4GB limit).
-REM Prereq: premium_stage\ already built (scripts\build_backend_premium.py + staging).
+REM Prereq: backend built (scripts\build_backend_premium.py) + premium_stage\
+REM pre-populated with heavy models / .hf_cache (this script re-stages the two
+REM volatile build artifacts: kali-backend\ and kali-desktop.exe).
 REM Install InnoSetup: winget install -e --id JRSoftware.InnoSetup
+REM
+REM Optional code signing (5.2): set these env vars to sign the inner exes and
+REM the final installer with a timestamped Authenticode signature. When unset
+REM the build still runs and produces an UNSIGNED installer (no-op cleanly):
+REM   KALI_SIGN_CERT    path to the .pfx code-signing certificate
+REM   KALI_SIGN_PASS    certificate password (optional if the .pfx has none)
+REM   KALI_SIGN_TR_URL  RFC-3161 timestamp URL (default below)
 
-setlocal
+setlocal enableextensions
 cd /d "%~dp0\.."
+
+REM ---- Resolve signtool.exe (optional; signing is skipped if absent) --------
+set "SIGNTOOL="
+for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
+if not defined SIGNTOOL if exist "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" set "SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
+if not defined KALI_SIGN_TR_URL set "KALI_SIGN_TR_URL=http://timestamp.digicert.com"
 
 set "ISCC="
 if exist "%LocalAppData%\Programs\Inno Setup 6\iscc.exe" set "ISCC=%LocalAppData%\Programs\Inno Setup 6\iscc.exe"
@@ -17,18 +32,61 @@ if "%ISCC%"=="" (
     exit /b 1
 )
 
-if not exist "dist_premium\premium_stage\kali-backend\kali-backend.exe" (
-    echo ERROR: premium_stage not built yet.
+if not exist "dist_premium\kali-backend\kali-backend.exe" (
+    echo ERROR: backend not built yet.
     echo Run first: uv run --with pyinstaller python scripts\build_backend_premium.py
-    echo Then stage: xcopy /E /I /Y dist_premium\kali-backend dist_premium\premium_stage\kali-backend
     exit /b 1
 )
+
+if not exist "src-tauri\target\release\kali-desktop.exe" (
+    echo ERROR: desktop release exe not built yet.
+    echo Run first: npm --prefix ui exec -- tauri build
+    exit /b 1
+)
+
+REM ---- Stage build artifacts (5.3, fail-fast) ------------------------------
+REM Re-copy the two volatile build outputs into premium_stage\ so a stale
+REM backend/desktop never ships in a (signed) installer. robocopy /E is
+REM ADDITIVE — it must NOT be /MIR, which would wipe the pre-staged .hf_cache
+REM and models\ that live alongside. robocopy exit code < 8 = success.
+echo Staging freshly-built backend into premium_stage...
+if not exist "dist_premium\premium_stage" mkdir "dist_premium\premium_stage"
+robocopy "dist_premium\kali-backend" "dist_premium\premium_stage\kali-backend" /E /NFL /NDL /NJH /NJS /NP
+if errorlevel 8 (
+    echo ERROR: staging kali-backend failed ^(robocopy exit code 8 or higher^).
+    exit /b 1
+)
+echo Staging freshly-built kali-desktop.exe into premium_stage...
+robocopy "src-tauri\target\release" "dist_premium\premium_stage" kali-desktop.exe /NFL /NDL /NJH /NJS /NP
+if errorlevel 8 (
+    echo ERROR: staging kali-desktop.exe failed ^(robocopy exit code 8 or higher^).
+    exit /b 1
+)
+
+REM ---- Drop dead weight from the stage (5.4) -------------------------------
+REM ggml-base.bin: leftover whisper.cpp model from the abandoned Rust-native
+REM STT path, referenced nowhere in shipped code (STT uses faster-whisper /
+REM CTranslate2 model.bin). ~148 MB of dead weight — delete from staging.
+REM NOTE: the three silero_vad*.onnx files are each loaded by a different live
+REM consumer (Rust ort VAD, faster-whisper vad_filter, OpenWakeWord) and are
+REM intentionally NOT deduped here — none is an unused duplicate.
+if exist "dist_premium\premium_stage\models\ggml-base.bin" (
+    echo Removing dead ggml-base.bin from stage...
+    del /f /q "dist_premium\premium_stage\models\ggml-base.bin"
+)
+
+REM ---- Sign inner executables (5.2; no-op cleanly without a cert) ----------
+call :sign "dist_premium\premium_stage\kali-desktop.exe"
+if errorlevel 1 exit /b 1
+call :sign "dist_premium\premium_stage\kali-backend\kali-backend.exe"
+if errorlevel 1 exit /b 1
+echo.
 
 echo ============================================
 echo   Building KALI Premium installer via InnoSetup
 echo ============================================
 echo Source:  dist_premium\premium_stage\
-echo Output:  dist_premium\KALI-Premium-Setup-0.2.0-beta.exe
+echo Output:  dist_premium\installer\KALI-Premium-Setup-0.2.0-beta.exe
 echo Compression: lzma2/ultra64 (slow but small)
 echo.
 echo This takes ~15-30 minutes for ~9 GB content. Be patient.
@@ -56,18 +114,52 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+REM Sign the final installer (5.2; no-op cleanly without a cert).
+call :sign "dist_premium\installer\KALI-Premium-Setup-0.2.0-beta.exe"
+if errorlevel 1 exit /b 1
+
 echo.
 echo ============================================
 echo   Build complete!
 echo ============================================
 echo.
-echo InnoSetup produced a multi-file installer (DiskSpanning):
-echo   .exe   - installer stub with wizard UI
-echo   .bin   - content slices (must sit next to the .exe)
+echo InnoSetup produced a single self-contained installer:
+echo   .exe   - one file, wizard UI + all content (no .bin slices)
 echo.
-dir dist_premium\KALI-Premium-Setup-0.2.0-beta*
+dir dist_premium\installer\KALI-Premium-Setup-0.2.0-beta*
 echo.
-echo Share ALL of these files together. Easiest:
-echo   1) Put them into a ZIP or a single Google Drive folder
-echo   2) Friend downloads all files to the same folder
-echo   3) Friend runs only the .exe — it pulls .bin slices automatically.
+echo Share the single .exe — the friend just downloads and runs it.
+
+endlocal
+exit /b 0
+
+REM ===========================================================================
+REM :sign "<file>"  — timestamped Authenticode signing, env-gated.
+REM No-ops cleanly (returns 0) when KALI_SIGN_CERT is unset or signtool is
+REM missing, so today's unsigned build still succeeds. Signs automatically
+REM once Vasily provides the EV cert via KALI_SIGN_CERT (+ optional PASS).
+REM ===========================================================================
+:sign
+if not defined KALI_SIGN_CERT (
+    echo [sign] skipped — no cert configured ^(set KALI_SIGN_CERT to enable^)
+    goto :eof
+)
+if not defined SIGNTOOL (
+    echo [sign] skipped — signtool.exe not found ^(KALI_SIGN_CERT is set^)
+    goto :eof
+)
+if not exist %1 (
+    echo [sign] skipped — file not found: %1
+    goto :eof
+)
+echo [sign] signing %1
+if defined KALI_SIGN_PASS (
+    "%SIGNTOOL%" sign /fd SHA256 /tr "%KALI_SIGN_TR_URL%" /td SHA256 /f "%KALI_SIGN_CERT%" /p "%KALI_SIGN_PASS%" %1
+) else (
+    "%SIGNTOOL%" sign /fd SHA256 /tr "%KALI_SIGN_TR_URL%" /td SHA256 /f "%KALI_SIGN_CERT%" %1
+)
+if errorlevel 1 (
+    echo ERROR: signing failed for %1
+    exit /b 1
+)
+goto :eof
