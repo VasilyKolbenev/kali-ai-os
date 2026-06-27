@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod event_bus;
@@ -24,8 +25,39 @@ use crate::backend::skills::catalog::{CatalogClient, CatalogClientOpts};
 use crate::backend::skills::registry::{default_sources, SkillsRegistry};
 use crate::backend::voice::pipeline::{Pipeline, PipelineDeps};
 
-/// Bind address for the Phase 0 Rust backend. Python backend remains on 3005.
-pub const RUST_BIND_ADDR: &str = "0.0.0.0:3006";
+/// Default bind for the Rust backend — loopback only, matching the Python
+/// backend's `KALI_HOST` default (`127.0.0.1`). The Tauri webview talks over
+/// localhost, so this is friction-free out of the box and exposes nothing to
+/// the LAN. Python backend remains on 3005.
+pub const DEFAULT_RUST_BIND_ADDR: &str = "127.0.0.1:3006";
+
+/// LAN bind — used only when the user explicitly opts in (`KALI_LAN=1`), so a
+/// phone on the same network can reach the backend. LAN access is gated by
+/// the per-install token (see [`auth`]); loopback stays exempt.
+pub const LAN_RUST_BIND_ADDR: &str = "0.0.0.0:3006";
+
+/// Resolve the bind address (safe-by-default).
+///
+/// Precedence:
+/// 1. `KALI_RUST_BIND` — full `host:port` override (advanced / tests).
+/// 2. `KALI_LAN=1` (or `true`) — bind `0.0.0.0:3006` for LAN access.
+/// 3. Default — `127.0.0.1:3006` (loopback only).
+fn resolve_bind_addr() -> String {
+    if let Ok(explicit) = std::env::var("KALI_RUST_BIND") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let lan = std::env::var("KALI_LAN")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if lan {
+        LAN_RUST_BIND_ADDR.to_string()
+    } else {
+        DEFAULT_RUST_BIND_ADDR.to_string()
+    }
+}
 
 pub async fn serve() -> anyhow::Result<()> {
     let bus = Arc::new(event_bus::EventBus::new());
@@ -47,15 +79,33 @@ pub async fn serve() -> anyhow::Result<()> {
 
     let skills = build_skills_registry();
     let catalog = build_catalog_client();
-    let app = http::router_full(bus, pipeline, skills, catalog)
-        .layer(build_cors_layer())
-        .layer(TraceLayer::new_for_http());
 
-    let addr: SocketAddr = RUST_BIND_ADDR.parse().context("parse bind address")?;
+    // Per-install control-plane token: generated on first run, reused after.
+    // Loopback (the Tauri webview) is exempt from auth; LAN callers must
+    // present this token. Fail loudly if it can't be persisted — running the
+    // LAN surface without a token would reopen the audit BLOCKER.
+    let token = auth::load_or_create().context("load control-plane token")?;
+
+    let app = auth::with_auth(
+        http::router_full(bus, pipeline, skills, catalog),
+        token,
+    )
+    .layer(build_cors_layer())
+    .layer(TraceLayer::new_for_http());
+
+    let bind = resolve_bind_addr();
+    let addr: SocketAddr = bind.parse().with_context(|| format!("parse bind address {bind}"))?;
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {}", addr))?;
-    info!("Rust backend listening on http://{}", addr);
+    if addr.ip().is_loopback() {
+        info!("Rust backend listening on http://{} (loopback only)", addr);
+    } else {
+        warn!(
+            "Rust backend listening on http://{} (LAN exposed — token auth enforced for non-loopback)",
+            addr
+        );
+    }
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -80,14 +130,15 @@ const CORS_ALLOWED_ORIGINS: [&str; 7] = [
 
 /// Build the CORS layer for the backend.
 ///
-/// audit SEC-2: CORS locked to known origins; LAN-host token-auth on
-/// mutating routes (/chat, PATCH /config, /agents/*, /skills/install,
-/// /catalog/install) is a tracked follow-up.
+/// audit SEC-2: CORS locked to known origins. The companion LAN token-auth
+/// (loopback-exempt) is now enforced by the `auth` middleware (see
+/// [`auth::require_token`]) — non-loopback callers must present the
+/// per-install token on every route except `/health` and `/version`.
 ///
-/// The bind stays `0.0.0.0:3006` so the mobile app can reach the
-/// backend over the LAN, but cross-origin reads are now restricted to
-/// the Tauri shell and the Vite dev server instead of `permissive()`,
-/// which let any website call `/chat` and `/dashboard`.
+/// The bind is loopback-only by default (`127.0.0.1:3006`); LAN exposure is
+/// opt-in (`KALI_LAN=1`). Cross-origin reads are restricted to the Tauri
+/// shell and the Vite dev server instead of `permissive()`, which let any
+/// website call `/chat` and `/dashboard`.
 fn build_cors_layer() -> CorsLayer {
     let origins: Vec<HeaderValue> = CORS_ALLOWED_ORIGINS
         .iter()
