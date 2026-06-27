@@ -187,3 +187,166 @@ class TestPermissionEnforcer:
         enforcer.register_agent("super-agent", manifest)
         for method in METHOD_PERMISSIONS:
             assert enforcer.can_execute("super-agent", method) is True
+
+
+class TestIsDestructive:
+    """Unit cases for the destructive-action classifier (M2.1)."""
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "delete_event",
+            "delete_task",
+            "send_message",
+            "send_email",
+            "send_notification",
+            "calendar.delete_event",
+            "telegram.send",
+            "clear_canvas",
+            "remove_item",
+            "purge_logs",
+            "cancel_order",
+            "revoke_token",
+            "transfer_funds",
+            "uninstall_plugin",
+            "overwrite_file",
+            "reset_device",
+            "publish_post",
+            "share_reel",
+        ],
+    )
+    def test_destructive_actions_flagged(self, action: str) -> None:
+        from kernel.sandbox.permission_enforcer import _is_destructive
+
+        assert _is_destructive(action) is True, action
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            "get_events",
+            "get_weather",
+            "list_tasks",
+            "create_event",
+            "add_task",
+            "complete_task",
+            "log_water",
+            "read_messages",
+            "check_inbox",
+            "search_emails",
+            "get_summary",
+            "render_widget",
+            "update_profile",  # update-own is non-destructive per policy
+            "control_device",  # 'control' not a destructive token
+        ],
+    )
+    def test_non_destructive_actions_not_flagged(self, action: str) -> None:
+        from kernel.sandbox.permission_enforcer import _is_destructive
+
+        assert _is_destructive(action) is False, action
+
+    def test_empty_action_not_destructive_token(self) -> None:
+        # An empty/no-verb string carries no destructive token. (The bare
+        # "execute" guard is enforced separately in can_execute.)
+        from kernel.sandbox.permission_enforcer import _is_destructive
+
+        assert _is_destructive("") is False
+
+
+class TestDeclarationScopedExecute:
+    """M2.1: execute:{action} is declaration-scoped + deny-by-default."""
+
+    def _agent(
+        self, *, capabilities: list[str], approved: bool = True
+    ) -> AgentManifest:
+        return AgentManifest(
+            name="agent",
+            version="1.0.0",
+            description="Test",
+            capabilities=capabilities,
+            permissions=PermissionSet(grants=[], user_approved=approved),
+        )
+
+    def test_destructive_declared_allowed(self) -> None:
+        # calendar declares calendar.write → delete_event (destructive) allowed.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "calendar", self._agent(capabilities=["calendar.read", "calendar.write"])
+        )
+        assert enforcer.can_execute("calendar", "execute:delete_event") is True
+
+    def test_destructive_send_declared_allowed(self) -> None:
+        # telegram declares telegram.send → send_message (destructive) allowed.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "telegram", self._agent(capabilities=["telegram.send", "telegram.notify"])
+        )
+        assert enforcer.can_execute("telegram", "execute:send_message") is True
+
+    def test_destructive_undeclared_denied(self) -> None:
+        # THE CORE FIX: agent declares only read-class caps but tries a
+        # destructive delete → DENIED even though user_approved.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "reader", self._agent(capabilities=["calendar.read"])
+        )
+        assert enforcer.can_execute("reader", "execute:delete_event") is False
+
+    def test_destructive_no_capabilities_denied(self) -> None:
+        # Approved agent with NO declared capabilities cannot do destructive.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent("bare", self._agent(capabilities=[]))
+        assert enforcer.can_execute("bare", "execute:send_email") is False
+
+    def test_non_destructive_allowed_when_approved(self) -> None:
+        # Non-destructive action keeps current behavior: allowed when approved,
+        # regardless of declared capabilities.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent("weather", self._agent(capabilities=[]))
+        assert enforcer.can_execute("weather", "execute:get_weather") is True
+
+    def test_non_destructive_denied_when_unapproved(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "weather", self._agent(capabilities=["weather.current"], approved=False)
+        )
+        assert enforcer.can_execute("weather", "execute:get_weather") is False
+
+    def test_destructive_denied_when_unapproved(self) -> None:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "calendar",
+            self._agent(capabilities=["calendar.write"], approved=False),
+        )
+        assert enforcer.can_execute("calendar", "execute:delete_event") is False
+
+    def test_unregistered_agent_execute_denied(self) -> None:
+        enforcer = PermissionEnforcer()
+        assert enforcer.can_execute("ghost", "execute:get_weather") is False
+
+    def test_bare_execute_denied(self) -> None:
+        # Defensive: an unspecified action ("execute" with no ":action") can't
+        # be proven non-destructive → deny.
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(
+            "calendar", self._agent(capabilities=["calendar.write"])
+        )
+        assert enforcer.can_execute("calendar", "execute") is False
+
+    def test_existing_method_permission_logic_unchanged(self) -> None:
+        # network.request still routed through METHOD_PERMISSIONS, not the
+        # execute: branch.
+        enforcer = PermissionEnforcer()
+        manifest = AgentManifest(
+            name="agent",
+            version="1.0.0",
+            description="Test",
+            capabilities=["telegram.send"],
+            permissions=PermissionSet(
+                grants=[PermissionGrant(name="network")], user_approved=True
+            ),
+        )
+        enforcer.register_agent("net", manifest)
+        assert enforcer.can_execute("net", "network.request") is True
+        # Without the network grant, network.request denied even if approved.
+        enforcer.register_agent("nonet", self._agent(capabilities=["telegram.send"]))
+        assert enforcer.can_execute("nonet", "network.request") is False

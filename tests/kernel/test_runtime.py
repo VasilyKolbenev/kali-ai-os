@@ -1,13 +1,16 @@
 """Tests for agent runtime manager."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 from kernel.agent_runtime.runtime import AgentRuntime, AgentStatus
 from kernel.event_bus import EventBus
+from kernel.models import AgentManifest, PermissionSet
 from kernel.plugin_registry import PluginRegistry
+from kernel.sandbox.permission_enforcer import PermissionEnforcer
 
 
 @pytest.fixture
@@ -87,3 +90,70 @@ class TestAgentRuntime:
         status = await runtime.get_status("test-agent")
         assert status["status"] == "running"
         await runtime.unload_agent("test-agent")
+
+
+class _FakeProtocol:
+    """Minimal AgentProtocol stand-in that records executed actions."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append((action, args))
+        return {"status": "ok"}
+
+
+def _manifest(name: str, capabilities: list[str], *, approved: bool) -> AgentManifest:
+    return AgentManifest(
+        name=name,
+        version="1.0.0",
+        description="Test",
+        capabilities=capabilities,
+        permissions=PermissionSet(grants=[], user_approved=approved),
+    )
+
+
+class TestDispatchPermissionGate:
+    """M2.1: voice/chat dispatch is action-aware (passes execute:{action})."""
+
+    def _runtime_with(self, manifest: AgentManifest, proto: _FakeProtocol) -> AgentRuntime:
+        enforcer = PermissionEnforcer()
+        enforcer.register_agent(manifest.name, manifest)
+        rt = AgentRuntime(
+            registry=PluginRegistry(Path(".")),
+            agents_dir=Path("."),
+            event_bus=EventBus(),
+            enforcer=enforcer,
+        )
+        rt._agents[manifest.name] = proto  # type: ignore[assignment]
+        return rt
+
+    async def test_destructive_undeclared_raises_permission_error(self) -> None:
+        proto = _FakeProtocol()
+        # Approved, but declares only a read-class capability.
+        rt = self._runtime_with(
+            _manifest("calendar", ["calendar.read"], approved=True), proto
+        )
+        with pytest.raises(PermissionError):
+            await rt.dispatch("calendar", "delete_event", {"event_id": "1"})
+        # Protocol must NOT have been reached.
+        assert proto.calls == []
+
+    async def test_destructive_declared_dispatches(self) -> None:
+        proto = _FakeProtocol()
+        rt = self._runtime_with(
+            _manifest("calendar", ["calendar.read", "calendar.write"], approved=True),
+            proto,
+        )
+        result = await rt.dispatch("calendar", "delete_event", {"event_id": "1"})
+        assert result == {"status": "ok"}
+        assert proto.calls == [("delete_event", {"event_id": "1"})]
+
+    async def test_non_destructive_dispatches(self) -> None:
+        proto = _FakeProtocol()
+        rt = self._runtime_with(
+            _manifest("weather", [], approved=True), proto
+        )
+        result = await rt.dispatch("weather", "get_weather", {"city": "Moscow"})
+        assert result == {"status": "ok"}
+        assert proto.calls == [("get_weather", {"city": "Moscow"})]

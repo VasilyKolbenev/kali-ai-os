@@ -117,11 +117,13 @@ class AgentRuntime:
         if protocol is None:
             raise ValueError(f"Agent '{agent_name}' is not loaded")
 
-        # Check permissions before dispatch
+        # Check permissions before dispatch. Pass the concrete action so the
+        # enforcer can apply the declaration-scoped, deny-by-default gate to
+        # destructive actions (M2.1) — a bare "execute" cannot be proven safe.
         if self._enforcer:
-            if not self._enforcer.can_execute(agent_name, "execute"):
+            if not self._enforcer.can_execute(agent_name, f"execute:{action}"):
                 raise PermissionError(
-                    f"Agent '{agent_name}' not approved to execute actions"
+                    f"Agent '{agent_name}' not authorized for action '{action}'"
                 )
 
         try:
