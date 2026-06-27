@@ -43,7 +43,7 @@ continues_from: 2026-04-21-kali-0.2.0-beta-post-release.md
 - **No PR review** — solo dev, we commit directly.
 
 ### Credentials status
-- **OpenAI API key** — in `%APPDATA%\KALI\.env` as `OPENAI_API_KEY` (sk-proj-...)
+- **OpenAI API key** — in `%APPDATA%\KALI\.env` as `OPENAI_API_KEY`
 - **ElevenLabs API key** — added to `.env` this session (user provided during ElevenLabs recreate). User may rotate after testing — if rotated, re-save.
 - **New ElevenLabs voice_id** `7thl3XIdm0zimasgEzFv` saved to `%APPDATA%\KALI\elevenlabs_voice_id.txt` (replaces old `LuMAgLODaXoM7gaV55sV`).
 - Backend logs now live at `%APPDATA%\KALI\logs\kali-backend.log` (5 MB rotating × 5).

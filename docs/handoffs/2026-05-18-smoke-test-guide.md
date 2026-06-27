@@ -135,7 +135,7 @@ If 401 LLM error → API key issue. Run:
 ```powershell
 Get-Content C:\Users\User\Desktop\Jarvis\.env | Select-String "OPENAI_API_KEY"
 ```
-Should be `sk-proj-...DFMA`. If different, run:
+Should be your project's OpenAI key. If different, run:
 ```powershell
 Copy-Item "$env:APPDATA\KALI\.env" "C:\Users\User\Desktop\Jarvis\.env" -Force
 ```

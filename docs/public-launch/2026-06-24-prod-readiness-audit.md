@@ -222,5 +222,5 @@
 
 ### [security] Live API key fragment committed in a tracked doc (key-prefix + suffix disclosed)
 - `docs/handoffs/2026-05-18-smoke-test-guide.md:138`
-- **Evidence:** git grep (tracked) hit: `docs/handoffs/2026-05-18-smoke-test-guide.md:138: Should be \`sk-proj-...DFMA\`.` — the suffix `...DFMA` matches the live OPENAI_API_KEY in .env (ends `...DFMA`).
+- **Evidence:** git grep (tracked) hit: `docs/handoffs/2026-05-18-smoke-test-guide.md:138: Should be \`sk-proj-...<redacted>\`.` — the suffix `...<redacted>` matches the live OPENAI_API_KEY in .env.
 - **Fix:** The full live key lives only in the gitignored .env (good), but this doc commits its tail and confirms its identity. Rotate the OpenAI key before public launch regardless, and scrub real key fragments (and the `%APPDATA%\KALI\.env (sk-proj-...)` note in .claude/handoffs/2026-04-22-voice-fixes-and-roadmap-lock.md:46) from tracked files.

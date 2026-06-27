@@ -15,7 +15,7 @@ Closes voice-builder-pilot v2 entirely once 4/5 hit.
 1. **Smoke test #1 passing** — wake-word triggers, STT transcribes, F5-TTS responds.
 2. **Builder mode reachable** — KALI sidebar has builder icon; clicking it opens "Создать агента" screen with mic button.
 3. **OpenAI API key valid** (the builder uses LLM for intent classification + skill generation).
-4. **Dev backend running** with `KALI_WAKE_THRESHOLD=0.15` (so wake-word triggers reliably) and the latest `.env` synced (DFMA OpenAI key from APPDATA).
+4. **Dev backend running** with `KALI_WAKE_THRESHOLD=0.15` (so wake-word triggers reliably) and the latest `.env` synced (OpenAI key from APPDATA).
 
 ## The 5 test prompts (from Apr 29 handoff)
 

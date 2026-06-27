@@ -194,8 +194,8 @@ class ElevenLabsEngine:
                         "https://api.elevenlabs.io/v1/voices/add",
                         headers={"xi-api-key": self.api_key},
                         data={
-                            "name": "JARVIS_KALI",
-                            "description": "JARVIS from Iron Man — Tony Stark's AI butler",
+                            "name": "KALI_voice",
+                            "description": "KALI assistant voice",
                         },
                         files=with_files,
                         timeout=120,

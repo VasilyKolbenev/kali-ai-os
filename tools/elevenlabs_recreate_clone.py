@@ -156,9 +156,9 @@ def create_clone(api_key: str, clip_paths: list[Path]) -> str:
             "https://api.elevenlabs.io/v1/voices/add",
             headers={"xi-api-key": api_key},
             data={
-                "name": "JARVIS_KALI_v2",
+                "name": "KALI_voice_v2",
                 "description": (
-                    "JARVIS from Iron Man — Tony Stark's AI butler. "
+                    "KALI assistant voice. "
                     "Calm, British, tech-sophisticated. Clone built from 12 "
                     "native-48kHz Sound Pack clips (short confirms + medium "
                     "announcements + long tech-speak)."
