@@ -129,6 +129,7 @@ class L10n {
 
   // ── Pairing ──
   String get pairFailed => _t({'ru': 'Не удалось подключиться. Повторно отсканируй QR на десктопе', 'en': 'Could not connect. Re-scan the QR on your desktop', 'es': 'No se pudo conectar. Vuelve a escanear el QR en el escritorio', 'zh': '无法连接。请重新扫描桌面上的二维码', 'de': 'Verbindung fehlgeschlagen. Scanne den QR-Code am Desktop erneut'});
+  String get connectQrHint => _t({'ru': 'Быстрее через QR: на десктопе KALI → «Подключить телефон» → наведите камеру на QR-код', 'en': 'Faster via QR: on KALI Desktop → "Connect phone" → point your camera at the QR code', 'es': 'Más rápido por QR: en KALI Desktop → «Conectar teléfono» → apunta la cámara al QR', 'zh': '扫码更快：KALI桌面 → 「连接手机」→ 将摄像头对准二维码', 'de': 'Schneller per QR: KALI Desktop → „Telefon verbinden" → Kamera auf den QR-Code richten'});
 
   // ── Internal ──
   String _t(Map<String, String> map) => map[_locale] ?? map['en'] ?? '';

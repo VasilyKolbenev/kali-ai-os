@@ -133,8 +133,23 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 ),
               ).animate().fadeIn(delay: 500.ms),
               
-              const SizedBox(height: 32),
-              
+              const SizedBox(height: 16),
+
+              // QR pairing hint for non-tech users on a token-enforced LAN
+              Row(
+                children: [
+                  Icon(Icons.qr_code_scanner, color: AppTheme.primary.withValues(alpha: 0.7), size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      t.connectQrHint,
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+                    ),
+                  ),
+                ],
+              ).animate().fadeIn(delay: 600.ms),
+              const SizedBox(height: 24),
+
               // Helpful tip for normal users
               Container(
                 padding: const EdgeInsets.all(16),

@@ -191,6 +191,11 @@ const QUERY_TOKEN_PATH: &str = "/ws";
 /// for the [`QUERY_TOKEN_PATH`] upgrade, where headers are unavailable.
 fn query_token(req: &Request) -> Option<String> {
     let query = req.uri().query()?;
+    // Safety: the raw (non-URL-decoded) value is compared directly against the stored
+    // token.  This is correct only because the token is 64 hex chars [0-9a-f], which
+    // are percent-encoding-invariant — encoding is a no-op.  If the token format ever
+    // changes to include reserved characters (e.g. '+', '=', '/'), the server must
+    // URL-decode the value before comparing.
     query
         .split('&')
         .filter_map(|pair| pair.split_once('='))
