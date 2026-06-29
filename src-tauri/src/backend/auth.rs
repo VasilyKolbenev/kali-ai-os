@@ -301,6 +301,7 @@ pub async fn require_token(
 pub fn with_auth(router: axum::Router, token: ControlPlaneToken) -> axum::Router {
     router
         .route("/pairing/token", axum::routing::get(pairing_token))
+        .route("/pairing/lan-ip", axum::routing::get(pairing_lan_ip))
         .layer(Extension(token.clone()))
         .layer(axum::middleware::from_fn_with_state(token, require_token))
 }
@@ -330,6 +331,59 @@ pub async fn pairing_token(
         Json(json!({
             "token": token.value(),
             "path": token.path().display().to_string(),
+        })),
+    )
+        .into_response()
+}
+
+/// True when the backend was started LAN-exposed (`KALI_LAN=1` or an
+/// explicit non-loopback `KALI_RUST_BIND`). Mirrors the precedence in
+/// [`super::resolve_bind_addr`]; we re-read the env here rather than thread
+/// the resolved bind address through, because the pairing view only needs a
+/// boolean and the env is the single source of truth at startup.
+///
+/// Why this matters: the bind is fixed at `serve()` time — there is **no**
+/// runtime rebind. If LAN is off, a phone cannot reach the desktop, so the
+/// pairing view must tell the user to enable LAN and restart rather than
+/// render an unreachable QR.
+fn lan_bind_enabled() -> bool {
+    if let Ok(explicit) = std::env::var("KALI_RUST_BIND") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            // Treat any non-loopback explicit bind host as LAN-exposed.
+            let host = trimmed.rsplit_once(':').map(|(h, _)| h).unwrap_or(trimmed);
+            let loopback = host == "127.0.0.1" || host == "::1" || host == "localhost";
+            return !loopback;
+        }
+    }
+    std::env::var("KALI_LAN")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// `GET /pairing/lan-ip` — loopback-only seam returning the desktop's
+/// primary non-loopback LAN IPv4 plus whether the backend is actually
+/// LAN-bound, so the pairing view can build the `kali://pair?ip=…` QR and
+/// decide whether to show an "enable LAN + restart" prompt instead.
+///
+/// Loopback-only (like [`pairing_token`]): a non-loopback caller gets `404`
+/// so neither the IP nor the bind state is advertised off-box.
+pub async fn pairing_lan_ip(connect_info: Option<ConnectInfo<SocketAddr>>) -> Response {
+    let is_local = matches!(connect_info, Some(ConnectInfo(peer)) if is_loopback(peer.ip()));
+    if !is_local {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let ip = match local_ip_address::local_ip() {
+        Ok(IpAddr::V4(v4)) => Some(v4.to_string()),
+        // Prefer IPv4 for the QR; an IPv6-only result is surfaced as null so
+        // the view falls back to its manual-IP hint.
+        Ok(IpAddr::V6(_)) | Err(_) => None,
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ip": ip,
+            "lan_enabled": lan_bind_enabled(),
         })),
     )
         .into_response()

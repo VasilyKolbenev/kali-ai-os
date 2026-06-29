@@ -6,6 +6,7 @@ export type AppMode =
   | "store"
   | "builder"
   | "settings"
+  | "pair"
   | "showcase";
 
 interface AppState {

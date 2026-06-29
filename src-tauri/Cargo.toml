@@ -56,6 +56,11 @@ dirs = "5"
 # per-install control-plane token. 0.2.x is already in the dep graph
 # transitively; pinning it direct keeps the `getrandom::getrandom` API.
 getrandom = "0.2"
+# local-ip-address — resolve the primary non-loopback LAN IPv4 so the
+# desktop pairing view can build the `kali://pair?ip=…` QR the phone
+# scans. Pure-Rust, reads the OS interface table (GetAdaptersAddresses on
+# Windows, getifaddrs on Unix); no network traffic.
+local-ip-address = "0.6"
 
 [features]
 ml-tests = []
