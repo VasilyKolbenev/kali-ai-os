@@ -10,7 +10,7 @@ The Rust control plane (:3006) enforces a per-install 256-bit token on every non
 ## 2. Locked design — QR deep-link pairing (native camera)
 Chosen for the best non-tech UX with **zero new mobile dependencies** (reuses the registered `kali://` scheme + existing deep-link handler; no in-app scanner):
 
-1. **Desktop (Tauri React UI)** shows a **"Pair phone"** view: fetches `GET /pairing/token` (loopback-only, returns `{token, path}`), determines the desktop LAN IP, ensures the backend is LAN-bound, and renders a **QR encoding `kali://pair?ip=<lan-ip>&token=<token>`**.
+1. **Desktop (Tauri React UI)** shows a **"Pair phone"** view: fetches `GET /pairing/token` (loopback-only, returns `{token, path}`), determines the desktop LAN IP, ensures the backend is LAN-bound, and renders a **QR encoding `kali://pair?ip=<lan-ip>&token=<token>`**. The `ip` param is a **bare host (no port)** — the mobile side appends `:3006` itself (`ServerConfig.port`), so encoding a port here would double it. (Implemented: `/pairing/lan-ip` also reports `lan_enabled`; the view shows an honest "set `KALI_LAN=1` and restart" prompt when LAN bind is off — the backend binds at startup only, no runtime rebind.)
 2. **User points the phone's native camera** at the QR → the OS offers to open the `kali://` link in KALI (the scheme is already registered on Android `host` + iOS `CFBundleURLSchemes`).
 3. **Mobile deep-link handler** gains a `pair` route: extracts `ip` + `token`, stores them (`flutter_secure_storage`), sets `serverIpProvider`, and connects.
 4. **Every mobile HTTP call** carries `X-KALI-Token: <token>` via a Dio interceptor.
