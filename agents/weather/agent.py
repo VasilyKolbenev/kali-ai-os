@@ -1,13 +1,15 @@
 """Weather agent — current weather and forecast via Open-Meteo API (free, no key)."""
 
-import json
+import logging
 import os
 import sys
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
+
+logger = logging.getLogger(__name__)
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
@@ -75,9 +77,19 @@ class WeatherAgent(BaseAgent):
         # language=ru resolves BOTH Cyrillic ("Москва") and Latin ("Moscow")
         # city names; language=en silently fails on Cyrillic, which is exactly
         # what voice STT produces for a Russian speaker.
-        url = f"{GEOCODING_URL}?name={urllib.request.quote(city)}&count=1&language=ru"
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        client = SandboxHttpClient(
+            "weather",
+            allowed_domains=["geocoding-api.open-meteo.com", "api.open-meteo.com"],
+        )
+        resp = client.request(
+            HttpRequest(
+                url=GEOCODING_URL,
+                method="GET",
+                params={"name": city, "count": "1", "language": "ru"},
+                timeout=10.0,
+            )
+        )
+        data = resp.json()
         results = data.get("results", [])
         if not results:
             raise ValueError(f"City not found: {city}")
@@ -99,14 +111,24 @@ class WeatherAgent(BaseAgent):
         """
         try:
             geo = self._geocode(city)
-            url = (
-                f"{WEATHER_URL}?latitude={geo['lat']}&longitude={geo['lon']}"
-                f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code"
-                f"&timezone=auto"
+            client = SandboxHttpClient(
+                "weather",
+                allowed_domains=["geocoding-api.open-meteo.com", "api.open-meteo.com"],
             )
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-
+            resp = client.request(
+                HttpRequest(
+                    url=WEATHER_URL,
+                    method="GET",
+                    params={
+                        "latitude": str(geo["lat"]),
+                        "longitude": str(geo["lon"]),
+                        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+                        "timezone": "auto",
+                    },
+                    timeout=10.0,
+                )
+            )
+            data = resp.json()
             current = data.get("current", {})
             code = current.get("weather_code", 0)
             return {
@@ -134,14 +156,25 @@ class WeatherAgent(BaseAgent):
         """
         try:
             geo = self._geocode(city)
-            url = (
-                f"{WEATHER_URL}?latitude={geo['lat']}&longitude={geo['lon']}"
-                f"&daily=temperature_2m_max,temperature_2m_min,weather_code"
-                f"&forecast_days=3&timezone=auto"
+            client = SandboxHttpClient(
+                "weather",
+                allowed_domains=["geocoding-api.open-meteo.com", "api.open-meteo.com"],
             )
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-
+            resp = client.request(
+                HttpRequest(
+                    url=WEATHER_URL,
+                    method="GET",
+                    params={
+                        "latitude": str(geo["lat"]),
+                        "longitude": str(geo["lon"]),
+                        "daily": "temperature_2m_max,temperature_2m_min,weather_code",
+                        "forecast_days": "3",
+                        "timezone": "auto",
+                    },
+                    timeout=10.0,
+                )
+            )
+            data = resp.json()
             daily = data.get("daily", {})
             days = []
             for i in range(len(daily.get("time", []))):
