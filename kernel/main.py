@@ -2512,7 +2512,7 @@ def create_app(
             manifest = app.state.plugin_registry.get(name)
             if manifest is None:
                 return JSONResponse(
-                    {"status": "error", "message": f"Agent '{name}' not found locally"}
+                    {"status": "error", "name": name, "message": f"Agent '{name}' not found locally"}
                 )
             description = manifest.description
         if not validate_frontmatter(
@@ -2520,11 +2520,13 @@ def create_app(
         ).valid:
             return JSONResponse({
                 "status": "error",
+                "name": name,
                 "message": (
                     f"Agent name '{name}' can't be shared yet — names must be "
                     "lowercase latin letters, digits and single hyphens."
                 ),
             })
+        tmp = None
         try:
             export = await skills_export(name)
             if export.get("status") != "ok":
@@ -2541,9 +2543,11 @@ def create_app(
                 background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True),
             )
         except Exception as exc:  # noqa: BLE001 — honest error, never 500 to user
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
             logger.exception("reel render failed for %s", name)
             return JSONResponse(
-                {"status": "error", "message": f"Reel render failed: {exc}"}
+                {"status": "error", "name": name, "message": f"Reel render failed: {exc}"}
             )
 
     @app.get("/skills/installed")

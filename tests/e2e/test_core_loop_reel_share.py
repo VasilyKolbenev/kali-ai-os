@@ -6,14 +6,15 @@ from httpx import ASGITransport, AsyncClient
 from tests.e2e._reel_harness import build_app_with_agent
 
 
+def _fake_tts(text: str, language: str | None = None) -> tuple:
+    return ((0.1 * np.sin(np.linspace(0, 200, 24000))).astype(np.float32), 24000)
+
+
 @pytest.mark.core_loop
 @pytest.mark.asyncio
 async def test_reel_route_returns_mp4(tmp_path, monkeypatch) -> None:
     import kernel.reel.audio as reel_audio
-    monkeypatch.setattr(
-        reel_audio, "generate_audio",
-        lambda text, language=None: ((0.1 * np.sin(np.linspace(0, 200, 24000))).astype(np.float32), 24000),
-    )
+    monkeypatch.setattr(reel_audio, "generate_audio", _fake_tts)
     app = build_app_with_agent(tmp_path, name="chef", description="повар-помощник")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.get("/skills/chef/reel")
@@ -23,8 +24,12 @@ async def test_reel_route_returns_mp4(tmp_path, monkeypatch) -> None:
     out = tmp_path / "got.mp4"
     out.write_bytes(r.content)
     with av.open(str(out)) as ct:
-        assert any(s.type == "video" for s in ct.streams)
-        assert any(s.type == "audio" for s in ct.streams)
+        video = [s for s in ct.streams if s.type == "video"]
+        audio = [s for s in ct.streams if s.type == "audio"]
+        assert len(video) == 1
+        assert len(audio) == 1
+        assert video[0].codec_context.name in {"h264", "libopenh264"}
+        assert ct.duration and float(ct.duration) / av.time_base >= 0.8
 
 
 @pytest.mark.core_loop
