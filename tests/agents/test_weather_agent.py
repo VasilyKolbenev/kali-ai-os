@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -46,13 +47,21 @@ FORECAST_RESPONSE = json.dumps(
 ).encode()
 
 
-def _make_mock_response(body: bytes) -> MagicMock:
-    """Build a mock urlopen context manager returning body."""
-    mock = MagicMock()
-    mock.read.return_value = body
-    mock.__enter__ = lambda s: s
-    mock.__exit__ = MagicMock(return_value=False)
-    return mock
+def _make_mock_response(body: bytes, url: str = "https://api.open-meteo.com/v1/forecast") -> MagicMock:
+    """Build a guard-compatible mock for ``OpenerDirector.open``.
+
+    Mirrors ``test_github_ssrf.py._mock_opener_open``: exposes ``.status``,
+    ``.url``, ``.headers.items()``, ``.read()``, and context-manager protocol
+    so the guard's ``with opener.open(...) as resp`` block works correctly.
+    """
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.url = url
+    mock_resp.headers.items.return_value = [("Content-Type", "application/json")]
+    mock_resp.read.return_value = body
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    return mock_resp
 
 
 class TestWeatherAgent:
@@ -68,10 +77,14 @@ class TestWeatherAgent:
     def test_get_weather_returns_current(self) -> None:
         agent = WeatherAgent()
         responses = [
-            _make_mock_response(GEOCODING_RESPONSE),
-            _make_mock_response(CURRENT_WEATHER_RESPONSE),
+            _make_mock_response(GEOCODING_RESPONSE, "https://geocoding-api.open-meteo.com/v1/search"),
+            _make_mock_response(CURRENT_WEATHER_RESPONSE, "https://api.open-meteo.com/v1/forecast"),
         ]
-        with patch("urllib.request.urlopen", side_effect=responses):
+        with patch(
+            "kernel.sandbox.http_client._resolves_to_private", return_value=False
+        ), patch(
+            "urllib.request.OpenerDirector.open", side_effect=responses
+        ):
             result = agent.handle_action("get_weather", {"city": "Moscow"})
 
         assert result["city"] == "Moscow"
@@ -85,10 +98,14 @@ class TestWeatherAgent:
     def test_get_forecast_returns_three_days(self) -> None:
         agent = WeatherAgent()
         responses = [
-            _make_mock_response(GEOCODING_RESPONSE),
-            _make_mock_response(FORECAST_RESPONSE),
+            _make_mock_response(GEOCODING_RESPONSE, "https://geocoding-api.open-meteo.com/v1/search"),
+            _make_mock_response(FORECAST_RESPONSE, "https://api.open-meteo.com/v1/forecast"),
         ]
-        with patch("urllib.request.urlopen", side_effect=responses):
+        with patch(
+            "kernel.sandbox.http_client._resolves_to_private", return_value=False
+        ), patch(
+            "urllib.request.OpenerDirector.open", side_effect=responses
+        ):
             result = agent.handle_action("get_forecast", {"city": "Moscow"})
 
         assert result["city"] == "Moscow"
@@ -99,19 +116,32 @@ class TestWeatherAgent:
 
     def test_city_not_found_raises_value_error(self) -> None:
         agent = WeatherAgent()
-        empty_response = _make_mock_response(json.dumps({"results": []}).encode())
-        with patch("urllib.request.urlopen", return_value=empty_response):
+        empty_resp = _make_mock_response(
+            json.dumps({"results": []}).encode(),
+            "https://geocoding-api.open-meteo.com/v1/search",
+        )
+        with patch(
+            "kernel.sandbox.http_client._resolves_to_private", return_value=False
+        ), patch(
+            "urllib.request.OpenerDirector.open", return_value=empty_resp
+        ):
             with pytest.raises(ValueError, match="City not found"):
                 agent.handle_action("get_weather", {"city": "InvalidXYZ"})
 
     def test_get_weather_network_error_returns_error_dict(self) -> None:
         agent = WeatherAgent()
-
-        def boom(url, timeout=10):  # type: ignore[no-untyped-def]
-            raise OSError("connection refused")
-
-        geo_response = _make_mock_response(GEOCODING_RESPONSE)
-        with patch("urllib.request.urlopen", side_effect=[geo_response, OSError("network err")]):
+        geo_response = _make_mock_response(
+            GEOCODING_RESPONSE,
+            "https://geocoding-api.open-meteo.com/v1/search",
+        )
+        # The guard catches URLError and re-raises SandboxHttpError, which the
+        # agent's except-Exception clause catches → error dict returned.
+        with patch(
+            "kernel.sandbox.http_client._resolves_to_private", return_value=False
+        ), patch(
+            "urllib.request.OpenerDirector.open",
+            side_effect=[geo_response, urllib.error.URLError("network err")],
+        ):
             result = agent.handle_action("get_weather", {"city": "Moscow"})
 
         assert "error" in result
@@ -129,10 +159,14 @@ class TestWeatherAgent:
             }
         ).encode()
         responses = [
-            _make_mock_response(GEOCODING_RESPONSE),
-            _make_mock_response(forecast_with_unknown_code),
+            _make_mock_response(GEOCODING_RESPONSE, "https://geocoding-api.open-meteo.com/v1/search"),
+            _make_mock_response(forecast_with_unknown_code, "https://api.open-meteo.com/v1/forecast"),
         ]
-        with patch("urllib.request.urlopen", side_effect=responses):
+        with patch(
+            "kernel.sandbox.http_client._resolves_to_private", return_value=False
+        ), patch(
+            "urllib.request.OpenerDirector.open", side_effect=responses
+        ):
             result = agent.handle_action("get_forecast", {"city": "Moscow"})
 
         assert result["forecast"][0]["condition"] == "Unknown"

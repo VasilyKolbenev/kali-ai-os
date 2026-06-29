@@ -1,14 +1,15 @@
 """Telegram bot agent — send messages and notifications via Telegram."""
 
-import json
+import logging
 import os
 import sys
-import urllib.parse
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramAgent(BaseAgent):
@@ -67,24 +68,29 @@ class TelegramAgent(BaseAgent):
             }
 
         try:
-            params: dict[str, str] = {
+            json_body: dict[str, Any] = {
                 "chat_id": self._chat_id,
                 "text": text,
             }
             if parse_mode:
-                params["parse_mode"] = parse_mode
+                json_body["parse_mode"] = parse_mode
 
             url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-            data = urllib.parse.urlencode(params).encode()
-            req = urllib.request.Request(url, data=data)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read().decode())
+            # Route egress through the SSRF/whitelist guard (private-IP block +
+            # redirect re-check). Whitelist is api.telegram.org only.
+            client = SandboxHttpClient("telegram", allowed_domains=["api.telegram.org"])
+            resp = client.request(
+                HttpRequest(url=url, method="POST", json_body=json_body, timeout=10.0)
+            )
+            result = resp.json()
 
             if result.get("ok"):
                 return {"status": "sent", "message_id": result["result"]["message_id"]}
             else:
                 return {"status": "error", "message": result.get("description", "Unknown error")}
 
+        except SandboxHttpError as e:
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
