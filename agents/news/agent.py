@@ -1,15 +1,13 @@
 """News agent — top headlines and search via NewsAPI."""
 
-import json
 import logging
 import os
 import sys
-import urllib.request
-import urllib.parse
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +52,10 @@ class NewsAgent(BaseAgent):
     def _api_call(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         """Make a NewsAPI GET call.
 
+        Routes egress through the SSRF/whitelist guard (private-IP block +
+        redirect re-check). Whitelist is locked to newsapi.org so no
+        caller-supplied value can redirect to an arbitrary or private host.
+
         Args:
             path: API path (e.g. '/top-headlines').
             params: Query parameters dict (apiKey will be added automatically).
@@ -62,14 +64,19 @@ class NewsAgent(BaseAgent):
             Parsed response dict, or dict with 'error' key on failure.
         """
         params["apiKey"] = self._api_key
-        query_string = urllib.parse.urlencode(params)
-        url = f"{BASE_URL}{path}?{query_string}"
-        req = urllib.request.Request(url, method="GET")
+        client = SandboxHttpClient("news", allowed_domains=["newsapi.org"])
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            return {"error": f"HTTP {e.code}: {e.read().decode()}"}
+            resp = client.request(
+                HttpRequest(
+                    url=f"{BASE_URL}{path}",
+                    method="GET",
+                    params=params,
+                    timeout=10.0,
+                )
+            )
+            return resp.json()
+        except SandboxHttpError as e:
+            return {"error": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
