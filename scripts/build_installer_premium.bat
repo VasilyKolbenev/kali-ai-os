@@ -3,6 +3,9 @@ REM Build Premium installer via InnoSetup (replaces 7z SFX — no 4GB limit).
 REM Prereq: backend built (scripts\build_backend_premium.py) + premium_stage\
 REM pre-populated with heavy models / .hf_cache (this script re-stages the two
 REM volatile build artifacts: kali-backend\ and kali-desktop.exe).
+REM LICENSE: models\ffmpeg\ MUST be the LGPL FFmpeg build (NOT GPL) — torchcodec
+REM only decodes, so libx264/GPL is never needed. Run scripts\fetch_lgpl_ffmpeg.py
+REM --stage to (re)install the BtbN lgpl-shared DLLs + LICENSE.txt (P1.4).
 REM Install InnoSetup: winget install -e --id JRSoftware.InnoSetup
 REM
 REM Optional code signing (5.2): set these env vars to sign the inner exes and

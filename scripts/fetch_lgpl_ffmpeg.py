@@ -1,0 +1,102 @@
+"""Fetch + install the LGPL FFmpeg shared DLLs for the Premium bundle.
+
+The desktop bundle's `models/ffmpeg/` DLLs are loaded by torchcodec (which
+F5-TTS uses via `torchaudio.load` to decode the reference WAV). The default
+public FFmpeg Windows builds are **GPLv3** (`--enable-gpl` + libx264) — illegal
+to ship inside a proprietary installer. F5 only DECODES audio (libx264 is an
+encoder, never used), so an **LGPL** build (no `--enable-gpl`/x264/x265) fully
+satisfies torchcodec while removing the copyleft conflict (P1.4).
+
+This installs the BtbN `win64-lgpl-shared` build (FFmpeg 8.1 — matching the
+bundle's avcodec-62/avformat-62/avutil-60 sonames), verifies the bundled
+LICENSE is LGPL (not GPL), and drops it alongside the DLLs so the installer
+ships the required license text.
+
+Usage:
+    python scripts/fetch_lgpl_ffmpeg.py            # install into models/ffmpeg/
+    python scripts/fetch_lgpl_ffmpeg.py --stage    # also refresh dist_premium/premium_stage
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+ASSET_URL = (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+    "ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+)
+# The exact soname set the bundle (and torchcodec) expects — FFmpeg 8.x.
+EXPECTED_DLLS = {
+    "avcodec-62.dll",
+    "avdevice-62.dll",
+    "avfilter-11.dll",
+    "avformat-62.dll",
+    "avutil-60.dll",
+    "swresample-6.dll",
+    "swscale-9.dll",
+}
+
+
+def _verify_lgpl(license_path: Path) -> None:
+    """Raise if the bundled license is not LGPL (guards against a GPL build)."""
+    text = license_path.read_text(encoding="utf-8", errors="replace")
+    if "LESSER GENERAL PUBLIC LICENSE" not in text:
+        raise SystemExit(f"LICENSE is not LGPL — refusing: {license_path}")
+    # A pure-GPL build's LICENSE leads with the (non-lesser) GPL header.
+    if text.lstrip().startswith("GNU GENERAL PUBLIC LICENSE"):
+        raise SystemExit(f"LICENSE looks like full GPL — refusing: {license_path}")
+
+
+def _install(build_dir: Path, target: Path) -> None:
+    """Copy the 7 LGPL DLLs + LICENSE.txt into ``target`` (models/ffmpeg)."""
+    target.mkdir(parents=True, exist_ok=True)
+    bin_dir = build_dir / "bin"
+    found = {p.name for p in bin_dir.glob("*.dll")}
+    missing = EXPECTED_DLLS - found
+    if missing:
+        raise SystemExit(f"LGPL build missing expected DLLs: {sorted(missing)}")
+    for name in EXPECTED_DLLS:
+        shutil.copy2(bin_dir / name, target / name)
+    shutil.copy2(build_dir / "LICENSE.txt", target / "LICENSE.txt")
+    print(f"Installed {len(EXPECTED_DLLS)} LGPL DLLs + LICENSE.txt -> {target}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Install LGPL FFmpeg into models/ffmpeg/")
+    parser.add_argument(
+        "--stage", action="store_true",
+        help="also refresh dist_premium/premium_stage/models/ffmpeg (the shipped copy)",
+    )
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        zip_path = tmp_path / "ffmpeg-lgpl.zip"
+        print(f"Downloading {ASSET_URL} ...")
+        urllib.request.urlretrieve(ASSET_URL, zip_path)  # noqa: S310 — trusted release host
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp_path)
+        build_dir = next(tmp_path.glob("ffmpeg-*-win64-lgpl-shared-*"))
+        _verify_lgpl(build_dir / "LICENSE.txt")
+        print("Verified LICENSE is LGPL (not GPL).")
+
+        _install(build_dir, ROOT / "models" / "ffmpeg")
+        if args.stage:
+            staged = ROOT / "dist_premium" / "premium_stage" / "models" / "ffmpeg"
+            if staged.parent.parent.exists():
+                _install(build_dir, staged)
+            else:
+                print("premium_stage not present — skipping --stage", file=sys.stderr)
+
+    print("Done. Re-run with the F5 engine to confirm torchcodec loads the LGPL DLLs.")
+
+
+if __name__ == "__main__":
+    main()
