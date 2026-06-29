@@ -4,11 +4,11 @@ import json
 import logging
 import os
 import sys
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +66,17 @@ class GitHubAgent(BaseAgent):
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        req = urllib.request.Request(url, method="GET", headers=headers)
+        # Route egress through the SSRF/whitelist guard (private-IP block +
+        # redirect re-check). Whitelist stays api.github.com so a caller-supplied
+        # full URL can't exfiltrate to an arbitrary or private host.
+        client = SandboxHttpClient("github", allowed_domains=["api.github.com"])
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            return {"error": f"HTTP {e.code}: {e.read().decode()}"}
+            resp = client.request(
+                HttpRequest(url=url, method="GET", headers=headers, timeout=10.0)
+            )
+            return resp.json()
+        except SandboxHttpError as e:
+            return {"error": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
