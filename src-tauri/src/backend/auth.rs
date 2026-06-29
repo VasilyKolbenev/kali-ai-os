@@ -179,6 +179,26 @@ fn presented_token(req: &Request) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Path whose upgrade may authenticate via a `?token=` query param in
+/// addition to the standard headers. The mobile WebSocket client (Dart
+/// `web_socket_channel`) cannot set custom headers on the upgrade, so the
+/// phone connects `ws://<ip>:3006/ws?token=<token>`; HTTP routes are
+/// unaffected and continue to require header auth.
+const QUERY_TOKEN_PATH: &str = "/ws";
+
+/// Extract a presented token from the URL query string (`?token=<t>` or
+/// any later `&token=<t>`). Returns `None` if absent or empty. Used only
+/// for the [`QUERY_TOKEN_PATH`] upgrade, where headers are unavailable.
+fn query_token(req: &Request) -> Option<String> {
+    let query = req.uri().query()?;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == "token")
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 /// Constant-time string comparison to avoid leaking the token via timing.
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -190,6 +210,27 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+/// Decide whether a non-loopback request carries a valid token.
+///
+/// HTTP routes present the token via headers ([`presented_token`]); the
+/// `/ws` upgrade may additionally present it via a `?token=` query param
+/// ([`query_token`]) because the Dart WebSocket client cannot set headers.
+/// Both candidates are checked in constant time against the stored token.
+/// Loopback exemption is handled by the caller, not here.
+fn request_token_authorized(req: &Request, expected: &str) -> bool {
+    let header_ok = presented_token(req)
+        .is_some_and(|presented| constant_time_eq(&presented, expected));
+    if header_ok {
+        return true;
+    }
+    if req.uri().path() == QUERY_TOKEN_PATH {
+        if let Some(presented) = query_token(req) {
+            return constant_time_eq(&presented, expected);
+        }
+    }
+    false
 }
 
 fn unauthorized() -> Response {
@@ -230,12 +271,13 @@ pub async fn require_token(
     match connect_info {
         Some(ConnectInfo(peer)) if is_loopback(peer.ip()) => return next.run(req).await,
         Some(ConnectInfo(_peer)) => {
-            // Non-loopback: require the token.
-            match presented_token(&req) {
-                Some(presented) if constant_time_eq(&presented, token.value()) => {
-                    next.run(req).await
-                }
-                _ => unauthorized(),
+            // Non-loopback: require the token. HTTP routes present it via
+            // headers; the `/ws` upgrade may also present it via `?token=`
+            // (the Dart WebSocket client cannot set custom headers).
+            if request_token_authorized(&req, token.value()) {
+                next.run(req).await
+            } else {
+                unauthorized()
             }
         }
         None => {
@@ -324,5 +366,66 @@ mod tests {
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "abcd"));
         assert!(!constant_time_eq("", "x"));
+    }
+
+    /// Build a bare `GET <uri>` request (no headers) for the query-token tests.
+    fn get_request(uri: &str) -> Request {
+        Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("build request")
+    }
+
+    #[test]
+    fn query_token_parses_token_param() {
+        assert_eq!(
+            query_token(&get_request("/ws?token=deadbeef")).as_deref(),
+            Some("deadbeef")
+        );
+        // token after another param.
+        assert_eq!(
+            query_token(&get_request("/ws?foo=1&token=cafe")).as_deref(),
+            Some("cafe")
+        );
+        // no query / no token param / empty value.
+        assert_eq!(query_token(&get_request("/ws")), None);
+        assert_eq!(query_token(&get_request("/ws?foo=1")), None);
+        assert_eq!(query_token(&get_request("/ws?token=")), None);
+    }
+
+    #[test]
+    fn ws_upgrade_accepts_valid_query_token() {
+        // A header-less ws upgrade (as the Dart client sends) with the
+        // correct `?token=` is authorized.
+        let req = get_request("/ws?token=secret");
+        assert!(request_token_authorized(&req, "secret"));
+    }
+
+    #[test]
+    fn ws_upgrade_rejects_missing_or_wrong_query_token() {
+        assert!(!request_token_authorized(&get_request("/ws"), "secret"));
+        assert!(!request_token_authorized(
+            &get_request("/ws?token=wrong"),
+            "secret"
+        ));
+    }
+
+    #[test]
+    fn query_token_not_honored_off_the_ws_path() {
+        // HTTP routes must stay header-only: a valid `?token=` on a non-ws
+        // path does NOT authorize (prevents widening header auth).
+        let req = get_request("/chat?token=secret");
+        assert!(!request_token_authorized(&req, "secret"));
+    }
+
+    #[test]
+    fn header_token_still_authorizes() {
+        // HTTP header auth is unchanged for non-ws routes.
+        let req = Request::builder()
+            .uri("/chat")
+            .header("x-kali-token", "secret")
+            .body(axum::body::Body::empty())
+            .expect("build request");
+        assert!(request_token_authorized(&req, "secret"));
     }
 }
