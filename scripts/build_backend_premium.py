@@ -20,6 +20,10 @@ DATAS = [
     (str(ROOT / "agents"), "agents"),
     (str(ROOT / "config"), "config"),
     (str(ROOT / "resources" / "sounds"), "resources/sounds"),
+    # Vendored Cyrillic TrueType fonts for the reel renderer; must resolve at
+    # Path(__file__).parent/"assets" inside the frozen bundle (kernel/reel/compose.py).
+    (str(ROOT / "kernel" / "reel" / "assets" / "DejaVuSans.ttf"), "kernel/reel/assets"),
+    (str(ROOT / "kernel" / "reel" / "assets" / "DejaVuSans-Bold.ttf"), "kernel/reel/assets"),
 ]
 
 # torchcodec ships native libs (libtorchcodec_core/_custom_ops/_pybind_ops {4..8})
@@ -148,6 +152,19 @@ COLLECT_ALL = [
     # submodules, and `import torchcodec` raises (its native libs need FFmpeg DLLs on
     # the path, absent at build time). torchcodec's .py + metadata come via HIDDEN +
     # COPY_METADATA; its native .pyd/.dll come via the explicit DATAS block below.
+    #
+    # UGC voice-reel rendering (kernel/reel/compose.py):
+    # - av (PyAV): static analysis misses the bundled libav* native DLLs that
+    #   carry the H.264 encoder. --collect-all ships them so the frozen backend's
+    #   `import av` + libopenh264 encode works (LGPL-safe; no separate Cisco DLL
+    #   staging needed — openh264 ships inside the PyAV wheel's binaries).
+    # - PIL (Pillow): frame rasterization; --collect-all pulls its C-extension
+    #   image plugins.
+    # - qrcode: closing "scan to install" frame; its PIL image factory is a lazy
+    #   import PyInstaller's static analyzer can miss.
+    "av",
+    "PIL",
+    "qrcode",
 ]
 
 
