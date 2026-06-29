@@ -2487,6 +2487,65 @@ def create_app(
         data = base64.urlsafe_b64encode(raw).decode().rstrip("=")
         return {"status": "ok", "name": name, "data": data, "size": len(raw)}
 
+    @app.get("/skills/{name}/reel")
+    async def skills_reel(name: str):
+        """Render a 9:16 voice reel (MP4) for a created agent — the UGC share
+        hook. Honest-fail JSON envelope on any error (mobile falls back to the
+        PNG card). Mirrors /skills/{name}/export resolution + name gate."""
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from fastapi.responses import FileResponse, JSONResponse
+        from starlette.background import BackgroundTask
+
+        from kernel.llm_router import LLMRouter
+        from kernel.reel import generate_reel
+        from kernel.share_links import build_import_link
+        from kernel.skills.validator import validate_frontmatter
+
+        reg = _get_skills_registry()
+        skill = reg.get(name)
+        if skill is not None:
+            description = skill.description
+        else:
+            manifest = app.state.plugin_registry.get(name)
+            if manifest is None:
+                return JSONResponse(
+                    {"status": "error", "message": f"Agent '{name}' not found locally"}
+                )
+            description = manifest.description
+        if not validate_frontmatter(
+            {"name": name, "description": "x"}, expected_name=name
+        ).valid:
+            return JSONResponse({
+                "status": "error",
+                "message": (
+                    f"Agent name '{name}' can't be shared yet — names must be "
+                    "lowercase latin letters, digits and single hyphens."
+                ),
+            })
+        try:
+            export = await skills_export(name)
+            if export.get("status") != "ok":
+                return JSONResponse(export)
+            link = build_import_link(name=name, bundle=export["data"])
+            router = LLMRouter(app.state.config_manager.config.llm)
+            tmp = Path(tempfile.mkdtemp(prefix="kali_reel_"))
+            out = await generate_reel(
+                name=name, description=description, link=link,
+                router=router, out_dir=tmp,
+            )
+            return FileResponse(
+                str(out), media_type="video/mp4", filename=f"{name}.mp4",
+                background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True),
+            )
+        except Exception as exc:  # noqa: BLE001 — honest error, never 500 to user
+            logger.exception("reel render failed for %s", name)
+            return JSONResponse(
+                {"status": "error", "message": f"Reel render failed: {exc}"}
+            )
+
     @app.get("/skills/installed")
     async def skills_installed() -> dict[str, Any]:
         """List all skills discovered locally (builtin + user)."""
