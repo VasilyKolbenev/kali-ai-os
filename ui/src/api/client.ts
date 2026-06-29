@@ -227,6 +227,15 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // Mobile pairing (P1.1) — loopback-only seams on the Rust control plane.
+  // pairingToken returns the per-install token; pairingLanIp returns the
+  // desktop's primary LAN IPv4 (null if none) + whether the backend is
+  // actually LAN-bound (false ⇒ phone can't reach it until restart).
+  pairingToken: () =>
+    fetchJSON<{ token: string; path: string }>("/pairing/token"),
+  pairingLanIp: () =>
+    fetchJSON<{ ip: string | null; lan_enabled: boolean }>("/pairing/lan-ip"),
+
   // Per-agent credential status: { agent: { configured, missing_keys, required_keys } }
   agentConfigStatus: () =>
     fetchJSON<Record<string, { configured: boolean; missing_keys: string[]; required_keys: string[] }>>(

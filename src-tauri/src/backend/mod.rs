@@ -147,6 +147,11 @@ fn build_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        // Only CONTENT_TYPE is listed here. X-KALI-Token and Authorization are intentionally
+        // omitted: the only token-presenting client is the Dio mobile HTTP stack, which is
+        // not browser-CORS-constrained, and the desktop Tauri webview talks over loopback
+        // (exempt from the auth gate entirely).  A future browser-based LAN client would
+        // need those headers added here.
         .allow_headers([header::CONTENT_TYPE])
 }
 

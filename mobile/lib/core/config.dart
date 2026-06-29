@@ -21,5 +21,13 @@ class ServerConfig {
   static String api(String ip, String path) => '${httpBase(ip)}$path';
 
   /// WebSocket URL for the live event channel.
-  static String ws(String ip) => 'ws://$ip:$port/ws';
+  ///
+  /// Dart's `web_socket_channel` cannot send headers, so when a control-plane
+  /// [token] is present it rides as a URL-encoded `?token=` query param (the
+  /// Rust `/ws` route accepts it for the upgrade). Omitted when [token] is null.
+  static String ws(String ip, {String? token}) {
+    final base = 'ws://$ip:$port/ws';
+    if (token == null || token.isEmpty) return base;
+    return '$base?token=${Uri.encodeComponent(token)}';
+  }
 }

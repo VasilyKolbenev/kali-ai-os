@@ -6,6 +6,7 @@ import { Avatar } from "./components/Avatar/Avatar";
 import { Dashboard } from "./components/Dashboard/Dashboard";
 import { AgentStore } from "./components/AgentStore/AgentStore";
 import { Settings } from "./components/Settings/Settings";
+import { PairPhone } from "./components/Pairing/PairPhone";
 import { VoiceBuilderScreen } from "./components/VoiceBuilder/VoiceBuilderScreen";
 import { Showcase } from "./components/Showcase/Showcase";
 import { OnboardingRoot } from "./components/Onboarding/OnboardingRoot";
@@ -123,6 +124,7 @@ export default function App() {
             {mode === "store" && <AgentStore />}
             {mode === "builder" && <VoiceBuilderScreen />}
             {mode === "settings" && <Settings />}
+            {mode === "pair" && <PairPhone />}
             {mode === "showcase" && <Showcase />}
           </motion.div>
         </AnimatePresence>

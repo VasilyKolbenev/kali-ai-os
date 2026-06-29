@@ -43,6 +43,10 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   { method: "POST", path: "/catalog/pack", prefix: true },
   { method: "POST", path: "/catalog/install" },
   { method: "GET", path: "/catalog/info" },
+  // Mobile pairing (P1.1) — both loopback-only seams live on the Rust
+  // control plane (:3006): the token and the desktop LAN IPv4 + bind state.
+  { method: "GET", path: "/pairing/token" },
+  { method: "GET", path: "/pairing/lan-ip" },
 ] as const;
 
 function pathOf(input: string): string {

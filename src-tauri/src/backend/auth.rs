@@ -179,6 +179,31 @@ fn presented_token(req: &Request) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Path whose upgrade may authenticate via a `?token=` query param in
+/// addition to the standard headers. The mobile WebSocket client (Dart
+/// `web_socket_channel`) cannot set custom headers on the upgrade, so the
+/// phone connects `ws://<ip>:3006/ws?token=<token>`; HTTP routes are
+/// unaffected and continue to require header auth.
+const QUERY_TOKEN_PATH: &str = "/ws";
+
+/// Extract a presented token from the URL query string (`?token=<t>` or
+/// any later `&token=<t>`). Returns `None` if absent or empty. Used only
+/// for the [`QUERY_TOKEN_PATH`] upgrade, where headers are unavailable.
+fn query_token(req: &Request) -> Option<String> {
+    let query = req.uri().query()?;
+    // Safety: the raw (non-URL-decoded) value is compared directly against the stored
+    // token.  This is correct only because the token is 64 hex chars [0-9a-f], which
+    // are percent-encoding-invariant — encoding is a no-op.  If the token format ever
+    // changes to include reserved characters (e.g. '+', '=', '/'), the server must
+    // URL-decode the value before comparing.
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == "token")
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 /// Constant-time string comparison to avoid leaking the token via timing.
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -190,6 +215,27 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+/// Decide whether a non-loopback request carries a valid token.
+///
+/// HTTP routes present the token via headers ([`presented_token`]); the
+/// `/ws` upgrade may additionally present it via a `?token=` query param
+/// ([`query_token`]) because the Dart WebSocket client cannot set headers.
+/// Both candidates are checked in constant time against the stored token.
+/// Loopback exemption is handled by the caller, not here.
+fn request_token_authorized(req: &Request, expected: &str) -> bool {
+    let header_ok = presented_token(req)
+        .is_some_and(|presented| constant_time_eq(&presented, expected));
+    if header_ok {
+        return true;
+    }
+    if req.uri().path() == QUERY_TOKEN_PATH {
+        if let Some(presented) = query_token(req) {
+            return constant_time_eq(&presented, expected);
+        }
+    }
+    false
 }
 
 fn unauthorized() -> Response {
@@ -230,12 +276,13 @@ pub async fn require_token(
     match connect_info {
         Some(ConnectInfo(peer)) if is_loopback(peer.ip()) => return next.run(req).await,
         Some(ConnectInfo(_peer)) => {
-            // Non-loopback: require the token.
-            match presented_token(&req) {
-                Some(presented) if constant_time_eq(&presented, token.value()) => {
-                    next.run(req).await
-                }
-                _ => unauthorized(),
+            // Non-loopback: require the token. HTTP routes present it via
+            // headers; the `/ws` upgrade may also present it via `?token=`
+            // (the Dart WebSocket client cannot set custom headers).
+            if request_token_authorized(&req, token.value()) {
+                next.run(req).await
+            } else {
+                unauthorized()
             }
         }
         None => {
@@ -259,6 +306,7 @@ pub async fn require_token(
 pub fn with_auth(router: axum::Router, token: ControlPlaneToken) -> axum::Router {
     router
         .route("/pairing/token", axum::routing::get(pairing_token))
+        .route("/pairing/lan-ip", axum::routing::get(pairing_lan_ip))
         .layer(Extension(token.clone()))
         .layer(axum::middleware::from_fn_with_state(token, require_token))
 }
@@ -288,6 +336,59 @@ pub async fn pairing_token(
         Json(json!({
             "token": token.value(),
             "path": token.path().display().to_string(),
+        })),
+    )
+        .into_response()
+}
+
+/// True when the backend was started LAN-exposed (`KALI_LAN=1` or an
+/// explicit non-loopback `KALI_RUST_BIND`). Mirrors the precedence in
+/// [`super::resolve_bind_addr`]; we re-read the env here rather than thread
+/// the resolved bind address through, because the pairing view only needs a
+/// boolean and the env is the single source of truth at startup.
+///
+/// Why this matters: the bind is fixed at `serve()` time — there is **no**
+/// runtime rebind. If LAN is off, a phone cannot reach the desktop, so the
+/// pairing view must tell the user to enable LAN and restart rather than
+/// render an unreachable QR.
+fn lan_bind_enabled() -> bool {
+    if let Ok(explicit) = std::env::var("KALI_RUST_BIND") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            // Treat any non-loopback explicit bind host as LAN-exposed.
+            let host = trimmed.rsplit_once(':').map(|(h, _)| h).unwrap_or(trimmed);
+            let loopback = host == "127.0.0.1" || host == "::1" || host == "localhost";
+            return !loopback;
+        }
+    }
+    std::env::var("KALI_LAN")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// `GET /pairing/lan-ip` — loopback-only seam returning the desktop's
+/// primary non-loopback LAN IPv4 plus whether the backend is actually
+/// LAN-bound, so the pairing view can build the `kali://pair?ip=…` QR and
+/// decide whether to show an "enable LAN + restart" prompt instead.
+///
+/// Loopback-only (like [`pairing_token`]): a non-loopback caller gets `404`
+/// so neither the IP nor the bind state is advertised off-box.
+pub async fn pairing_lan_ip(connect_info: Option<ConnectInfo<SocketAddr>>) -> Response {
+    let is_local = matches!(connect_info, Some(ConnectInfo(peer)) if is_loopback(peer.ip()));
+    if !is_local {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let ip = match local_ip_address::local_ip() {
+        Ok(IpAddr::V4(v4)) => Some(v4.to_string()),
+        // Prefer IPv4 for the QR; an IPv6-only result is surfaced as null so
+        // the view falls back to its manual-IP hint.
+        Ok(IpAddr::V6(_)) | Err(_) => None,
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ip": ip,
+            "lan_enabled": lan_bind_enabled(),
         })),
     )
         .into_response()
@@ -324,5 +425,66 @@ mod tests {
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "abcd"));
         assert!(!constant_time_eq("", "x"));
+    }
+
+    /// Build a bare `GET <uri>` request (no headers) for the query-token tests.
+    fn get_request(uri: &str) -> Request {
+        Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("build request")
+    }
+
+    #[test]
+    fn query_token_parses_token_param() {
+        assert_eq!(
+            query_token(&get_request("/ws?token=deadbeef")).as_deref(),
+            Some("deadbeef")
+        );
+        // token after another param.
+        assert_eq!(
+            query_token(&get_request("/ws?foo=1&token=cafe")).as_deref(),
+            Some("cafe")
+        );
+        // no query / no token param / empty value.
+        assert_eq!(query_token(&get_request("/ws")), None);
+        assert_eq!(query_token(&get_request("/ws?foo=1")), None);
+        assert_eq!(query_token(&get_request("/ws?token=")), None);
+    }
+
+    #[test]
+    fn ws_upgrade_accepts_valid_query_token() {
+        // A header-less ws upgrade (as the Dart client sends) with the
+        // correct `?token=` is authorized.
+        let req = get_request("/ws?token=secret");
+        assert!(request_token_authorized(&req, "secret"));
+    }
+
+    #[test]
+    fn ws_upgrade_rejects_missing_or_wrong_query_token() {
+        assert!(!request_token_authorized(&get_request("/ws"), "secret"));
+        assert!(!request_token_authorized(
+            &get_request("/ws?token=wrong"),
+            "secret"
+        ));
+    }
+
+    #[test]
+    fn query_token_not_honored_off_the_ws_path() {
+        // HTTP routes must stay header-only: a valid `?token=` on a non-ws
+        // path does NOT authorize (prevents widening header auth).
+        let req = get_request("/chat?token=secret");
+        assert!(!request_token_authorized(&req, "secret"));
+    }
+
+    #[test]
+    fn header_token_still_authorizes() {
+        // HTTP header auth is unchanged for non-ws routes.
+        let req = Request::builder()
+            .uri("/chat")
+            .header("x-kali-token", "secret")
+            .body(axum::body::Body::empty())
+            .expect("build request");
+        assert!(request_token_authorized(&req, "secret"));
     }
 }

@@ -9,6 +9,7 @@ const modes: { id: AppMode; label: string; icon: string; devOnly?: boolean }[] =
   { id: "focus", label: "Джарвис", icon: "⦿" },
   { id: "dashboard", label: "Сводка", icon: "◫" },
   { id: "store", label: "Мастерская", icon: "▦" },
+  { id: "pair", label: "Подключить телефон", icon: "▢" },
   { id: "settings", label: "Настройки", icon: "⚙" },
   { id: "showcase", label: "Showcase", icon: "◈", devOnly: true },
 ];
