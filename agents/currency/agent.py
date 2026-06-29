@@ -1,14 +1,13 @@
 """Currency agent — exchange rates and conversion via open.er-api.com (free, no key)."""
 
-import json
 import logging
 import os
 import sys
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,10 @@ class CurrencyAgent(BaseAgent):
     def _fetch_rates(self, base: str) -> dict[str, Any]:
         """Fetch exchange rates from the API.
 
+        Routes egress through the SSRF/whitelist guard (private-IP block +
+        redirect re-check). Whitelist is locked to open.er-api.com so a
+        tampered BASE_URL cannot exfiltrate to an arbitrary host.
+
         Args:
             base: Base currency code (e.g. 'USD').
 
@@ -53,12 +56,12 @@ class CurrencyAgent(BaseAgent):
             Parsed API response, or dict with 'error' key on failure.
         """
         url = f"{BASE_URL}/{base.upper()}"
-        req = urllib.request.Request(url, method="GET")
+        client = SandboxHttpClient("currency", allowed_domains=["open.er-api.com"])
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            return {"error": f"HTTP {e.code}: {e.read().decode()}"}
+            resp = client.request(HttpRequest(url=url, method="GET", timeout=10.0))
+            return resp.json()
+        except SandboxHttpError as e:
+            return {"error": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
