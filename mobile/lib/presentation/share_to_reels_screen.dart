@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -31,6 +32,21 @@ class ShareToReelsScreen extends ConsumerStatefulWidget {
     required this.agentDescription,
   });
 
+  /// Whether [resp] is a usable rendered reel: HTTP 200, a `video/mp4`
+  /// content-type, and a non-empty byte body. The branch is on content-type
+  /// (not status alone) because the backend serves a JSON error body when
+  /// rendering fails. Pure + static so it is unit-testable without the share
+  /// sheet or path_provider native channels.
+  static bool isReelResponse(Response<dynamic> resp) {
+    if (resp.statusCode != 200) return false;
+    final contentType = resp.headers.value('content-type');
+    if (contentType == null || !contentType.startsWith('video/mp4')) {
+      return false;
+    }
+    final data = resp.data;
+    return data is List<int> && data.isNotEmpty;
+  }
+
   @override
   ConsumerState<ShareToReelsScreen> createState() => _ShareToReelsScreenState();
 }
@@ -41,6 +57,7 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
   static const int _qrMaxChars = 1800;
 
   String? _link; // kali://import?... once the bundle is fetched
+  String? _reelPath; // local kali_reel_<slug>.mp4 once fetched (primary artifact)
   bool _loading = true;
   bool _failed = false;
 
@@ -74,8 +91,13 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
         final link =
             ShareConfig.customLink(name: widget.agentName, bundle: data)
                 .toString();
+        // Primary share artifact = the rendered 9:16 voice reel. Fetched within
+        // this loading window so the existing "Готовлю…" copy covers it. Any
+        // failure leaves [_reelPath] null and the share degrades to PNG/text.
+        final reelPath = await _fetchReel(ip);
         setState(() {
           _link = link;
+          _reelPath = reelPath;
           _loading = false;
         });
       } else {
@@ -89,6 +111,30 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
         _loading = false;
         _failed = true;
       });
+    }
+  }
+
+  /// Fetches `GET /skills/{name}/reel` and, when it is a real reel, writes it to
+  /// a temp `kali_reel_<slug>.mp4` and returns the path. Returns null on a JSON
+  /// error body, non-video response, or any exception/timeout — so a reel
+  /// failure never breaks the screen (honest fallback to PNG/text).
+  Future<String?> _fetchReel(String ip) async {
+    try {
+      final url = ServerConfig.api(
+          ip, '/skills/${Uri.encodeComponent(widget.agentName)}/reel');
+      final resp = await ref.read(dioProvider).get<List<int>>(
+            url,
+            options: Options(responseType: ResponseType.bytes),
+          );
+      if (!ShareToReelsScreen.isReelResponse(resp)) return null;
+
+      final dir = await getTemporaryDirectory();
+      final slug = ShareConfig.slugify(widget.agentName);
+      final file = File('${dir.path}/kali_reel_$slug.mp4');
+      await file.writeAsBytes(resp.data!, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -108,14 +154,16 @@ class _ShareToReelsScreenState extends ConsumerState<ShareToReelsScreen> {
     final origin =
         box != null ? box.localToGlobal(Offset.zero) & box.size : null;
 
-    // Upgrade the payload to a rendered agent-card PNG when we can produce one;
-    // otherwise fall back to the original text + (caption-embedded) link share.
-    final pngPath = await _renderCardPng(context, t);
+    // Fallback chain (honest degradation): the rendered 9:16 voice reel MP4 is
+    // the viral artifact; if the backend couldn't render it, fall back to the
+    // agent-card PNG; if even that fails, the text + (caption-embedded) link.
+    final reelPath = _reelPath;
+    final filePath = reelPath ?? await _renderCardPng(context, t);
 
     await SharePlus.instance.share(ShareParams(
       text: _caption(t),
       subject: t.shareAgentTitle,
-      files: pngPath != null ? [XFile(pngPath)] : null,
+      files: filePath != null ? [XFile(filePath)] : null,
       sharePositionOrigin: origin,
     ));
   }
