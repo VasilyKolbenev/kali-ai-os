@@ -4,7 +4,12 @@ import av
 import numpy as np
 import pytest
 
-from kernel.reel.compose import compose_reel
+from kernel.reel.compose import _VCODEC, compose_reel
+
+
+def test_vcodec_is_lgpl_safe() -> None:
+    """Fix 4: guard against an accidental swap to GPL libx264."""
+    assert _VCODEC == "libopenh264"
 
 
 def _probe(path: Path) -> dict:

@@ -20,6 +20,10 @@ DATAS = [
     (str(ROOT / "agents"), "agents"),
     (str(ROOT / "config"), "config"),
     (str(ROOT / "resources" / "sounds"), "resources/sounds"),
+    # Vendored Cyrillic TrueType fonts for the reel renderer; must resolve at
+    # Path(__file__).parent/"assets" inside the frozen bundle (kernel/reel/compose.py).
+    (str(ROOT / "kernel" / "reel" / "assets" / "DejaVuSans.ttf"), "kernel/reel/assets"),
+    (str(ROOT / "kernel" / "reel" / "assets" / "DejaVuSans-Bold.ttf"), "kernel/reel/assets"),
 ]
 
 # torchcodec ships native libs (libtorchcodec_core/_custom_ops/_pybind_ops {4..8})
