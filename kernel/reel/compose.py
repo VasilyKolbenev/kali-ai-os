@@ -1,14 +1,11 @@
 """Compose a 9:16 MP4 reel: animated card frames + the agent voice clip."""
 import io
-import logging
 from pathlib import Path
 
 import av
 import numpy as np
 import qrcode
 from PIL import Image, ImageDraw
-
-logger = logging.getLogger(__name__)
 
 _W, _H, _FPS = 720, 1280, 30
 _VCODEC = "libopenh264"  # LGPL-safe H.264 (spec §3.1) — do NOT swap to libx264
@@ -176,9 +173,13 @@ def compose_reel(
     Returns:
         ``out_path``.
     """
-    duration_s = (audio.size / sr) + _TAIL_S if sr else _TAIL_S
+    if sr <= 0:
+        raise ValueError(f"compose_reel: sample rate must be positive, got {sr}")
+    if audio.size == 0:
+        raise ValueError("compose_reel: empty voice clip — refusing to render a silent reel")
+    duration_s = (audio.size / sr) + _TAIL_S
     n_frames = max(int(duration_s * _FPS), 1)
-    n_voice_frames = max(int((audio.size / sr) * _FPS), 1) if sr else 1
+    n_voice_frames = max(int((audio.size / sr) * _FPS), 1)
     env = _amplitude_envelope(audio, n=48)
     qr = _qr_image(link, size=380)
 
