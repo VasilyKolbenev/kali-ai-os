@@ -127,6 +127,9 @@ class L10n {
   String get retry => _t({'ru': '\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c', 'en': 'Retry', 'es': 'Reintentar', 'zh': '\u91cd\u8bd5', 'de': 'Wiederholen'});
   String get micPermissionRequired => _t({'ru': '\u041d\u0443\u0436\u0435\u043d \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443', 'en': 'Microphone permission is required', 'es': 'Se requiere permiso del micr\u00f3fono', 'zh': '\u9700\u8981\u9ea6\u514b\u98ce\u6743\u9650', 'de': 'Mikrofonberechtigung erforderlich'});
 
+  // ── Pairing ──
+  String get pairFailed => _t({'ru': 'Не удалось подключиться. Повторно отсканируй QR на десктопе', 'en': 'Could not connect. Re-scan the QR on your desktop', 'es': 'No se pudo conectar. Vuelve a escanear el QR en el escritorio', 'zh': '无法连接。请重新扫描桌面上的二维码', 'de': 'Verbindung fehlgeschlagen. Scanne den QR-Code am Desktop erneut'});
+
   // ── Internal ──
   String _t(Map<String, String> map) => map[_locale] ?? map['en'] ?? '';
 }
