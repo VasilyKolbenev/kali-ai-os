@@ -142,6 +142,8 @@ class WeatherAgent(BaseAgent):
             }
         except ValueError:
             raise
+        except SandboxHttpError as e:
+            return {"error": str(e), "city": city}
         except Exception as e:
             return {"error": str(e), "city": city}
 
@@ -191,6 +193,8 @@ class WeatherAgent(BaseAgent):
             return {"city": geo["name"], "country": geo["country"], "forecast": days}
         except ValueError:
             raise
+        except SandboxHttpError as e:
+            return {"error": str(e), "city": city}
         except Exception as e:
             return {"error": str(e), "city": city}
 
