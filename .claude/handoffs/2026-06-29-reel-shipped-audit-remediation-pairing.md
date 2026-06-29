@@ -1,7 +1,17 @@
 # Handoff 2026-06-29 — Reel shipped · 4-track audit · remediation plan (Option C) · P1.1 pairing done
 
 > Continues from `.claude/handoffs/2026-06-28-launch-drive-ws1-ws5-marketplace-security-distribution.md`.
-> **HEAD = origin/main = `2f4cb39`** — everything PUSHED (backup current). ultracode used for the audit. Anti-pivot CLEAN throughout.
+> **HEAD = origin/main = `4bb5d7c`** — everything PUSHED (backup current). ultracode used for the audit. Anti-pivot CLEAN throughout.
+
+> ## ⏩ UPDATE (2026-06-29, later) — Phase 1 code-now COMPLETE
+> Executed the remediation plan in order; all code-now Phase 1 items done + merged + pushed:
+> - **P1.1 pairing** ✓ (merged `2f4cb39`) — see below.
+> - **P1.3 SSRF** ✓ (merged `6f811cd`) — all 8 bundled agents (weather/currency/news/github/telegram/todoist/notion/messenger-hub) now egress via `SandboxHttpClient` (whitelist+private-IP block+redirect re-check+rate-limit+audit), not raw urllib. Per-agent SSRF tests; pre-existing weather tests updated to the guard mock surface. `tests/agents` = 107 passed. (Recovery note: github migration was lost on a process restart mid-task; completed inline.)
+> - **P1.4 GPL→LGPL FFmpeg** ✓ (merged `33aec55`) — investigation proved F5 can't drop torchcodec (`torchaudio.load` hard-deps it on torchaudio 2.11) but only DECODES the ref WAV → libx264(GPL) unused → LGPL build suffices. Swapped `models/ffmpeg/` + `premium_stage/models/ffmpeg/` to **BtbN n8.1 win64-lgpl-shared** (identical sonames) + bundled `LICENSE.txt`; **ABI-verified** `import torchcodec` + `torchaudio.load(ref.wav)` on the LGPL DLLs (CPU). Reproducible: `scripts/fetch_lgpl_ffmpeg.py --stage` (binaries are gitignored under `models/`). Public copyleft blocker RESOLVED.
+> - **P1.5 honest tethered framing** ✓ (merged `4bb5d7c`) — landing deferred-install card now steers a desktop-less friend to the desktop install (where the agent runs) + frames mobile as a companion; connection-screen QR hint already added in P1.1.
+> - **P1.2 frozen rebuild = PARTIAL** (file-level verified). **REMAINING (Vasily/RTX-gated):** boot `dist_premium/kali-backend/kali-backend.exe` (rebuilt 5.61GB, now with LGPL FFmpeg) → hit `GET /skills/{name}/reel` once (runtime DLL-load) → real create→works→share + two-device + a real F5 synth on the LGPL DLLs. Cannot be done without the RTX/GPU/live env.
+>
+> **Next:** P1.2 RTX live-verify (Vasily) OR **Phase 2 = WS-4.7 mobile standalone-lite** (XL — own brainstorm→spec→writing-plans→subagent cycle). EV-cert remains the public-launch long pole (Vasily, start now).
 
 ## ЧИТАЙ В ЭТОМ ПОРЯДКЕ (до кода)
 1. **Этот хэндофф** ← главный
