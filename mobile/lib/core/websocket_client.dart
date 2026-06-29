@@ -4,10 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'config.dart';
+import 'http_client.dart';
+import 'token_store.dart';
 
-final wsClientProvider = Provider((ref) => WebSocketClient());
+final wsClientProvider = Provider(
+  (ref) => WebSocketClient(tokenHolder: ref.read(tokenHolderProvider)),
+);
 
 class WebSocketClient {
+  WebSocketClient({TokenHolder? tokenHolder}) : _tokenHolder = tokenHolder;
+
+  final TokenHolder? _tokenHolder;
   WebSocketChannel? _channel;
   Function(Map<String, dynamic>)? onMessage;
   String? _serverIp;
@@ -32,8 +39,9 @@ class WebSocketClient {
 
     _serverIp = ipAddress;
 
-    // Default to port 3006 for Desktop KALI (Rust proxy)
-    final wsUrl = Uri.parse(ServerConfig.ws(ipAddress));
+    // Default to port 3006 for Desktop KALI (Rust proxy). When paired, the
+    // token rides as a `?token=` query param (ws can't send headers).
+    final wsUrl = Uri.parse(ServerConfig.ws(ipAddress, token: _tokenHolder?.token));
 
     try {
       final channel = WebSocketChannel.connect(wsUrl);
