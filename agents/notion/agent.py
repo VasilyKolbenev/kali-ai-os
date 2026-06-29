@@ -1,14 +1,13 @@
 """Notion agent — search, read, and create pages via Notion API."""
 
-import json
 import logging
 import os
 import sys
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +70,22 @@ class NotionAgent(BaseAgent):
             "Notion-Version": NOTION_VERSION,
             "Accept": "application/json",
         }
-        req = urllib.request.Request(url, method=method, headers=headers)
-        if body is not None:
-            data = json.dumps(body).encode()
-            req.add_header("Content-Type", "application/json")
-            req.data = data
+        # Route egress through the SSRF/whitelist guard (private-IP block +
+        # redirect re-check). Whitelist is api.notion.com only.
+        client = SandboxHttpClient("notion", allowed_domains=["api.notion.com"])
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            body_text = e.read().decode()
-            return {"error": f"HTTP {e.code}: {body_text}"}
+            resp = client.request(
+                HttpRequest(
+                    url=url,
+                    method=method,
+                    headers=headers,
+                    json_body=body,
+                    timeout=10.0,
+                )
+            )
+            return resp.json()
+        except SandboxHttpError as e:
+            return {"error": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
