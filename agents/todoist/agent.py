@@ -1,14 +1,13 @@
 """Todoist agent — manage tasks via Todoist REST API v2."""
 
-import json
 import logging
 import os
 import sys
-import urllib.request
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.sandbox.http_client import HttpRequest, SandboxHttpClient, SandboxHttpError
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +53,12 @@ class TodoistAgent(BaseAgent):
             raise ValueError(f"Unknown action: {action}")
 
     def _api_call(self, method: str, path: str, body: dict | None = None) -> Any:
-        """Make a Todoist API call.
+        """Make a Todoist API call via the SSRF-guarded sandbox HTTP client.
 
         Args:
             method: HTTP method (GET, POST).
             path: API path (e.g. '/tasks').
-            body: Optional request body.
+            body: Optional JSON request body (POST only).
 
         Returns:
             Parsed response (list or dict), or dict with 'error' key on failure.
@@ -69,16 +68,20 @@ class TodoistAgent(BaseAgent):
             "Authorization": f"Bearer {self._api_key}",
             "Accept": "application/json",
         }
-        req = urllib.request.Request(url, method=method, headers=headers)
-        if body is not None:
-            req.data = json.dumps(body).encode()
-            req.add_header("Content-Type", "application/json")
+        client = SandboxHttpClient("todoist", allowed_domains=["api.todoist.com"])
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode()
-                return json.loads(raw) if raw.strip() else {}
-        except urllib.error.HTTPError as e:
-            return {"error": f"HTTP {e.code}: {e.read().decode()}"}
+            resp = client.request(
+                HttpRequest(
+                    url=url,
+                    method=method,
+                    headers=headers,
+                    json_body=body,
+                    timeout=10.0,
+                )
+            )
+            return resp.json() if resp.body else {}
+        except SandboxHttpError as e:
+            return {"error": str(e)}
         except Exception as e:
             return {"error": str(e)}
 
