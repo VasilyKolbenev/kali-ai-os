@@ -36,6 +36,17 @@ String _payloadWithSymlink(String name, String skillMd, String symlinkName, Stri
   return base64Url.encode(gz).replaceAll('=', '');
 }
 
+/// Build a payload from a map of path → content strings.
+String _payloadFiles(Map<String, String> files) {
+  final archive = Archive();
+  for (final e in files.entries) {
+    final bytes = utf8.encode(e.value);
+    archive.addFile(ArchiveFile(e.key, bytes.length, bytes));
+  }
+  final gz = GZipEncoder().encode(TarEncoder().encode(archive));
+  return base64Url.encode(gz).replaceAll('=', '');
+}
+
 void main() {
   // ── Existing tests ──────────────────────────────────────────────────────────
 
@@ -140,5 +151,39 @@ void main() {
       () => importBundle(_payloadRawSkill('agent', badUtf8)),
       throwsA(isA<BundleImportError>()),
     );
+  });
+
+  // ── Task 6: skill.yaml extraction ──────────────────────────────────────────
+
+  test('extracts template + nested config from skill.yaml', () async {
+    final skillMd = '---\nname: water\ndescription: пить воду\n---\n# water\n';
+    final skillYaml = 'template: reminder\n'
+        'description: пить воду\n'
+        'config:\n'
+        '  interval: каждые 2 часа\n'
+        '  time_window: с 8 до 22\n'
+        '  reminders:\n    enabled: true\n    interval_hours: 2\n';
+    final agent = await importBundle(_payloadFiles({
+      'water/SKILL.md': skillMd,
+      'water/skill.yaml': skillYaml,
+    }));
+    expect(agent.template, 'reminder');
+    expect((agent.config!['reminders'] as Map)['interval_hours'], 2);
+  });
+
+  test('SKILL.md-only bundle -> conversational-only (template null)', () async {
+    final agent = await importBundle(_payloadFiles({
+      'chef/SKILL.md': '---\nname: chef\ndescription: повар\n---\n# chef\n',
+    }));
+    expect(agent.template, isNull);
+  });
+
+  test('corrupt skill.yaml does not fail the import', () async {
+    final agent = await importBundle(_payloadFiles({
+      'water/SKILL.md': '---\nname: water\ndescription: x\n---\n# water\n',
+      'water/skill.yaml': '::: not yaml :::\n  - [unbalanced',
+    }));
+    expect(agent.name, 'water');
+    expect(agent.template, isNull); // ignored, not fatal
   });
 }
