@@ -33,6 +33,8 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Required by flutter_local_notifications v22 scheduled notifications.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -40,6 +42,8 @@ android {
     defaultConfig {
         // Real application ID for store distribution (was com.example placeholder).
         applicationId = "ai.kali.mobile"
+        // Desugaring pulls in extra methods; keep dex under the 64K limit.
+        multiDexEnabled = true
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -74,6 +78,11 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // Core library desugaring backport required by flutter_local_notifications v22.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
