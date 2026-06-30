@@ -233,7 +233,7 @@ ReminderConfig parseReminderConfig(
     final m = RegExp(r'\*/(\d+)').firstMatch(sched['cron'] as String);
     if (m != null) interval = int.parse(m.group(1)!) / 60;
   }
-  interval = interval.clamp(0.25, 24);
+  interval = interval.clamp(0.25, 24).toDouble(); // num.clamp -> num; keep double
 
   int start = 8, end = 22;
   if (config['time_window'] is String) {
@@ -332,7 +332,7 @@ List<DateTime> nextFireTimes({
     final dayEnd = DateTime(day.year, day.month, day.day, config.endHour);
     var t = DateTime(day.year, day.month, day.day, config.startHour);
     while (t.isBefore(dayEnd)) {
-      if (t.isAfter(horizonEnd)) return out;
+      if (!t.isBefore(horizonEnd)) return out; // horizonEnd is exclusive
       if (!t.isBefore(from)) {
         out.add(t);
         if (out.length >= maxCount) return out;
@@ -510,7 +510,20 @@ class ImportedAgent {
 
 - [ ] **Step 1: Add the `yaml` dep** — `cd mobile && "C:/src/flutter/flutter/bin/flutter.bat" pub add yaml` → confirm `yaml:` appears in `pubspec.yaml`.
 
-- [ ] **Step 2: Write the failing test** — build a `.tar.gz` payload in-test carrying SKILL.md + skill.yaml with the REAL nested shape, base64url-encode it, assert `template`/`config` extracted; and a SKILL.md-only payload → `template == null`; a corrupt skill.yaml → still imports conversational-only. (Reuse the helper already used by the existing importer tests to build a payload; if none, add a small `_payload(Map<String,String> files)` helper using `package:archive` `TarEncoder` + `GZipEncoder` + `base64Url`.)
+- [ ] **Step 2: Write the failing test** — build a `.tar.gz` payload in-test carrying SKILL.md + skill.yaml with the REAL nested shape, base64url-encode it, assert `template`/`config` extracted; and a SKILL.md-only payload → `template == null`; a corrupt skill.yaml → still imports conversational-only.
+
+> **Helper note:** `bundle_importer_test.dart:8` already defines `_payload(String name, String skillMd, {extraPaths})` — a DIFFERENT signature. Dart has no overloading, so do NOT reuse that name. Add a new multi-file helper:
+> ```dart
+> String _payloadFiles(Map<String, String> files) {
+>   final archive = Archive();
+>   for (final e in files.entries) {
+>     final bytes = utf8.encode(e.value);
+>     archive.addFile(ArchiveFile(e.key, bytes.length, bytes));
+>   }
+>   final gz = GZipEncoder().encode(TarEncoder().encode(archive));
+>   return base64Url.encode(gz).replaceAll('=', '');
+> }
+> ```
 
 ```dart
   test('extracts template + nested config from skill.yaml', () async {
@@ -521,7 +534,7 @@ class ImportedAgent {
         '  interval: каждые 2 часа\n'
         '  time_window: с 8 до 22\n'
         '  reminders:\n    enabled: true\n    interval_hours: 2\n';
-    final agent = await importBundle(_payload({
+    final agent = await importBundle(_payloadFiles({
       'water/SKILL.md': skillMd,
       'water/skill.yaml': skillYaml,
     }));
@@ -529,13 +542,13 @@ class ImportedAgent {
     expect((agent.config!['reminders'] as Map)['interval_hours'], 2);
   });
   test('SKILL.md-only bundle -> conversational-only (template null)', () async {
-    final agent = await importBundle(_payload({
+    final agent = await importBundle(_payloadFiles({
       'chef/SKILL.md': '---\nname: chef\ndescription: повар\n---\n# chef\n',
     }));
     expect(agent.template, isNull);
   });
   test('corrupt skill.yaml does not fail the import', () async {
-    final agent = await importBundle(_payload({
+    final agent = await importBundle(_payloadFiles({
       'water/SKILL.md': '---\nname: water\ndescription: x\n---\n# water\n',
       'water/skill.yaml': '::: not yaml :::\n  - [unbalanced',
     }));
@@ -639,7 +652,7 @@ dynamic _deepVal(dynamic v) {
 - Create: `mobile/lib/standalone/scheduling/notification_gateway.dart`
 - Test: `mobile/test/standalone/scheduling/fake_notification_gateway.dart` (a reusable test double)
 
-- [ ] **Step 1: Add deps** — `... pub add flutter_local_notifications timezone` → confirm both in `pubspec.yaml`.
+- [ ] **Step 1: Add deps** — `... pub add flutter_local_notifications timezone` → confirm both in `pubspec.yaml`. **Note:** check the resolved `flutter_local_notifications` version — `zonedSchedule`'s `uiLocalNotificationDateInterpretation` param was REMOVED in the newest majors; if your pinned version lacks it, drop that argument from `scheduleAt` (the rest of the call is unchanged).
 
 - [ ] **Step 2: Define the interface** (no test needed for an abstract class; the contract is exercised by the scheduler tests via the fake):
 
