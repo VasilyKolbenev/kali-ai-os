@@ -74,9 +74,19 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
   /// O(N²) cancel/reschedule churn (and amplifying the syncAll race). Awaited +
   /// guarded so a failure logs instead of becoming an unhandled async error.
   Future<void> _bootstrapReminders() async {
-    final gateway = ref.read(notificationGatewayProvider);
-    final granted = await gateway.requestPermission();
     await guardedSyncAll(ref.read(reminderSchedulerProvider), DateTime.now());
+    // Only prompt for notification permission when the user actually has a
+    // reminder agent — a chat-only user shouldn't get an OS permission dialog
+    // for a capability they don't use yet.
+    final List<ImportedAgent> agents;
+    try {
+      agents = await _agents;
+    } catch (_) {
+      return; // list() failure is surfaced by the FutureBuilder, not here
+    }
+    if (!agents.any((a) => a.template == 'reminder')) return;
+    final granted =
+        await ref.read(notificationGatewayProvider).requestPermission();
     if (!mounted) return;
     setState(() => _permissionGranted = granted);
   }
