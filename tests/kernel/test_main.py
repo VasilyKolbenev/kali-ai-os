@@ -491,6 +491,47 @@ class TestWebSocket:
                 assert response["type"] == "error"
 
 
+class TestSpeakTaskLifetime:
+    """The auto-speak task must be retained in a set so the GC can't cancel it."""
+
+    async def test_speak_tasks_set_initialized(self, app) -> None:
+        assert isinstance(app.state._speak_tasks, set)
+
+    async def test_chat_tracks_then_discards_speak_task(
+        self, app, client: AsyncClient
+    ) -> None:
+        import threading
+
+        import kernel.voice.jarvis_sounds as js
+        from kernel.llm_router import LLMResponse, LLMRouter
+
+        release = threading.Event()
+
+        def _block_play(_clip) -> None:  # type: ignore[no-untyped-def]
+            release.wait(timeout=5.0)
+
+        canned = LLMResponse(
+            text="Hi there friend", tool_calls=None, provider_used="mock", latency_ms=0
+        )
+
+        with patch.object(LLMRouter, "route", AsyncMock(return_value=canned)), \
+                patch.object(js, "should_use_clip", return_value="clip.wav"), \
+                patch.object(js, "play_reaction", side_effect=_block_play):
+            await client.post("/chat", json={"text": "hello there friend"})
+            # The speak task is created synchronously before /chat returns and
+            # is blocked inside play_reaction → it must be tracked.
+            assert len(app.state._speak_tasks) >= 1
+            release.set()
+
+        # Drain: _speak_response has a trailing 0.5s anti-echo sleep, so give
+        # it room; the done-callback then discards the task from the set.
+        for _ in range(400):
+            if not app.state._speak_tasks:
+                break
+            await asyncio.sleep(0.02)
+        assert len(app.state._speak_tasks) == 0
+
+
 class TestModelDownloadTaskLifetime:
     """The first-run download task must be retained + report failures honestly.
 

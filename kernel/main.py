@@ -461,6 +461,9 @@ def create_app(
         app.state.database = database
         app.state.scheduler = scheduler
         app.state.ws_connections: list[WebSocket] = []
+        # Strong references to background auto-speak tasks. Without a retained
+        # ref the GC can cancel a task mid-speech (asyncio fire-and-forget trap).
+        app.state._speak_tasks: set[asyncio.Task[None]] = set()
 
         # Forward events to WebSocket clients (skip events originating from WS itself)
         async def ws_forwarder(event: Event) -> None:
@@ -1438,9 +1441,12 @@ def create_app(
     async def chat(request: Request) -> dict[str, Any]:
         """Process a chat message through LLM or agents. Auto-speaks response."""
         result = await _chat_logic(request)
-        # Auto-speak the response through system speakers
+        # Auto-speak the response through system speakers. Retain the task in a
+        # set so the GC cannot cancel it mid-speech; discard it when it finishes.
         import asyncio as _aio
-        _aio.create_task(_speak_response(result.get("response", "")))
+        speak_task = _aio.create_task(_speak_response(result.get("response", "")))
+        request.app.state._speak_tasks.add(speak_task)
+        speak_task.add_done_callback(request.app.state._speak_tasks.discard)
         return result
 
     async def _chat_logic(request: Request) -> dict[str, Any]:
