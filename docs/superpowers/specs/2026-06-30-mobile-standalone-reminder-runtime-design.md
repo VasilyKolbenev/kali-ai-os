@@ -59,7 +59,7 @@ ReminderConfig parseReminderConfig(
 then [`skill_generator._with_schedule`](../../../kernel/builder/skill_generator.py) parses the interval and, for whole-hour intervals, injects `reminders: {enabled: true, interval_hours: <int>}` (or, for sub-hour, top-level `schedule: {cron: "*/<min> * * * *"}`). The wizard **never captures a reminder message** — the only human text is the agent `description` (the raw voice request).
 
 **Parse contract (exact precedence — must match the producer, not `reminder.py`):**
-- `intervalHours` ← `config['reminders']['interval_hours']` if present; else a Dart port of `_parse_interval_hours` / `_parse_interval_minutes` applied to `config['interval']` (minutes → `min/60`); else `config['schedule']['cron']` `*/N` → `N/60` h; else default `1`.
+- `intervalHours` ← `config['reminders']['interval_hours']` if present; else a Dart port of `_parse_interval_hours` / `_parse_interval_minutes` applied to `config['interval']` (minutes → `min/60`); else `config['schedule']['cron']` `*/N` → `N/60` h; else default `1`. (A fresh build emits `reminders.interval_hours` XOR `schedule.cron` — never both; the listed order resolves a hand-edited/legacy config carrying both. Worth one test case.)
 - `startHour` / `endHour` ← best-effort parse of `config['time_window']` (extract the first two hour numbers, honoring "вечера"/"дня" → +12 when < 12 and a "до …вечера" phrasing is present); if not parseable, default `8..22`.
 - `message` ← `fallbackMessage` (the agent description) — chosen explicitly (Vasily, 2026-06-30): the wizard has no message field, so the voice utterance is the honest notification text. No desktop builder change in this increment.
 
@@ -107,6 +107,8 @@ class ReminderScheduler {
 `syncAll` (explicit two-pass over **all** stored agents, so stale notifications can never leak):
 1. **Budget pass:** count enabled reminder agents `K`; `perAgentBudget = K == 0 ? 0 : max(1, GLOBAL_PENDING_BUDGET ~/ K)` where `GLOBAL_PENDING_BUDGET = 56` (headroom under the iOS hard cap of 64 across the whole app — see §5).
 2. **Per-agent pass:** for **every** stored agent — if `template == 'reminder' && enabled` → `cancelForAgent` then `scheduleAt(...)` for `nextFireTimes(from: max(now, snoozeUntil), horizonEnd: now + 7d, maxCount: perAgentBudget)`; **else** (disabled, or non-reminder, or null template) → `cancelForAgent` only. Cancelling the non-scheduled set is what makes a toggle-off (or an agent that stopped being a reminder) actually clear its OS notifications.
+
+**Honest upper edge:** with `K > GLOBAL_PENDING_BUDGET` enabled reminder agents `max(1, 56 ~/ K)` floors at 1 each, so the total (`= K`) would exceed the iOS 64 cap and iOS would silently drop the overflow. Realistically impossible on a phone, but to stay honest the scheduler **caps the active reminder set to the soonest-next-fire `GLOBAL_PENDING_BUDGET` agents** when `K > 56` (the rest keep their `enabled` flag but schedule nothing until the count drops) — deterministic and surfaced, never a silent breach.
 
 Idempotent: cancel-then-reschedule on every resume yields the same pending set. The global-budget split is deterministic, so the `reminder_scheduler` tests assert exact counts.
 
