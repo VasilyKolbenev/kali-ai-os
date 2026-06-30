@@ -3,10 +3,26 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kali_mobile/standalone/agent_store.dart';
 import 'package:kali_mobile/standalone/imported_agent.dart';
+import 'package:kali_mobile/standalone/scheduling/notification_gateway.dart';
 import 'package:kali_mobile/standalone/scheduling/notification_ids.dart';
 import 'package:kali_mobile/standalone/scheduling/reminder_scheduler.dart';
 
 import 'fake_notification_gateway.dart';
+
+/// Records the order of gateway operations so a test can assert the two-pass
+/// invariant (every cancel happens before any schedule within one syncAll).
+class _RecordingGateway implements NotificationGateway {
+  final List<String> ops = [];
+  @override
+  Future<bool> requestPermission() async => true;
+  @override
+  Future<void> scheduleAt(int id, DateTime when, String t, String b) async =>
+      ops.add('schedule');
+  @override
+  Future<void> cancelForAgent(String name) async => ops.add('cancel');
+  @override
+  Future<int> pendingCount() async => 0;
+}
 
 Future<FileAgentStore> _store() async =>
     FileAgentStore(baseDir: await Directory.systemTemp.createTemp('sched'));
@@ -90,5 +106,24 @@ void main() {
         .syncAll(DateTime(2026, 6, 30, 7));
     // 56 ~/ 4 = 14 per agent, capped by the 7d horizon -> 14 each.
     expect(gw.scheduled.length, lessThanOrEqualTo(56));
+  });
+
+  test('two-pass: every cancel precedes any schedule within one syncAll',
+      () async {
+    // Guards against the interleaved cancel+schedule hazard: if two agent
+    // names collided in the same id block, a later agent's cancel could wipe an
+    // earlier agent's freshly-scheduled fires. Cancelling everyone first removes
+    // that ordering hazard.
+    final store = await _store();
+    await store.save(_reminder('water'));
+    await store.save(_reminder('walk'));
+    final gw = _RecordingGateway();
+    await ReminderScheduler(store: store, gateway: gw)
+        .syncAll(DateTime(2026, 6, 30, 7));
+
+    final firstSchedule = gw.ops.indexOf('schedule');
+    final lastCancel = gw.ops.lastIndexOf('cancel');
+    expect(firstSchedule, greaterThan(lastCancel),
+        reason: 'all cancels must happen before any schedule');
   });
 }

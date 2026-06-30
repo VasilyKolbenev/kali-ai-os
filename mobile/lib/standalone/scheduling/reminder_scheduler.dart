@@ -40,11 +40,18 @@ class ReminderScheduler {
         : active;
     final k = capped.length;
     final perAgent = k == 0 ? 0 : (kGlobalPendingBudget ~/ k).clamp(1, blockSlots);
-    final cappedNames = capped.map((a) => a.name).toSet();
 
+    // Pass 1 — cancel EVERY stored agent's block first. This must complete
+    // before any scheduling: two agent names can hash to the same id block
+    // (the 15-bit collision the id scheme tolerates), so an interleaved
+    // cancel+schedule would let a later agent's cancel wipe an earlier agent's
+    // freshly-scheduled fires within the same sync.
     for (final a in agents) {
-      await gateway.cancelForAgent(a.name); // clears stale ids for everyone
-      if (!cappedNames.contains(a.name)) continue;
+      await gateway.cancelForAgent(a.name);
+    }
+
+    // Pass 2 — schedule the capped, enabled reminders.
+    for (final a in capped) {
       final cfg =
           parseReminderConfig(a.config ?? const {}, fallbackMessage: a.description);
       final from = (a.snoozeUntil != null && a.snoozeUntil!.isAfter(now))

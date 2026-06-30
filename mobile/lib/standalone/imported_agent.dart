@@ -38,7 +38,8 @@ class ImportedAgent {
   /// Whether this agent's scheduled features are active. Defaults to true.
   final bool enabled;
 
-  /// If set, scheduling is suppressed until after this time (UTC).
+  /// If set, scheduling is suppressed until after this local wall-clock time
+  /// (compared against a local `now` by the scheduler).
   final DateTime? snoozeUntil;
 
   /// Returns a copy with the given fields replaced.
