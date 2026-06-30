@@ -46,6 +46,32 @@ class _FakeStore implements AgentStore {
       saved.removeWhere((a) => a.name == name);
 }
 
+/// In-memory [AgentStore] that upserts by name (like the real file store).
+class _UpsertStore implements AgentStore {
+  final List<ImportedAgent> agents = [];
+
+  @override
+  Future<void> save(ImportedAgent agent) async {
+    agents.removeWhere((a) => a.name == agent.name);
+    agents.add(agent);
+  }
+
+  @override
+  Future<List<ImportedAgent>> list() async => List.of(agents);
+
+  @override
+  Future<ImportedAgent?> get(String name) async {
+    for (final a in agents) {
+      if (a.name == name) return a;
+    }
+    return null;
+  }
+
+  @override
+  Future<void> delete(String name) async =>
+      agents.removeWhere((a) => a.name == name);
+}
+
 String _payload(String name, String skillMd) {
   final archive = Archive();
   final bytes = utf8.encode(skillMd);
@@ -89,6 +115,32 @@ void main() {
         throwsA(isA<Object>()),
       );
       expect(store.saved, isEmpty);
+    });
+
+    test('re-import carries forward enabled + snoozeUntil of existing agent',
+        () async {
+      final store = _UpsertStore();
+      final snooze = DateTime.utc(2027, 1, 1);
+      await store.save(ImportedAgent(
+        name: 'water-reminder',
+        description: 'old',
+        skillMd: 'old',
+        installedAt: DateTime.utc(2026, 6, 1),
+        template: 'reminder',
+        enabled: false,
+        snoozeUntil: snooze,
+      ));
+
+      const md = '---\nname: water-reminder\ndescription: new\n---\nbody';
+      await importOnDevice(_payload('water-reminder', md), store: store);
+
+      final got = (await store.get('water-reminder'))!;
+      // User's toggle/snooze preserved...
+      expect(got.enabled, isFalse);
+      expect(got.snoozeUntil, snooze);
+      // ...while the freshly-shared content replaces the old.
+      expect(got.description, 'new');
+      expect(got.skillMd, contains('body'));
     });
   });
 

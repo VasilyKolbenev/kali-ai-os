@@ -108,10 +108,32 @@ Future<void> applyPairing(
 bool shouldImportOnDevice({required bool standaloneMode, required String? serverIp}) =>
     standaloneMode || serverIp == null;
 
+/// Persists a freshly-decoded [agent], carrying forward local reminder state.
+///
+/// Re-importing a same-name bundle must not silently reset the user's
+/// `enabled` toggle / `snoozeUntil`: those are local to this device and the
+/// sharer can't know them. So when an agent with the same name already exists,
+/// we replace its shared content (`skillMd`/`description`/`config`/`template`)
+/// while preserving the existing `enabled` + `snoozeUntil`. Returns the agent
+/// actually persisted. Side-effect-only (no UI) so it stays unit-testable.
+Future<ImportedAgent> saveImported(ImportedAgent agent,
+    {required AgentStore store}) async {
+  final existing = await store.get(agent.name);
+  final toSave = existing == null
+      ? agent
+      : agent.copyWith(
+          enabled: existing.enabled,
+          snoozeUntil: existing.snoozeUntil,
+        );
+  await store.save(toSave);
+  return toSave;
+}
+
 /// Imports a `kali://import` bundle on-device and persists it.
 ///
-/// Decodes [payload] via [importBundle] then saves to [store], returning the
-/// imported agent. [importer] is injectable so tests stub the decode; in
+/// Decodes [payload] via [importBundle] then persists via [saveImported]
+/// (which carries forward an existing agent's reminder state), returning the
+/// stored agent. [importer] is injectable so tests stub the decode; in
 /// production it defaults to [importBundle]. Lets a [BundleImportError]
 /// propagate (the caller surfaces an honest snackbar).
 Future<ImportedAgent> importOnDevice(
@@ -121,8 +143,7 @@ Future<ImportedAgent> importOnDevice(
 }) async {
   final decode = importer ?? importBundle;
   final agent = await decode(payload);
-  await store.save(agent);
-  return agent;
+  return saveImported(agent, store: store);
 }
 
 /// After a standalone import, registers the reminder's notifications.
@@ -312,7 +333,8 @@ Future<void> importStandaloneWithConsent({
   ref.read(standaloneModeProvider.notifier).state = true;
   messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
   try {
-    await ref.read(agentStoreProvider).save(decoded);
+    // Carry forward any existing enabled/snooze state on a same-name re-import.
+    await saveImported(decoded, store: ref.read(agentStoreProvider));
     // Reminder agents start firing immediately; conversational ones don't.
     await scheduleImportedReminder(
       decoded,
