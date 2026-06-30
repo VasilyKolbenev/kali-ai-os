@@ -26,6 +26,47 @@ class STTResult:
         return len(self.text.strip()) == 0
 
 
+#: Multi-word YouTube-style hallucinations Whisper emits on silence/noise.
+#: Matched anchored (text equals / starts with / ends with), never as an
+#: arbitrary substring, so real commands are never blanked.
+_HALLUCINATION_PHRASES: tuple[str, ...] = (
+    "субтитры сделал",
+    "субтитры делал",
+    "субтитры создавал",
+    "а на этом у меня всё",
+    "спасибо за просмотр",
+)
+
+#: Single-word YouTube-credit needles. Whisper emits these standalone on
+#: silence; they're common Russian words inside real sentences, so they only
+#: count as a hallucination when they ARE the whole utterance.
+_HALLUCINATION_WORDS: frozenset[str] = frozenset({"редактор", "корректор"})
+
+
+def _is_hallucination(text: str) -> bool:
+    """Return True if ``text`` is a known Whisper silence-hallucination.
+
+    Uses anchored matching (equality, prefix, or suffix for phrases; whole-text
+    equality for single-word needles) instead of substring containment so valid
+    utterances that merely contain a common word are kept.
+
+    Args:
+        text: The transcribed text to classify.
+
+    Returns:
+        True if the text should be dropped as a hallucination.
+    """
+    lowered = text.strip().lower().rstrip(".!?,")
+    if not lowered:
+        return False
+    if lowered in _HALLUCINATION_WORDS:
+        return True
+    return any(
+        lowered == phrase or lowered.startswith(phrase) or lowered.endswith(phrase)
+        for phrase in _HALLUCINATION_PHRASES
+    )
+
+
 class SpeechToText:
     """Transcribes audio to text using faster-whisper.
 
@@ -118,12 +159,14 @@ class SpeechToText:
         text_parts = [segment.text.strip() for segment in segments]
         text = " ".join(text_parts).strip()
 
-        # Drop common Whisper hallucinations from silence/noise
-        lower_text = text.lower()
-        if any(phrase in lower_text for phrase in [
-            "субтитр", "редактор", "корректор", "а на этом у меня всё",
-            "спасибо за просмотр"
-        ]):
+        # Drop common Whisper hallucinations from silence/noise. Match ANCHORED,
+        # not arbitrary substrings: a bare `in` check blanked valid commands that
+        # merely contained a common word (e.g. «напомни позвонить редактору» was
+        # killed by the 'редактор' needle). Multi-word YouTube-credit phrases are
+        # matched as prefix/suffix; the single-word credit needles
+        # ('редактор'/'корректор') only count when the whole utterance is just
+        # that word, never inside a real sentence.
+        if _is_hallucination(text):
             text = ""
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
