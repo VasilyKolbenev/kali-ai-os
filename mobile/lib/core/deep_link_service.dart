@@ -224,7 +224,13 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
 
     if (ip == null ||
         shouldImportOnDevice(standaloneMode: standalone, serverIp: ip)) {
-      await _importStandalone(data, t, messenger);
+      await importStandaloneWithConsent(
+        data: data,
+        ref: ref,
+        t: t,
+        messenger: messenger,
+        confirmContext: navigatorKey.currentContext,
+      );
       return;
     }
 
@@ -253,40 +259,109 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
     }
   }
 
-  /// On-device import: decode + persist the bundle, then route into the main
-  /// screen (standalone mode surfaces «Мои агенты»). Honest failure — a
-  /// [BundleImportError] (or anything else) shows the existing import-failed
-  /// snackbar and never crashes.
-  Future<void> _importStandalone(
-    String data,
-    L10n t,
-    ScaffoldMessengerState? messenger,
-  ) async {
-    ref.read(standaloneModeProvider.notifier).state = true;
-    messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
-    try {
-      final agent =
-          await importOnDevice(data, store: ref.read(agentStoreProvider));
-      // Reminder agents start firing immediately; conversational ones don't.
-      await scheduleImportedReminder(
-        agent,
-        scheduler: ref.read(reminderSchedulerProvider),
-        gateway: ref.read(notificationGatewayProvider),
-        now: DateTime.now(),
-      );
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(
-        SnackBar(content: Text(t.importedStandalone(agent.name))),
-      );
-      navigatorKey.currentState?.pushReplacement(
-        MaterialPageRoute(builder: (_) => const MainScreen()),
-      );
-    } catch (_) {
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
-    }
-  }
-
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+/// Decodes a `kali://import` bundle, asks the user to confirm, and only then
+/// installs it on-device.
+///
+/// Consent-gated: `kali://import` brings an *untrusted* agent from a stranger's
+/// share link, so we never silently persist it, flip to standalone, or request
+/// notification permission. We decode first ([decoder], default [importBundle])
+/// — a pure, side-effect-free step — to show the parsed name in a confirm sheet
+/// ([confirm], default [showImportConsent]); the persist + permission + schedule
+/// side effects run only after an explicit Confirm. A decode failure or a
+/// cancel both leave the store and OS untouched. Injectable seams keep it
+/// widget-testable without app_links or native channels.
+Future<void> importStandaloneWithConsent({
+  required String data,
+  required WidgetRef ref,
+  required L10n t,
+  required ScaffoldMessengerState? messenger,
+  required BuildContext? confirmContext,
+  Future<ImportedAgent> Function(String)? decoder,
+  Future<bool> Function(BuildContext, ImportedAgent, L10n)? confirm,
+}) async {
+  final decode = decoder ?? importBundle;
+  final ask = confirm ?? showImportConsent;
+
+  // Decode first (pure) so the confirm sheet can show the real name; a bad
+  // bundle fails honestly here, before any side effect.
+  final ImportedAgent decoded;
+  try {
+    decoded = await decode(data);
+  } catch (_) {
+    messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
+    return;
+  }
+
+  final ctx = confirmContext;
+  // No live UI to confirm against (no Navigator yet, or it was torn down across
+  // the decode await) — abort without any side effect.
+  if (ctx == null || !ctx.mounted) return;
+  final ok = await ask(ctx, decoded, t);
+  if (!ok) return; // user declined: nothing persisted, no permission prompt
+
+  // Confirmed: now flip to standalone, persist, request permission + schedule.
+  ref.read(standaloneModeProvider.notifier).state = true;
+  messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
+  try {
+    await ref.read(agentStoreProvider).save(decoded);
+    // Reminder agents start firing immediately; conversational ones don't.
+    await scheduleImportedReminder(
+      decoded,
+      scheduler: ref.read(reminderSchedulerProvider),
+      gateway: ref.read(notificationGatewayProvider),
+      now: DateTime.now(),
+    );
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      SnackBar(content: Text(t.importedStandalone(decoded.name))),
+    );
+    navigatorKey.currentState?.pushReplacement(
+      MaterialPageRoute(builder: (_) => const MainScreen()),
+    );
+  } catch (_) {
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
+  }
+}
+
+/// Shows the import-consent dialog for [agent] and resolves to the user's
+/// choice (true = install). One extra tap, to keep the UGC flow frictionless
+/// while never installing a stranger's agent silently.
+Future<bool> showImportConsent(
+  BuildContext context,
+  ImportedAgent agent,
+  L10n t,
+) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(t.importConfirmTitle),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(t.importConfirmBody(agent.name)),
+          if (agent.description.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(agent.description),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: Text(t.importConfirmCancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text(t.importConfirmInstall),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
 }

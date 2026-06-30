@@ -10,8 +10,14 @@ class FakeNotificationGateway implements NotificationGateway {
   /// Value returned by [requestPermission]; flip to simulate a denial.
   bool permission = true;
 
+  /// Whether [requestPermission] has been called (consent-gating assertions).
+  bool permissionRequested = false;
+
   @override
-  Future<bool> requestPermission() async => permission;
+  Future<bool> requestPermission() async {
+    permissionRequested = true;
+    return permission;
+  }
 
   @override
   Future<void> scheduleAt(int id, DateTime when, String t, String b) async =>
