@@ -4,11 +4,14 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'dart:ui';
 import '../core/theme.dart';
 import '../core/l10n.dart';
+import '../core/standalone_mode.dart';
 import 'dashboard_screen.dart';
 import 'voice_screen.dart';
 import 'chat_screen.dart';
 import 'agent_store_screen.dart';
 import 'settings_screen.dart';
+import 'my_agents_screen.dart';
+import 'llm_settings_screen.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -20,24 +23,50 @@ class MainScreen extends ConsumerStatefulWidget {
 class _MainScreenState extends ConsumerState<MainScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const DashboardScreen(),
-    const VoiceScreen(),
-    const ChatScreen(),
-    const AgentStoreScreen(),
-    const SettingsScreen(),
+  static const List<Widget> _tetheredScreens = [
+    DashboardScreen(),
+    VoiceScreen(),
+    ChatScreen(),
+    AgentStoreScreen(),
+    SettingsScreen(),
   ];
+
+  static const List<Widget> _standaloneScreens = [
+    MyAgentsScreen(),
+    LlmSettingsScreen(),
+  ];
+
+  /// Nav items (inactive icon, active icon, label) for the current mode.
+  List<({IconData icon, IconData active, String label})> _navItems(L10n t, bool standalone) {
+    if (standalone) {
+      return [
+        (icon: Icons.smart_toy_outlined, active: Icons.smart_toy_rounded, label: t.myAgentsTitle),
+        (icon: Icons.settings_outlined, active: Icons.settings_rounded, label: t.navSettings),
+      ];
+    }
+    return [
+      (icon: Icons.dashboard_outlined, active: Icons.dashboard_rounded, label: t.navHome),
+      (icon: Icons.mic_none_rounded, active: Icons.mic_rounded, label: t.navVoice),
+      (icon: Icons.chat_bubble_outline_rounded, active: Icons.chat_bubble_rounded, label: t.navChat),
+      (icon: Icons.smart_toy_outlined, active: Icons.smart_toy_rounded, label: t.navAgents),
+      (icon: Icons.settings_outlined, active: Icons.settings_rounded, label: t.navSettings),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = L10n.of(ref);
+    final standalone = ref.watch(standaloneModeProvider);
+    final screens = standalone ? _standaloneScreens : _tetheredScreens;
+    final navItems = _navItems(t, standalone);
+    final index = _currentIndex.clamp(0, screens.length - 1);
 
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          _screens[_currentIndex],
-          
+          screens[index],
+
           // Custom Glassmorphic Bottom Navigation
           Positioned(
             left: 20,
@@ -64,11 +93,8 @@ class _MainScreenState extends ConsumerState<MainScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      _buildNavItem(0, Icons.dashboard_outlined, Icons.dashboard_rounded, t.navHome),
-                      _buildNavItem(1, Icons.mic_none_rounded, Icons.mic_rounded, t.navVoice),
-                      _buildNavItem(2, Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded, t.navChat),
-                      _buildNavItem(3, Icons.smart_toy_outlined, Icons.smart_toy_rounded, t.navAgents),
-                      _buildNavItem(4, Icons.settings_outlined, Icons.settings_rounded, t.navSettings),
+                      for (var i = 0; i < navItems.length; i++)
+                        _buildNavItem(i, navItems[i].icon, navItems[i].active, navItems[i].label),
                     ],
                   ),
                 ),

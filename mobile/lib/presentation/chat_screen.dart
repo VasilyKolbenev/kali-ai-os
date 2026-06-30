@@ -6,12 +6,7 @@ import 'dart:ui';
 import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/l10n.dart';
-
-class ChatMessage {
-  final String text;
-  final bool isUser;
-  ChatMessage(this.text, this.isUser);
-}
+import 'widgets/message_bubble.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -150,52 +145,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       controller: _scrollController,
                       padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 40),
                       itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = _messages[index];
-                        return Align(
-                          alignment: msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-                            decoration: BoxDecoration(
-                              color: msg.isUser
-                                  ? AppTheme.glassSurface
-                                  : AppTheme.primary.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(20),
-                                topRight: const Radius.circular(20),
-                                bottomLeft: Radius.circular(msg.isUser ? 20 : 4),
-                                bottomRight: Radius.circular(msg.isUser ? 4 : 20),
-                              ),
-                              border: Border.all(
-                                color: msg.isUser
-                                    ? AppTheme.glassBorder
-                                    : AppTheme.primary.withValues(alpha: 0.3),
-                                width: 1,
-                              ),
-                              boxShadow: [
-                                if (!msg.isUser)
-                                  BoxShadow(
-                                    color: AppTheme.primary.withValues(alpha: 0.12),
-                                    blurRadius: 18,
-                                    spreadRadius: -4,
-                                    offset: const Offset(0, 6),
-                                  )
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              child: Text(
-                                msg.text,
-                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                  color: Colors.white,
-                                  fontWeight: msg.isUser ? FontWeight.normal : FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.1),
-                        );
-                      },
+                      itemBuilder: (context, index) =>
+                          MessageBubble(message: _messages[index]),
                     ),
               ),
               

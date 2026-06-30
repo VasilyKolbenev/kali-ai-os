@@ -5,9 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../presentation/main_screen.dart';
+import '../standalone/agent_store.dart';
+import '../standalone/bundle_importer.dart';
+import '../standalone/imported_agent.dart';
 import 'config.dart';
 import 'http_client.dart';
 import 'l10n.dart';
+import 'standalone_mode.dart';
 import 'token_store.dart';
 import 'websocket_client.dart';
 
@@ -62,6 +66,31 @@ Future<void> applyPairing(
 }) async {
   await store.saveToken(info.token);
   holder.set(info.token);
+}
+
+/// Decides whether a `kali://import` should install on-device (standalone)
+/// rather than via the paired desktop server.
+///
+/// On-device when the user explicitly chose standalone mode, OR when no desktop
+/// is paired (no server IP). Pure so the branch is unit-testable.
+bool shouldImportOnDevice({required bool standaloneMode, required String? serverIp}) =>
+    standaloneMode || serverIp == null;
+
+/// Imports a `kali://import` bundle on-device and persists it.
+///
+/// Decodes [payload] via [importBundle] then saves to [store], returning the
+/// imported agent. [importer] is injectable so tests stub the decode; in
+/// production it defaults to [importBundle]. Lets a [BundleImportError]
+/// propagate (the caller surfaces an honest snackbar).
+Future<ImportedAgent> importOnDevice(
+  String payload, {
+  required AgentStore store,
+  Future<ImportedAgent> Function(String)? importer,
+}) async {
+  final decode = importer ?? importBundle;
+  final agent = await decode(payload);
+  await store.save(agent);
+  return agent;
 }
 
 /// Listens for `kali://import?n=<name>&d=<base64url bundle>` deep links — the
@@ -147,8 +176,11 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
     final messenger = scaffoldMessengerKey.currentState;
 
     final ip = ref.read(serverIpProvider);
-    if (ip == null) {
-      messenger?.showSnackBar(SnackBar(content: Text(t.importConnectFirst)));
+    final standalone = ref.read(standaloneModeProvider);
+
+    if (ip == null ||
+        shouldImportOnDevice(standaloneMode: standalone, serverIp: ip)) {
+      await _importStandalone(data, t, messenger);
       return;
     }
 
@@ -171,6 +203,32 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
       } else {
         messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
       }
+    } catch (_) {
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
+    }
+  }
+
+  /// On-device import: decode + persist the bundle, then route into the main
+  /// screen (standalone mode surfaces «Мои агенты»). Honest failure — a
+  /// [BundleImportError] (or anything else) shows the existing import-failed
+  /// snackbar and never crashes.
+  Future<void> _importStandalone(
+    String data,
+    L10n t,
+    ScaffoldMessengerState? messenger,
+  ) async {
+    ref.read(standaloneModeProvider.notifier).state = true;
+    messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
+    try {
+      final agent = await importOnDevice(data, store: FileAgentStore());
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
+        SnackBar(content: Text(t.importedStandalone(agent.name))),
+      );
+      navigatorKey.currentState?.pushReplacement(
+        MaterialPageRoute(builder: (_) => const MainScreen()),
+      );
     } catch (_) {
       messenger?.hideCurrentSnackBar();
       messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));

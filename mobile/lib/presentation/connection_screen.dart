@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../core/websocket_client.dart';
 import '../core/config.dart';
 import '../core/l10n.dart';
+import '../core/standalone_mode.dart';
 import '../core/theme.dart';
 import 'main_screen.dart';
 
@@ -56,6 +57,13 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     } finally {
       if (mounted) setState(() => _isConnecting = false);
     }
+  }
+
+  void _useWithoutComputer() {
+    ref.read(standaloneModeProvider.notifier).state = true;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const MainScreen()),
+    );
   }
 
   @override
@@ -132,7 +140,19 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                     : Text(t.connectButton, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ).animate().fadeIn(delay: 500.ms),
-              
+
+              const SizedBox(height: 8),
+
+              // Standalone entry: skip the desktop, run agents on-device with a
+              // cloud LLM under the user's own key.
+              TextButton(
+                onPressed: _useWithoutComputer,
+                child: Text(
+                  t.useWithoutComputer,
+                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                ),
+              ).animate().fadeIn(delay: 550.ms),
+
               const SizedBox(height: 16),
 
               // QR pairing hint for non-tech users on a token-enforced LAN
