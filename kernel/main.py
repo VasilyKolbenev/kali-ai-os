@@ -740,7 +740,30 @@ def create_app(
                 )), loop
             )
 
-        asyncio.create_task(_download_task())
+        def _on_download_done(task: "asyncio.Task[None]") -> None:
+            """Surface a stalled/failed download as an event so the UI can react.
+
+            Without this a GC-cancelled or crashed task leaves the onboarding
+            UI hanging on a download_complete that never arrives.
+            """
+            if task.cancelled():
+                exc: BaseException | None = asyncio.CancelledError()
+            else:
+                exc = task.exception()
+            if exc is None:
+                return
+            logger.error("Model download task exited abnormally", exc_info=exc)
+            asyncio.ensure_future(
+                request.app.state.event_bus.publish(Event(
+                    topic="system.models.download_failed",
+                    source="kernel",
+                    payload={"error": str(exc) or type(exc).__name__},
+                ))
+            )
+
+        task = asyncio.create_task(_download_task())
+        request.app.state._model_download_task = task
+        task.add_done_callback(_on_download_done)
         return {"status": "started", "message": "Download task started"}
 
     @app.get("/health")

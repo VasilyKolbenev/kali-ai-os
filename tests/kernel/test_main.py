@@ -491,6 +491,67 @@ class TestWebSocket:
                 assert response["type"] == "error"
 
 
+class TestModelDownloadTaskLifetime:
+    """The first-run download task must be retained + report failures honestly.
+
+    Fire-and-forget create_task could be GC-cancelled, stalling the download so
+    download_complete never fires and the onboarding UI hangs forever.
+    """
+
+    async def test_download_retains_live_task(self, app, client: AsyncClient) -> None:
+        import threading
+
+        import kernel.model_downloader as md
+
+        release = threading.Event()
+
+        def _block(name, url, cb):  # type: ignore[no-untyped-def]
+            release.wait(timeout=5.0)
+            return True
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_block):
+            resp = await client.post("/models/download")
+            assert resp.json()["status"] == "started"
+            task = app.state._model_download_task
+            assert isinstance(task, asyncio.Task)
+            assert not task.done()
+            release.set()
+            task.cancel()
+
+    async def test_download_failure_publishes_failed_event(
+        self, app, client: AsyncClient
+    ) -> None:
+        import kernel.model_downloader as md
+
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        app.state.event_bus.subscribe("system.models.download_failed", handler)
+
+        def _boom(name, url, cb):  # type: ignore[no-untyped-def]
+            raise OSError("disk full")
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_boom):
+            await client.post("/models/download")
+            task = app.state._model_download_task
+            with pytest.raises(OSError):
+                await task
+
+        # done-callback fires after the task finishes and schedules the publish
+        # on the loop; poll a few ticks for it to run.
+        for _ in range(20):
+            if received:
+                break
+            await asyncio.sleep(0.01)
+        assert any(e.topic == "system.models.download_failed" for e in received)
+
+
 class _StubSocialCatalog:
     """A stand-in catalog_client recording social calls + returning canned results.
 
