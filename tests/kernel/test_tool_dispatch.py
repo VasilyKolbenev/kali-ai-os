@@ -106,3 +106,59 @@ async def test_non_tool_name_returns_none() -> None:
     router = _router_returning("x")
     call = ToolCall(name="bare_name_no_separator", arguments={})
     assert await execute_tool_call(state, router, call, [], "hi") is None
+
+
+async def test_execute_tool_calls_dispatches_all_and_combines() -> None:
+    """A multi-intent turn must run EVERY tool call (capped), not just the first,
+    and surface all results — chat/voice/remote share this one path."""
+    from kernel.tool_dispatch import execute_tool_calls
+
+    state = MagicMock()
+    skill = MagicMock()
+    skill.protocol = "skill"
+    state.plugin_registry.get.return_value = skill
+    state.skill_executor.execute = AsyncMock(return_value={"ok": True})
+
+    # Each second-pass summary echoes the call so we can assert both appear.
+    router = MagicMock()
+    summaries = iter(["Записал воду.", "Поставил напоминание."])
+
+    async def _route(_req):  # type: ignore[no-untyped-def]
+        return LLMResponse(
+            text=next(summaries), tool_calls=None, provider_used="openai", latency_ms=0
+        )
+
+    router.route = AsyncMock(side_effect=_route)
+
+    calls = [
+        ToolCall(name="water-tracker__log", arguments={"amount": 200}),
+        ToolCall(name="reminders__add", arguments={"text": "позвонить"}),
+    ]
+    out = await execute_tool_calls(state, router, calls, [], "запиши воду и напомни позвонить")
+
+    assert out is not None
+    text, results, _source = out
+    # Both tools dispatched.
+    assert state.skill_executor.execute.await_count == 2
+    # Both NL results present in the combined reply — neither silently dropped.
+    assert "Записал воду." in text
+    assert "Поставил напоминание." in text
+    assert len(results) == 2
+
+
+async def test_execute_tool_calls_caps_at_three() -> None:
+    """More than the cap is bounded — we don't fan out an unbounded chain."""
+    from kernel.tool_dispatch import execute_tool_calls
+
+    state = MagicMock()
+    skill = MagicMock()
+    skill.protocol = "skill"
+    state.plugin_registry.get.return_value = skill
+    state.skill_executor.execute = AsyncMock(return_value={"ok": True})
+    router = _router_returning("ок")
+
+    calls = [ToolCall(name=f"a__b{i}", arguments={}) for i in range(5)]
+    out = await execute_tool_calls(state, router, calls, [], "много всего")
+
+    assert out is not None
+    assert state.skill_executor.execute.await_count == 3

@@ -1452,7 +1452,7 @@ def create_app(
     async def _chat_logic(request: Request) -> dict[str, Any]:
         """Internal chat logic — returns response dict using LLMRouter."""
         from kernel.llm_router import LLMRouter, LLMRequest
-        from kernel.tool_dispatch import execute_tool_call
+        from kernel.tool_dispatch import execute_tool_calls
 
         body = await request.json()
         text = body.get("text", "")
@@ -1502,12 +1502,14 @@ def create_app(
         # 4. Handle tool calls — shared execution path with the voice pipelines
         # (kernel/tool_dispatch.py) so chat and voice can never diverge again.
         if response.tool_calls:
-            call = response.tool_calls[0]
             try:
-                dispatched = await execute_tool_call(s, router, call, req.context, text)
+                dispatched = await execute_tool_calls(
+                    s, router, response.tool_calls, req.context, text
+                )
             except Exception as e:
-                logger.exception("Tool execution failed for %s", call.name)
-                return {"response": f"Error executing {call.name}: {e}", "source": "system"}
+                names = ", ".join(c.name for c in response.tool_calls)
+                logger.exception("Tool execution failed for %s", names)
+                return {"response": f"Error executing {names}: {e}", "source": "system"}
             if dispatched is not None:
                 final_text, result, source = dispatched
                 s.memory.add_turn("user", text)

@@ -205,18 +205,18 @@ class RemoteVoicePipeline:
         if tail:
             await self._emit_tts_for(tail)
 
-        # If the model asked for a tool, EXECUTE it (shared path with chat) and
-        # speak the result — previously the call was only announced and the
-        # pipeline went idle, so the voice command silently did nothing.
+        # If the model asked for tools, EXECUTE them (shared path with chat) and
+        # speak the combined result — previously only the first call ran (and
+        # earlier none did), so multi-intent voice commands lost work.
         final_text = response.text
         if response.tool_calls and self._app_state is not None:
-            from kernel.tool_dispatch import execute_tool_call
+            from kernel.tool_dispatch import execute_tool_calls
 
             try:
-                dispatched = await execute_tool_call(
+                dispatched = await execute_tool_calls(
                     self._app_state,
                     self._llm,
-                    response.tool_calls[0],
+                    response.tool_calls,
                     self._context[-10:],
                     stt_result.text,
                 )
