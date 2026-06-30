@@ -1,15 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 import '../core/l10n.dart';
 import '../core/theme.dart';
 import '../standalone/agent_store.dart';
 import '../standalone/imported_agent.dart';
+import '../standalone/scheduling/notification_gateway.dart';
+import '../standalone/scheduling/reminder_scheduler.dart';
 import 'standalone_chat_screen.dart';
 
 /// The on-device [AgentStore]. Overridden in tests with a fake so no native
 /// `path_provider` channel is touched.
 final agentStoreProvider = Provider<AgentStore>((ref) => FileAgentStore());
+
+/// The native notification gateway. Overridden in tests with a fake so no
+/// native plugin channel is touched.
+final notificationGatewayProvider = Provider<NotificationGateway>(
+  (ref) => LocalNotificationGateway(FlutterLocalNotificationsPlugin()),
+);
+
+/// Schedules reminder agents from the on-device store via the gateway.
+final reminderSchedulerProvider = Provider<ReminderScheduler>(
+  (ref) => ReminderScheduler(
+    store: ref.read(agentStoreProvider),
+    gateway: ref.read(notificationGatewayProvider),
+  ),
+);
 
 /// Lists the agents imported on-device (standalone mode). Tapping one opens a
 /// conversation with it via the cloud LLM ([StandaloneChatScreen]).

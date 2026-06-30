@@ -12,6 +12,7 @@ import 'agent_store_screen.dart';
 import 'settings_screen.dart';
 import 'my_agents_screen.dart';
 import 'llm_settings_screen.dart';
+// reminderSchedulerProvider is declared in my_agents_screen.dart.
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -20,8 +21,30 @@ class MainScreen extends ConsumerStatefulWidget {
   ConsumerState<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends ConsumerState<MainScreen> {
+class _MainScreenState extends ConsumerState<MainScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Top up scheduled reminders whenever the app returns to the foreground —
+    // the app-open half of the pre-schedule + top-up strategy.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(reminderSchedulerProvider).syncAll(DateTime.now());
+    }
+  }
 
   static const List<Widget> _tetheredScreens = [
     DashboardScreen(),
