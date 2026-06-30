@@ -1,5 +1,6 @@
 """Tests for voice pipeline orchestrator."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -212,10 +213,19 @@ class TestPipelineLifecycleEvents:
 
         event_bus.subscribe("voice.pipeline", handler)
 
-        # Avoid touching real mic / spawning the background loop
+        # Avoid touching real mic / spawning the real background loop, but
+        # return a real (immediately-cancelled) task so the retained-ref +
+        # done-callback wiring in start() works.
         pipeline._recorder.start = AsyncMock()
+
+        def _fake_create_task(coro):  # type: ignore[no-untyped-def]
+            coro.close()
+            task = asyncio.get_event_loop().create_task(asyncio.sleep(0))
+            task.cancel()
+            return task
+
         monkeypatch.setattr(
-            "kernel.voice.pipeline.asyncio.create_task", lambda _coro: None
+            "kernel.voice.pipeline.asyncio.create_task", _fake_create_task
         )
 
         await pipeline.start()
@@ -238,3 +248,65 @@ class TestPipelineLifecycleEvents:
         await pipeline.stop()
 
         assert any(p["active"] is False for p in received)
+
+
+class TestMainLoopTaskLifetime:
+    """The main loop task must be retained so the GC cannot cancel it mid-run."""
+
+    async def test_start_retains_main_loop_task(
+        self, pipeline: VoicePipeline, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import gc
+
+        pipeline._recorder.start = AsyncMock()
+        # Keep the loop alive long enough to inspect: make read_chunk block.
+        never = asyncio.Event()
+
+        async def _block() -> AudioChunk:
+            await never.wait()
+            return AudioChunk(data=np.zeros(512, dtype=np.float32), sample_rate=16000)
+
+        pipeline._recorder.read_chunk = _block  # type: ignore[method-assign]
+        pipeline._recorder._recording = True
+
+        await pipeline.start()
+        # Let the loop body start.
+        await asyncio.sleep(0)
+        gc.collect()
+
+        task = pipeline._main_loop_task
+        assert task is not None
+        assert isinstance(task, asyncio.Task)
+        assert task.cancelled() is False
+        assert not task.done()
+
+        # Cleanup.
+        never.set()
+        pipeline._started = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def test_stop_cancels_main_loop_task(
+        self, pipeline: VoicePipeline
+    ) -> None:
+        pipeline._recorder.start = AsyncMock()
+        pipeline._recorder.stop = AsyncMock()
+        never = asyncio.Event()
+
+        async def _block() -> AudioChunk:
+            await never.wait()
+            return AudioChunk(data=np.zeros(512, dtype=np.float32), sample_rate=16000)
+
+        pipeline._recorder.read_chunk = _block  # type: ignore[method-assign]
+        pipeline._recorder._recording = True
+
+        await pipeline.start()
+        await asyncio.sleep(0)
+        task = pipeline._main_loop_task
+        assert task is not None
+
+        await pipeline.stop()
+        assert task.done()

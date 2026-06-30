@@ -91,6 +91,9 @@ class VoicePipeline:
         self._state = PipelineState.IDLE
         self._context: list[dict[str, Any]] = []
         self._started = False
+        # Strong reference to the background loop task. Without it the task can
+        # be garbage-collected and silently cancelled mid-run, killing capture.
+        self._main_loop_task: asyncio.Task[None] | None = None
 
         # Components (lazy-initialized)
         self._recorder = AudioRecorder()
@@ -165,11 +168,28 @@ class VoicePipeline:
         await self._set_state(PipelineState.IDLE)
         await self._publish_pipeline_status(active=True)
         logger.info("Voice pipeline started (mode=%s)", self.mode)
-        asyncio.create_task(self._main_loop())
+        # Retain a strong reference so the GC cannot cancel the loop mid-run.
+        self._main_loop_task = asyncio.create_task(self._main_loop())
+        self._main_loop_task.add_done_callback(self._on_main_loop_done)
+
+    def _on_main_loop_done(self, task: asyncio.Task[None]) -> None:
+        """Log an unexpected main-loop exit (a clean cancel is not an error)."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Voice pipeline main loop exited unexpectedly", exc_info=exc)
 
     async def stop(self) -> None:
         """Stop the voice pipeline and audio capture."""
         self._started = False
+        if self._main_loop_task is not None:
+            self._main_loop_task.cancel()
+            try:
+                await self._main_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._main_loop_task = None
         await self._recorder.stop()
         self._reset_wake_state()
         await self._set_state(PipelineState.IDLE)
