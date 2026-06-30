@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import 'imported_agent.dart';
+import 'safe_name.dart';
 
 /// Local persistence of imported agents (one JSON file per agent).
 abstract class AgentStore {
@@ -19,9 +20,6 @@ abstract class AgentStore {
   /// Removes the agent named [name] (no-op if absent).
   Future<void> delete(String name);
 }
-
-/// Agent names accepted by the export gate: lowercase latin, digits, hyphen.
-final RegExp _safeName = RegExp(r'^[a-z0-9-]+$');
 
 /// File-backed [AgentStore] writing `<baseDir>/<name>.json`.
 ///
@@ -49,7 +47,7 @@ class FileAgentStore implements AgentStore {
   File _fileFor(Directory dir, String name) => File('${dir.path}/$name.json');
 
   void _checkName(String name) {
-    if (!_safeName.hasMatch(name)) {
+    if (!kSafeAgentName.hasMatch(name)) {
       throw ArgumentError.value(name, 'name', 'unsafe agent name');
     }
   }

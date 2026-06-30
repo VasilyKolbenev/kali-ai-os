@@ -10,7 +10,7 @@ class ImportedAgent {
     required this.installedAt,
   });
 
-  /// Lowercase-latin agent name (the export gate enforces this form).
+  /// Agent name validated at the import boundary (lowercase latin, digits, hyphen).
   final String name;
 
   /// Human-readable description from the SKILL.md frontmatter.
