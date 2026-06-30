@@ -82,4 +82,20 @@ def test_generate_skill_dedups_on_collision(tmp_path) -> None:
     assert first_manifest["description"] == "first foo"
 
 
-# --- Finding 3 tests appended in a later commit ---
+# --- Finding 3: zero-minute interval must not yield an invalid cron ---
+
+
+def test_parse_interval_minutes_clamps_zero() -> None:
+    from kernel.builder.skill_generator import _parse_interval_minutes
+
+    result = _parse_interval_minutes("каждые 0 минут")
+    assert result is None or result >= 1
+
+
+def test_with_schedule_zero_minutes_valid_cron() -> None:
+    from croniter import croniter
+
+    new = _with_schedule({"interval": "каждые 0 минут"})
+    schedule = new.get("schedule")
+    if schedule and schedule.get("cron"):
+        assert croniter.is_valid(schedule["cron"])

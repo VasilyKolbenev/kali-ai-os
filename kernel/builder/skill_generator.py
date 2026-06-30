@@ -72,7 +72,7 @@ def _parse_interval_minutes(text: str) -> int | None:
     t = text.lower()
     m = re.search(r"(\d+)\s*мин", t)
     if m:
-        return int(m.group(1))
+        return max(1, int(m.group(1)))
     if "пол" in t and "час" in t:
         return 30
     return None
