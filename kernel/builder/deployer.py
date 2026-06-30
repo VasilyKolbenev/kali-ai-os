@@ -19,20 +19,40 @@ def _cleanup_dir(path: Path) -> None:
         logger.warning("Rollback cleanup failed for %s: %s", path, exc)
 
 
+def _rollback(skill_dir: Path, created: bool) -> None:
+    """Remove the skill directory on failure, but only if WE created it.
+
+    When ``created`` is False the directory pre-existed (a prior agent), so
+    deleting it on rollback would destroy that agent's data — skip it.
+    """
+    if created:
+        _cleanup_dir(skill_dir)
+    else:
+        logger.warning(
+            "Skipped rollback removal of pre-existing dir %s (data-loss guard)",
+            skill_dir,
+        )
+
+
 async def deploy_skill(
     skill_dir: Path,
     skill_executor: Any,
     scheduler: Any | None = None,
+    created: bool = True,
 ) -> dict[str, Any]:
     """Deploy a generated skill into the running system with rollback on failure.
 
     If load_skill or cron registration fails, the skill directory is removed
-    so the system is left in a clean state.
+    so the system is left in a clean state — but only when ``created`` is True.
+    When ``created`` is False the directory pre-existed and is never removed on
+    rollback, so a prior agent can never be deleted by a colliding deploy.
 
     Args:
         skill_dir: Path to skill directory (must contain skill.yaml)
         skill_executor: SkillExecutor instance to load skill into
         scheduler: Optional Scheduler for cron registration
+        created: Whether ``skill_dir`` was newly created by this deploy. If
+            False, rollback skips removing the directory (data-loss guard).
 
     Returns:
         {"status": "deployed", "name": str} or {"status": "error", "message": str}
@@ -43,7 +63,7 @@ async def deploy_skill(
         skill_executor.load_skill(skill_dir)
     except Exception as e:
         logger.exception("Failed to load skill '%s' — rolling back", name)
-        _cleanup_dir(skill_dir)
+        _rollback(skill_dir, created)
         return {"status": "error", "message": f"load failed: {e}"}
 
     # Register cron — if this fails, unload skill + remove dir
@@ -73,7 +93,7 @@ async def deploy_skill(
                     skill_executor.unload_skill(name)
             except Exception:
                 pass
-            _cleanup_dir(skill_dir)
+            _rollback(skill_dir, created)
             return {"status": "error", "message": f"schedule failed: {e}"}
 
     logger.info("Deployed skill: %s", name)

@@ -155,6 +155,9 @@ class BuilderFlow:
         if session.spec is None:
             raise ValueError("Cannot deploy: wizard not complete")
 
+        # generate_skill de-dups a colliding slug, so the returned directory is
+        # always freshly created here — pass created=True so rollback may safely
+        # remove it without ever touching a pre-existing agent.
         skill_dir = generate_skill(
             name=session.spec["name"],
             template=session.spec["template"],
@@ -168,6 +171,7 @@ class BuilderFlow:
                 skill_dir=skill_dir,
                 skill_executor=self._executor,
                 scheduler=self._scheduler,
+                created=True,
             )
             # Make the deployed skill live in the registry so the assistant can
             # actually find/call it (LLM tool palette + GET /agents) without a

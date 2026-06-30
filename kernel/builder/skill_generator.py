@@ -109,6 +109,28 @@ def _with_schedule(config: dict[str, Any]) -> dict[str, Any]:
     return new
 
 
+def _dedup_name(agents_dir: Path, name: str) -> str:
+    """Return a directory name under ``agents_dir`` that does not yet exist.
+
+    If ``name`` is free it is returned unchanged; otherwise a numeric suffix
+    (``-2``, ``-3``, …) is appended until a free name is found. This prevents a
+    colliding slug from silently overwriting a pre-existing agent.
+
+    Args:
+        agents_dir: Base directory the skill directory will be created under.
+        name: Desired (already-validated) kebab-case skill name.
+
+    Returns:
+        A name guaranteed not to collide with an existing directory.
+    """
+    if not (agents_dir / name).exists():
+        return name
+    suffix = 2
+    while (agents_dir / f"{name}-{suffix}").exists():
+        suffix += 1
+    return f"{name}-{suffix}"
+
+
 def generate_skill(
     name: str,
     template: str,
@@ -142,8 +164,14 @@ def generate_skill(
     # deployer reads, so a time-based skill actually gets a cron registered.
     config = _with_schedule(config)
 
+    # De-dup a colliding slug so a voice-built skill never silently overwrites
+    # a pre-existing agent (data loss). The first 'foo' keeps its dir; the next
+    # becomes 'foo-2', etc.
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    name = _dedup_name(agents_dir, name)
+
     skill_dir = agents_dir / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.mkdir(parents=True, exist_ok=False)
 
     tools = _TEMPLATE_TOOLS.get(template, _DEFAULT_TOOLS)
     capabilities = [f"{name}.{tool['name']}" for tool in tools]
