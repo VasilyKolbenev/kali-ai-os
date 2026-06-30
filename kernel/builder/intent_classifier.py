@@ -38,6 +38,12 @@ _TEMPLATE_PATTERNS: list[tuple[str, list[str]]] = [
     ),
 ]
 
+# Templates the wizard/generator can actually materialise. An LLM-returned
+# template outside this set is treated as a hallucination.
+_VALID_TEMPLATES: frozenset[str] = frozenset(
+    {"tracker", "reminder", "monitor", "notifier", "logger"}
+)
+
 _AGENT_SIGNALS: list[str] = [
     r"api", r"парс", r"integrat", r"интегр",
     r"home\s+assistant", r"telegram", r"email",
@@ -74,6 +80,27 @@ class IntentResult:
     template: str | None
     confidence: float
     reason: str
+
+
+def _safe_confidence(value: object, default: float = 0.75) -> float:
+    """Parse the LLM's confidence into a float, falling back on bad input.
+
+    The LLM occasionally returns a non-numeric confidence (e.g. ``"high"``),
+    which would raise from a bare ``float()`` and break classification. This
+    coerces such values to ``default`` instead.
+
+    Args:
+        value: Raw confidence value from the LLM response.
+        default: Value to use when ``value`` cannot be parsed.
+
+    Returns:
+        A float confidence score.
+    """
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning("LLM returned non-numeric confidence %r — using %.2f", value, default)
+        return default
 
 
 def _classify_regex(request: str) -> IntentResult:
@@ -137,11 +164,19 @@ def _classify_llm(request: str) -> IntentResult | None:
     template = data.get("template")
     if template == "null" or not template:
         template = None
+    elif template not in _VALID_TEMPLATES:
+        # LLM hallucinated a template name not in our set. For a skill this would
+        # break the wizard/deploy downstream, so drop to the regex fallback;
+        # for an agent the template is irrelevant, so just clear it.
+        logger.warning("LLM returned invalid template %r — discarding", template)
+        if type_ == "skill":
+            return None
+        template = None
 
     return IntentResult(
         type=type_,
         template=template,
-        confidence=float(data.get("confidence", 0.75)),
+        confidence=_safe_confidence(data.get("confidence")),
         reason=f"{data.get('reason', 'LLM classification')} [{provider}]",
     )
 
