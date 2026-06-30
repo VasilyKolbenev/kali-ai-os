@@ -13,6 +13,22 @@ import 'package:kali_mobile/core/standalone_mode.dart';
 import 'package:kali_mobile/core/theme.dart';
 import 'package:kali_mobile/presentation/connection_screen.dart';
 import 'package:kali_mobile/presentation/main_screen.dart';
+import 'package:kali_mobile/presentation/my_agents_screen.dart';
+import 'package:kali_mobile/standalone/agent_store.dart';
+import 'package:kali_mobile/standalone/imported_agent.dart';
+
+/// Empty in-memory store so the standalone MainScreen (which renders
+/// MyAgentsScreen) doesn't touch the native path_provider channel.
+class _EmptyStore implements AgentStore {
+  @override
+  Future<void> save(ImportedAgent agent) async {}
+  @override
+  Future<List<ImportedAgent>> list() async => const [];
+  @override
+  Future<ImportedAgent?> get(String name) async => null;
+  @override
+  Future<void> delete(String name) async {}
+}
 
 void main() {
   test('standaloneModeProvider defaults to false and toggles', () {
@@ -29,6 +45,7 @@ void main() {
     late ProviderContainer container;
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [agentStoreProvider.overrideWithValue(_EmptyStore())],
         child: Consumer(
           builder: (context, ref, _) {
             container = ProviderScope.containerOf(context);
@@ -47,7 +64,10 @@ void main() {
     expect(button, findsOneWidget);
 
     await tester.tap(button);
-    await tester.pumpAndSettle();
+    // Bounded pumps (not pumpAndSettle) — MainScreen has perpetual entry
+    // animations that never settle.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
 
     expect(container.read(standaloneModeProvider), isTrue);
     expect(find.byType(MainScreen), findsOneWidget);
