@@ -8,6 +8,7 @@ import 'presentation/connection_screen.dart';
 import 'core/http_client.dart';
 import 'core/theme.dart';
 import 'core/deep_link_service.dart';
+import 'standalone/scheduling/notification_gateway.dart';
 
 /// Initialise the timezone database and pin it to the device's local zone, so
 /// the standalone reminder scheduler's `tz.TZDateTime.from(when, tz.local)`
@@ -27,6 +28,9 @@ Future<void> _initTimezone() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _initTimezone();
+  // Initialize the local-notification plugin + reminder channel before any
+  // reminder agent can schedule, so notifications actually fire on-device.
+  await initializeNotifications();
 
   // Hydrate any previously-paired token before the first request, so a paired
   // phone authenticates on cold start without re-scanning. The container is

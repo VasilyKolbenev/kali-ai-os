@@ -3,6 +3,43 @@ import 'package:timezone/timezone.dart' as tz;
 
 import 'notification_ids.dart';
 
+/// The Android channel id reminders are posted on (also referenced by
+/// [LocalNotificationGateway._details]).
+const String kReminderChannelId = 'kali_reminders';
+
+/// Initializes the shared notification plugin and creates the reminder channel.
+///
+/// Must be called once at startup, before any [LocalNotificationGateway]
+/// schedules — otherwise `zonedSchedule` no-ops on a real device and reminders
+/// never fire (a gap unit tests with a fake gateway cannot see). Idempotent:
+/// `FlutterLocalNotificationsPlugin()` is a singleton, so re-calling is safe.
+Future<void> initializeNotifications() async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      // Permission is requested explicitly via requestPermission(), not here.
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
+    ),
+  );
+  // Android 8+ requires an explicit channel before posting to it.
+  await plugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      kReminderChannelId,
+      'Напоминания',
+      description: 'Напоминания от ваших агентов',
+      importance: Importance.high,
+    ),
+  );
+}
+
 /// A registered (or cancelled) local notification, abstracted so the scheduler
 /// is testable without the native channel.
 abstract class NotificationGateway {
@@ -24,14 +61,15 @@ abstract class NotificationGateway {
 /// Not unit-tested (native channel); validated in the live device test. The
 /// scheduler is exercised against [NotificationGateway] via a fake double.
 class LocalNotificationGateway implements NotificationGateway {
-  /// Wraps an already-initialized [FlutterLocalNotificationsPlugin].
+  /// Wraps the shared [FlutterLocalNotificationsPlugin]. The plugin must have
+  /// been initialized via [initializeNotifications] at startup.
   LocalNotificationGateway(this._plugin);
 
   final FlutterLocalNotificationsPlugin _plugin;
 
   static const NotificationDetails _details = NotificationDetails(
     android: AndroidNotificationDetails(
-      'kali_reminders',
+      kReminderChannelId,
       'Напоминания',
       importance: Importance.high,
       priority: Priority.high,
