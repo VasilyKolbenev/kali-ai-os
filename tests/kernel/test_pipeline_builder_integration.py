@@ -74,3 +74,55 @@ async def test_multi_turn_flow_reaches_deploy(monkeypatch):
     flow.deploy.assert_awaited_once_with("sid1")
     assert pipe._active_builder_session is None
     assert pipe._awaiting_deploy_confirm is False
+
+
+def _confirm_pipe() -> tuple["VoicePipeline", MagicMock]:  # type: ignore[name-defined]
+    """A pipeline parked at the deploy-confirmation step."""
+    from kernel.voice.pipeline import VoicePipeline
+    from kernel.models import VoiceConfig, LLMConfig
+    from kernel.event_bus import EventBus
+
+    flow = MagicMock()
+    flow.deploy = AsyncMock(return_value={"status": "deployed", "name": "x"})
+    flow.cancel = MagicMock()
+    app_state = MagicMock()
+    app_state.builder_flow = flow
+
+    pipe = VoicePipeline(
+        event_bus=EventBus(),
+        voice_config=VoiceConfig(),
+        llm_config=LLMConfig(),
+        tools=[],
+        app_state=app_state,
+    )
+    pipe._speak = AsyncMock()
+    pipe._awaiting_deploy_confirm = True
+    pipe._active_builder_session = "sid1"
+    return pipe, flow
+
+
+@pytest.mark.asyncio
+async def test_deploy_confirm_ignores_substring_da() -> None:
+    """«даже не думай» must NOT trigger deploy via a 'да' substring match."""
+    from kernel.voice.stt import STTResult
+
+    pipe, flow = _confirm_pipe()
+    await pipe._handle_transcription(STTResult(
+        text="даже не думай", language="ru", confidence=1.0, duration_ms=100,
+    ))
+    flow.deploy.assert_not_awaited()  # 'даже' must not match whole-word 'да'
+    # No whole-word positive AND no negative → re-ask, stay parked.
+    flow.cancel.assert_not_called()
+    assert pipe._awaiting_deploy_confirm is True
+
+
+@pytest.mark.asyncio
+async def test_deploy_confirm_word_da_deploys() -> None:
+    """A genuine «да, запускай» still deploys."""
+    from kernel.voice.stt import STTResult
+
+    pipe, flow = _confirm_pipe()
+    await pipe._handle_transcription(STTResult(
+        text="да, запускай", language="ru", confidence=1.0, duration_ms=100,
+    ))
+    flow.deploy.assert_awaited_once_with("sid1")

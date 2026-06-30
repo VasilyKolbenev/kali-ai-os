@@ -41,6 +41,24 @@ def _detect_builder_trigger(text: str) -> bool:
     return any(re.search(p, lowered) for p in _BUILDER_TRIGGER_PATTERNS)
 
 
+def _has_word(text: str, words: tuple[str, ...]) -> bool:
+    """Return True if ``text`` contains any of ``words`` as a whole word.
+
+    Whole-word (``\\b``) matching prevents a short confirmation token like «да»
+    from matching inside «даже», which previously triggered an unintended
+    deploy on «даже не думай».
+
+    Args:
+        text: The transcribed utterance to scan.
+        words: Candidate whole words to look for (case-insensitive).
+
+    Returns:
+        True if any candidate appears as a standalone word.
+    """
+    lowered = text.lower()
+    return any(re.search(rf"\b{re.escape(w)}\b", lowered) for w in words)
+
+
 # Timeout: reset LISTENING → IDLE if no speech after wake word
 _LISTEN_TIMEOUT_S = 3.0
 # Minimum speech chunks before we try STT (avoid noise triggers)
@@ -323,18 +341,23 @@ class VoicePipeline:
 
         # 1. Deploy confirmation — highest priority
         if self._awaiting_deploy_confirm and flow and self._active_builder_session:
-            positive = any(w in text.lower() for w in ("да", "запускай", "давай", "ок", "поехали"))
-            negative = any(w in text.lower() for w in ("нет", "отмени", "переделай"))
+            # Whole-word matching: a substring check fired «да» inside «даже»
+            # («даже не думай» triggered an unintended deploy). Ambiguous input
+            # (both a yes AND a no word) re-asks rather than defaulting to deploy.
+            positive = _has_word(text, ("да", "запускай", "давай", "ок", "поехали"))
+            negative = _has_word(text, ("нет", "отмени", "переделай"))
+            # Unclear / ambiguous (neither, or both) → re-ask WITHOUT clearing the
+            # confirm state, so the next utterance is still treated as the answer.
+            if positive == negative:
+                await self._speak("Не понял. Запускать? Скажи да или нет.")
+                return
             try:
                 if positive:
                     result = await flow.deploy(self._active_builder_session)
                     await self._speak(f"Готово! Агент {result.get('name', '')} запущен.")
-                elif negative:
+                else:
                     flow.cancel(self._active_builder_session)
                     await self._speak("Отменил. Попробуем ещё раз?")
-                else:
-                    await self._speak("Не понял. Запускать? Скажи да или нет.")
-                    return
             except Exception:
                 logger.exception("Builder deploy/cancel failed")
             finally:
