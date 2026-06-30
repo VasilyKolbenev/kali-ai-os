@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:archive/archive.dart';
+import 'package:yaml/yaml.dart';
 
 import 'imported_agent.dart';
 import 'safe_name.dart';
@@ -88,12 +89,52 @@ Future<ImportedAgent> importBundle(String payload) async {
     throw BundleImportError('SKILL.md name is not a safe identifier');
   }
 
+  // Extract skill.yaml for template type and execution config.
+  // A missing or malformed skill.yaml is non-fatal: agent imports conversational-only.
+  String? template;
+  Map<String, dynamic>? config;
+  final yamlEntries = archive.files.where(
+    (f) => f.isFile && (f.name == 'skill.yaml' || f.name.endsWith('/skill.yaml')),
+  );
+  if (yamlEntries.isNotEmpty) {
+    try {
+      final text = utf8.decode(yamlEntries.first.content as List<int>);
+      final doc = loadYaml(text);
+      if (doc is YamlMap) {
+        template = doc['template']?.toString();
+        final c = doc['config'];
+        if (c is YamlMap) config = _deepMap(c);
+      }
+    } catch (_) {
+      // Malformed skill.yaml: stay conversational-only.
+      template = null;
+      config = null;
+    }
+  }
+
   return ImportedAgent(
     name: name,
     description: (fm['description'] ?? '').trim(),
     skillMd: md,
     installedAt: DateTime.now().toUtc(),
+    template: template,
+    config: config,
   );
+}
+
+/// Recursively converts a [YamlMap] to a plain [Map<String, dynamic>].
+Map<String, dynamic> _deepMap(YamlMap m) {
+  final out = <String, dynamic>{};
+  m.nodes.forEach((k, v) {
+    out[k.toString()] = _deepVal(v.value);
+  });
+  return out;
+}
+
+dynamic _deepVal(dynamic v) {
+  if (v is YamlMap) return _deepMap(v);
+  if (v is YamlList) return v.map(_deepVal).toList();
+  return v;
 }
 
 /// Parse the leading `---`-delimited YAML frontmatter into a flat string map.

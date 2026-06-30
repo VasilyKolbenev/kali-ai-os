@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../presentation/main_screen.dart';
+import '../presentation/my_agents_screen.dart';
 import '../standalone/agent_store.dart';
 import '../standalone/bundle_importer.dart';
 import '../standalone/imported_agent.dart';
+import '../standalone/scheduling/notification_gateway.dart';
+import '../standalone/scheduling/reminder_scheduler.dart';
 import 'config.dart';
 import 'http_client.dart';
 import 'l10n.dart';
@@ -91,6 +94,23 @@ Future<ImportedAgent> importOnDevice(
   final agent = await decode(payload);
   await store.save(agent);
   return agent;
+}
+
+/// After a standalone import, registers the reminder's notifications.
+///
+/// Only reminder agents are scheduled: for them we request OS permission once
+/// (via [gateway]) and trigger a full [ReminderScheduler.syncAll]. Conversational
+/// agents are a no-op. Pure seam (no UI / navigation) so the import-side wiring
+/// is unit-testable with a fake gateway and a fixed [now] clock.
+Future<void> scheduleImportedReminder(
+  ImportedAgent agent, {
+  required ReminderScheduler scheduler,
+  required NotificationGateway gateway,
+  required DateTime now,
+}) async {
+  if (agent.template != 'reminder') return;
+  await gateway.requestPermission();
+  await scheduler.syncAll(now);
 }
 
 /// Listens for `kali://import?n=<name>&d=<base64url bundle>` deep links — the
@@ -221,7 +241,15 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
     ref.read(standaloneModeProvider.notifier).state = true;
     messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
     try {
-      final agent = await importOnDevice(data, store: FileAgentStore());
+      final agent =
+          await importOnDevice(data, store: ref.read(agentStoreProvider));
+      // Reminder agents start firing immediately; conversational ones don't.
+      await scheduleImportedReminder(
+        agent,
+        scheduler: ref.read(reminderSchedulerProvider),
+        gateway: ref.read(notificationGatewayProvider),
+        now: DateTime.now(),
+      );
       messenger?.hideCurrentSnackBar();
       messenger?.showSnackBar(
         SnackBar(content: Text(t.importedStandalone(agent.name))),

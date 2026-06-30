@@ -1,18 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 import '../core/l10n.dart';
 import '../core/theme.dart';
 import '../standalone/agent_store.dart';
 import '../standalone/imported_agent.dart';
+import '../standalone/scheduling/notification_gateway.dart';
+import '../standalone/scheduling/reminder_config.dart';
+import '../standalone/scheduling/reminder_schedule.dart';
+import '../standalone/scheduling/reminder_scheduler.dart';
 import 'standalone_chat_screen.dart';
 
 /// The on-device [AgentStore]. Overridden in tests with a fake so no native
 /// `path_provider` channel is touched.
 final agentStoreProvider = Provider<AgentStore>((ref) => FileAgentStore());
 
-/// Lists the agents imported on-device (standalone mode). Tapping one opens a
-/// conversation with it via the cloud LLM ([StandaloneChatScreen]).
+/// The native notification gateway. Overridden in tests with a fake so no
+/// native plugin channel is touched.
+final notificationGatewayProvider = Provider<NotificationGateway>(
+  (ref) => LocalNotificationGateway(FlutterLocalNotificationsPlugin()),
+);
+
+/// Schedules reminder agents from the on-device store via the gateway.
+final reminderSchedulerProvider = Provider<ReminderScheduler>(
+  (ref) => ReminderScheduler(
+    store: ref.read(agentStoreProvider),
+    gateway: ref.read(notificationGatewayProvider),
+  ),
+);
+
+/// Lists the agents imported on-device (standalone mode). Tapping a
+/// conversational agent opens a chat with it via the cloud LLM
+/// ([StandaloneChatScreen]); a reminder agent gets an inline on/off toggle,
+/// the next fire time and a snooze action.
 class MyAgentsScreen extends ConsumerStatefulWidget {
   const MyAgentsScreen({super.key});
 
@@ -82,27 +104,191 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
         ),
       );
 
-  Widget _agentTile(BuildContext context, ImportedAgent agent) => Container(
-        decoration: BoxDecoration(
-          color: AppTheme.glassSurface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppTheme.glassBorder),
+  Widget _agentTile(BuildContext context, ImportedAgent agent) {
+    if (agent.template == 'reminder') {
+      return _ReminderTile(agent: agent);
+    }
+    return _glassTile(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: const Icon(Icons.smart_toy_rounded, color: AppTheme.primary),
+        title: Text(agent.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        subtitle: agent.description.isEmpty
+            ? null
+            : Text(agent.description, style: const TextStyle(color: AppTheme.textSecondary)),
+        trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textDim),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => StandaloneChatScreen(agent: agent)),
         ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            leading: const Icon(Icons.smart_toy_rounded, color: AppTheme.primary),
-            title: Text(agent.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-            subtitle: agent.description.isEmpty
-                ? null
-                : Text(agent.description, style: const TextStyle(color: AppTheme.textSecondary)),
-            trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textDim),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => StandaloneChatScreen(agent: agent)),
+      ),
+    );
+  }
+}
+
+/// Shared frosted-glass container used by every agent tile.
+Widget _glassTile({required Widget child}) => Container(
+      decoration: BoxDecoration(
+        color: AppTheme.glassSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.glassBorder),
+      ),
+      child: Material(type: MaterialType.transparency, child: child),
+    );
+
+/// A reminder agent row: on/off [Switch], the next fire time, an "Отложить на
+/// час" snooze action, and an honest note when notification permission is
+/// denied. Owns its own sync lifecycle so the OS schedule reflects the toggle.
+class _ReminderTile extends ConsumerStatefulWidget {
+  const _ReminderTile({required this.agent});
+
+  final ImportedAgent agent;
+
+  @override
+  ConsumerState<_ReminderTile> createState() => _ReminderTileState();
+}
+
+class _ReminderTileState extends ConsumerState<_ReminderTile> {
+  late bool _enabled = widget.agent.enabled;
+  bool? _permissionGranted;
+  DateTime? _snoozeUntil;
+
+  @override
+  void initState() {
+    super.initState();
+    _snoozeUntil = widget.agent.snoozeUntil;
+    _bootstrap();
+  }
+
+  /// Requests permission once, then schedules this agent's reminders so the
+  /// next-fire label and OS schedule are live when the tile appears.
+  Future<void> _bootstrap() async {
+    final gateway = ref.read(notificationGatewayProvider);
+    final granted = await gateway.requestPermission();
+    if (_enabled) {
+      await ref.read(reminderSchedulerProvider).syncAll(DateTime.now());
+    }
+    if (!mounted) return;
+    setState(() => _permissionGranted = granted);
+  }
+
+  Future<void> _onToggle(bool value) async {
+    setState(() => _enabled = value);
+    await ref.read(reminderSchedulerProvider).setEnabled(widget.agent.name, value);
+  }
+
+  Future<void> _onSnooze() async {
+    await ref
+        .read(reminderSchedulerProvider)
+        .snooze(widget.agent.name, const Duration(hours: 1));
+    final clock = DateTime.now();
+    if (!mounted) return;
+    setState(() => _snoozeUntil = clock.add(const Duration(hours: 1)));
+    final t = L10n.of(ref);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(t.reminderSnoozed)));
+  }
+
+  /// "HH:mm" of the next fire within the next day, or null if none upcoming.
+  String? _nextFireLabel() {
+    final cfg = parseReminderConfig(
+      widget.agent.config ?? const {},
+      fallbackMessage: widget.agent.description,
+    );
+    final now = DateTime.now();
+    final from = (_snoozeUntil != null && _snoozeUntil!.isAfter(now))
+        ? _snoozeUntil!
+        : now;
+    final times = nextFireTimes(
+      config: cfg,
+      from: from,
+      horizonEnd: now.add(const Duration(days: 1)),
+      maxCount: 1,
+    );
+    if (times.isEmpty) return null;
+    final d = times.first;
+    return '${d.hour.toString().padLeft(2, '0')}:'
+        '${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = L10n.of(ref);
+    final next = _enabled ? _nextFireLabel() : null;
+    final denied = _permissionGranted == false;
+
+    final subtitle = <Widget>[
+      Text(
+        _enabled
+            ? (next != null ? t.reminderNextFire(next) : t.reminderNextFireNone)
+            : widget.agent.description,
+        style: const TextStyle(color: AppTheme.textSecondary),
+      ),
+      if (denied) ...[
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Icon(Icons.notifications_off_outlined,
+                size: 14, color: AppTheme.accent),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                t.reminderPermissionNeeded,
+                style: const TextStyle(color: AppTheme.accent, fontSize: 12),
+              ),
             ),
-          ),
+          ],
         ),
-      );
+      ],
+    ];
+
+    return _glassTile(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.alarm_rounded, color: AppTheme.primary),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.agent.name,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 2),
+                      ...subtitle,
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _enabled,
+                  activeThumbColor: AppTheme.primary,
+                  onChanged: _onToggle,
+                ),
+              ],
+            ),
+            if (_enabled)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _onSnooze,
+                  icon: const Icon(Icons.snooze_rounded,
+                      size: 18, color: AppTheme.textSecondary),
+                  label: Text(
+                    t.reminderSnoozeHour,
+                    style: const TextStyle(color: AppTheme.textSecondary),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }

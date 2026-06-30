@@ -32,4 +32,19 @@ void main() {
     );
     expect(() => store.save(a), throwsArgumentError);
   });
+
+  test('round-trips reminder fields', () async {
+    final dir = await Directory.systemTemp.createTemp('kali_agents_test');
+    final store = FileAgentStore(baseDir: dir);
+    await store.save(ImportedAgent(
+      name: 'water', description: 'пить', skillMd: 'md',
+      installedAt: DateTime.utc(2026, 6, 30),
+      template: 'reminder', config: {'reminders': {'interval_hours': 2}},
+      enabled: false, snoozeUntil: DateTime.utc(2026, 6, 30, 9),
+    ));
+    final got = (await store.get('water'))!;
+    expect(got.template, 'reminder');
+    expect(got.enabled, false);
+    expect(got.snoozeUntil, DateTime.utc(2026, 6, 30, 9));
+  });
 }
