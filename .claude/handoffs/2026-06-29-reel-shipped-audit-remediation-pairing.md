@@ -1,7 +1,7 @@
 # Handoff 2026-06-29 — Reel shipped · 4-track audit · remediation plan (Option C) · P1.1 pairing done
 
 > Continues from `.claude/handoffs/2026-06-28-launch-drive-ws1-ws5-marketplace-security-distribution.md`.
-> **HEAD = origin/main = `4bb5d7c`** — everything PUSHED (backup current). ultracode used for the audit. Anti-pivot CLEAN throughout.
+> **HEAD = origin/main = `2aa14d3`** — everything PUSHED (backup current). ultracode used for the audit. Anti-pivot CLEAN throughout.
 
 > ## ⏩ UPDATE (2026-06-29, later) — Phase 1 code-now COMPLETE
 > Executed the remediation plan in order; all code-now Phase 1 items done + merged + pushed:
@@ -11,7 +11,9 @@
 > - **P1.5 honest tethered framing** ✓ (merged `4bb5d7c`) — landing deferred-install card now steers a desktop-less friend to the desktop install (where the agent runs) + frames mobile as a companion; connection-screen QR hint already added in P1.1.
 > - **P1.2 frozen rebuild = PARTIAL** (file-level verified). **REMAINING (Vasily/RTX-gated):** boot `dist_premium/kali-backend/kali-backend.exe` (rebuilt 5.61GB, now with LGPL FFmpeg) → hit `GET /skills/{name}/reel` once (runtime DLL-load) → real create→works→share + two-device + a real F5 synth on the LGPL DLLs. Cannot be done without the RTX/GPU/live env.
 >
-> **Next:** P1.2 RTX live-verify (Vasily) OR **Phase 2 = WS-4.7 mobile standalone-lite** (XL — own brainstorm→spec→writing-plans→subagent cycle). EV-cert remains the public-launch long pole (Vasily, start now).
+> **Phase 2 — WS-4.7 mobile standalone-lite, INCREMENT 1 DONE (merged `2aa14d3`).** brainstorm→spec→plan→subagent-TDD cycle. Decomposed Option B (the 2026-06-19 chosen architecture) into increments; built **Increment 1 = on-device RECEIVE + CONVERSATIONAL RUN** — a desktop-less phone imports a shared agent on-device (`kali://import` → unpack → local file store, NO server) and chats with it via a cloud LLM (SKILL.md as system prompt, BYO key). Closes the make-or-break UGC "receive" half. New `mobile/lib/standalone/` (bundle_importer **hardened** vs untrusted input — name-validation/symlink/backslash/bomb/utf8, adversarially reviewed; AgentStore file-backed; LlmClient anthropic+openai injectable; settings store) + `standaloneModeProvider` + deep-link standalone branch + «Мои агенты»/standalone-chat screens + `MessageBubble` extraction. Tethered paths (`/chat`, `/skills/install-bundle`, `kali://pair`) untouched. Specs: `docs/superpowers/specs/2026-06-29-mobile-standalone-receive-run-design.md` + plan `...plans/2026-06-29-mobile-standalone-receive-run.md`. Full mobile suite **60 passed**; 0 errors/warnings. Model defaults grounded in `kernel/models.py DEFAULT_CLOUD_MODELS` (claude-sonnet-4-20250514 / gpt-4.1). **Live-verify deferred** (real phone `kali_test_34` standalone, real LLM key). **GOTCHA:** background subagents were repeatedly lost on process restarts — recovered inline each time (github SSRF migration, importer hardening, holistic reviews).
+>
+> **Next:** WS-4.7 **Increment 2** (tool execution + Dart template runtime: reminder/tracker/notifier scheduling — so received agents DO things, not just chat) → Increment 3 (build-by-voice on phone, dashboard); P1.2 RTX live-verify (Vasily); live-verify standalone on a real phone. EV-cert remains the public-launch long pole (Vasily).
 
 ## ЧИТАЙ В ЭТОМ ПОРЯДКЕ (до кода)
 1. **Этот хэндофф** ← главный
