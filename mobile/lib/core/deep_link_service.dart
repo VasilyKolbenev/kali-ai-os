@@ -46,17 +46,41 @@ PairInfo? parsePairLink(Uri uri) {
   final ip = uri.queryParameters['ip']?.trim() ?? '';
   final token = uri.queryParameters['token']?.trim() ?? '';
   if (ip.isEmpty || token.isEmpty) return null;
-  if (!_looksLikeHost(ip)) return null;
+  if (!_isPrivateHost(ip)) return null;
 
   return PairInfo(ip: ip, token: token);
 }
 
-/// Loose `host[:port]` sanity check — rejects whitespace and unparseable
-/// authorities without imposing a strict IP/DNS grammar.
-bool _looksLikeHost(String value) {
+/// Whether `value` (a `host[:port]`) is a private/loopback/CGNAT IPv4 literal.
+///
+/// Pairing is LAN-only by design: the token is the LAN-security boundary, so a
+/// public host or a DNS name means an attacker is trying to exfiltrate the
+/// token to a server they control. Only literal IPv4 in 10/8, 172.16/12,
+/// 192.168/16, 127/8 or 100.64/10 is accepted; everything else (public IPs,
+/// DNS names like `evil.com`/`localhost`, malformed input) is rejected.
+bool _isPrivateHost(String value) {
   if (value.contains(RegExp(r'\s'))) return false;
   final probe = Uri.tryParse('http://$value');
-  return probe != null && probe.host.isNotEmpty;
+  final host = probe?.host ?? '';
+  if (host.isEmpty) return false;
+
+  final octets = host.split('.');
+  if (octets.length != 4) return false; // non-literal DNS name or IPv6
+  final parts = <int>[];
+  for (final o in octets) {
+    final n = int.tryParse(o);
+    if (n == null || n < 0 || n > 255) return false;
+    parts.add(n);
+  }
+
+  final a = parts[0];
+  final b = parts[1];
+  if (a == 10) return true; // 10.0.0.0/8
+  if (a == 127) return true; // 127.0.0.0/8 (loopback)
+  if (a == 192 && b == 168) return true; // 192.168.0.0/16
+  if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a == 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (CGNAT)
+  return false;
 }
 
 /// Persists the paired token and updates the live in-memory holder, so a
