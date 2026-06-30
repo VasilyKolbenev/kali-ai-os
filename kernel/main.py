@@ -464,6 +464,10 @@ def create_app(
         # Strong references to background auto-speak tasks. Without a retained
         # ref the GC can cancel a task mid-speech (asyncio fire-and-forget trap).
         app.state._speak_tasks: set[asyncio.Task[None]] = set()
+        # Retained refs to model-download failure-event publishes. A weakly
+        # referenced publish (ensure_future + drop) can be GC-cancelled before
+        # it runs, so the failure event would never reach the bus.
+        app.state._download_publish_tasks: set[asyncio.Task[None]] = set()
 
         # Forward events to WebSocket clients (skip events originating from WS itself)
         async def ws_forwarder(event: Event) -> None:
@@ -733,7 +737,19 @@ def create_app(
 
                 success = await asyncio.to_thread(download_model, item["name"], item["url"], progress_cb)
                 if not success:
-                    break
+                    # Soft failure (returned False, no raise): report it honestly
+                    # and do NOT fall through to a false download_complete.
+                    asyncio.run_coroutine_threadsafe(
+                        event_bus.publish(Event(
+                            topic="system.models.download_failed",
+                            source="kernel",
+                            payload={
+                                "filename": item["name"],
+                                "error": f"download_model returned False for {item['name']}",
+                            },
+                        )), loop
+                    )
+                    return
 
             asyncio.run_coroutine_threadsafe(
                 event_bus.publish(Event(
@@ -756,13 +772,18 @@ def create_app(
             if exc is None:
                 return
             logger.error("Model download task exited abnormally", exc_info=exc)
-            asyncio.ensure_future(
-                request.app.state.event_bus.publish(Event(
+            # Retain the publish task so the GC cannot cancel it before the
+            # failure event reaches the bus; discard it when it finishes.
+            state = request.app.state
+            publish_task = asyncio.create_task(
+                state.event_bus.publish(Event(
                     topic="system.models.download_failed",
                     source="kernel",
                     payload={"error": str(exc) or type(exc).__name__},
                 ))
             )
+            state._download_publish_tasks.add(publish_task)
+            publish_task.add_done_callback(state._download_publish_tasks.discard)
 
         task = asyncio.create_task(_download_task())
         request.app.state._model_download_task = task

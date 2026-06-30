@@ -592,6 +592,40 @@ class TestModelDownloadTaskLifetime:
             await asyncio.sleep(0.01)
         assert any(e.topic == "system.models.download_failed" for e in received)
 
+    async def test_soft_failure_publishes_failed_not_complete(
+        self, app, client: AsyncClient
+    ) -> None:
+        """download_model returning False (no raise) must be reported as a
+        failure, never a falsely-emitted download_complete (success)."""
+        import kernel.model_downloader as md
+
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        app.state.event_bus.subscribe("system.models.download_failed", handler)
+        app.state.event_bus.subscribe("system.models.download_complete", handler)
+
+        def _soft_fail(name, url, cb):  # type: ignore[no-untyped-def]
+            return False
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_soft_fail):
+            await client.post("/models/download")
+            task = app.state._model_download_task
+            await task
+
+        # The publish runs on the loop; poll a few ticks for it to land.
+        for _ in range(20):
+            if received:
+                break
+            await asyncio.sleep(0.01)
+        topics = {e.topic for e in received}
+        assert "system.models.download_failed" in topics
+        assert "system.models.download_complete" not in topics
+
 
 class _StubSocialCatalog:
     """A stand-in catalog_client recording social calls + returning canned results.
