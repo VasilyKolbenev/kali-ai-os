@@ -91,6 +91,23 @@ void main() {
       }
     });
 
+    // Hex/octal-prefixed octets parse as "private" via int.tryParse but a libc
+    // OS resolver may read them differently (010 → octal 8 = public) — that
+    // divergence is the token-exfil bypass. Reject non-canonical octets.
+    test('rejects hex / octal-looking octets (resolver-divergence bypass)', () {
+      for (final ip in ['0x7f.0.0.1', '0x0a.0.0.1', '010.0.0.1', '0177.0.0.1']) {
+        expect(parsePairLink(Uri.parse('kali://pair?ip=$ip&token=x')), isNull,
+            reason: ip);
+      }
+    });
+
+    test('rejects 172.x outside the 16-31 private range', () {
+      expect(parsePairLink(Uri.parse('kali://pair?ip=172.15.0.1&token=x')),
+          isNull);
+      expect(parsePairLink(Uri.parse('kali://pair?ip=172.32.0.1&token=x')),
+          isNull);
+    });
+
     test('ignores the import link (different host)', () {
       expect(parsePairLink(Uri.parse('kali://import?n=foo&d=bar')), isNull);
     });

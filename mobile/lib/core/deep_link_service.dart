@@ -68,8 +68,13 @@ bool _isPrivateHost(String value) {
   if (octets.length != 4) return false; // non-literal DNS name or IPv6
   final parts = <int>[];
   for (final o in octets) {
-    final n = int.tryParse(o);
-    if (n == null || n < 0 || n > 255) return false;
+    // Strict ASCII-decimal, no leading zero: reject hex (0x7f) and octal-looking
+    // (010) octets — int.tryParse would accept them as 127/10, but a libc-style
+    // OS resolver reads 010 as octal 8 (public), diverging from this guard and
+    // letting the token leak. Only canonical decimal octets pass.
+    if (!RegExp(r'^(0|[1-9]\d{0,2})$').hasMatch(o)) return false;
+    final n = int.parse(o);
+    if (n > 255) return false;
     parts.add(n);
   }
 
