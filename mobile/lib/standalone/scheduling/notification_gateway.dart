@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 
@@ -38,6 +40,24 @@ Future<void> initializeNotifications() async {
       importance: Importance.high,
     ),
   );
+}
+
+/// Reduces the per-platform permission results into a single granted flag.
+///
+/// On Android an *indeterminate* result (null resolver / null answer) must NOT
+/// be reported as granted: defaulting unknown→true on Android hides a silent
+/// no-fire, so we surface it as denied and let the UI show the
+/// 'permission needed' affordance. iOS keeps its existing `ios ?? true` path
+/// (the iOS resolver answers reliably; null there means "not iOS").
+///
+/// [isAndroid] is injected so the reducer is unit-testable off-device.
+bool resolvePermissionGranted({
+  required bool? ios,
+  required bool? android,
+  required bool isAndroid,
+}) {
+  if (isAndroid) return android ?? false;
+  return ios ?? android ?? true;
 }
 
 /// A registered (or cancelled) local notification, abstracted so the scheduler
@@ -87,7 +107,11 @@ class LocalNotificationGateway implements NotificationGateway {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
-    return ios ?? android ?? true;
+    return resolvePermissionGranted(
+      ios: ios,
+      android: android,
+      isAndroid: Platform.isAndroid,
+    );
   }
 
   @override
