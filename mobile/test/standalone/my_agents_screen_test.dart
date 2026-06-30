@@ -43,6 +43,22 @@ class _FakeStore implements AgentStore {
       _agents.removeWhere((a) => a.name == name);
 }
 
+/// A store whose list() always throws — stands in for a load failure that the
+/// FutureBuilder must surface honestly (not as an empty-state or spinner).
+class _ThrowingStore implements AgentStore {
+  @override
+  Future<List<ImportedAgent>> list() async => throw StateError('boom');
+
+  @override
+  Future<void> save(ImportedAgent agent) async {}
+
+  @override
+  Future<ImportedAgent?> get(String name) async => null;
+
+  @override
+  Future<void> delete(String name) async {}
+}
+
 ImportedAgent _agent(String name, String desc) => ImportedAgent(
       name: name,
       description: desc,
@@ -80,6 +96,20 @@ void main() {
 
     final t = L10n('ru');
     expect(find.text(t.myAgentsEmpty), findsOneWidget);
+  });
+
+  testWidgets('list() failure shows an honest error/retry, not the empty-state',
+      (tester) async {
+    await tester.pumpWidget(
+        _wrap(_ThrowingStore(), gateway: FakeNotificationGateway()));
+    await tester.pumpAndSettle();
+
+    final t = L10n('ru');
+    expect(find.text(t.myAgentsError), findsOneWidget);
+    expect(find.text(t.retry), findsOneWidget);
+    // Not the spinner, not the empty-state copy.
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text(t.myAgentsEmpty), findsNothing);
   });
 
   testWidgets('populated store lists agent name + description', (tester) async {

@@ -101,6 +101,9 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
           }
+          if (snapshot.hasError) {
+            return _errorState(context, t);
+          }
           final agents = snapshot.data ?? const <ImportedAgent>[];
           if (agents.isEmpty) {
             return _emptyState(context, t);
@@ -115,6 +118,37 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
       ),
     );
   }
+
+  /// Surfaces a `list()` failure honestly (instead of the misleading
+  /// empty-state) with a retry that re-reads the store.
+  Widget _errorState(BuildContext context, L10n t) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline_rounded,
+                  size: 64, color: AppTheme.accent.withValues(alpha: 0.6)),
+              const SizedBox(height: 16),
+              Text(
+                t.myAgentsError,
+                textAlign: TextAlign.center,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyLarge
+                    ?.copyWith(color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: () =>
+                    setState(() => _agents = ref.read(agentStoreProvider).list()),
+                icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary),
+                label: Text(t.retry, style: const TextStyle(color: AppTheme.primary)),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _emptyState(BuildContext context, L10n t) => Center(
         child: Padding(
