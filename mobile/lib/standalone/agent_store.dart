@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
@@ -56,7 +57,13 @@ class FileAgentStore implements AgentStore {
   Future<void> save(ImportedAgent agent) async {
     _checkName(agent.name);
     final dir = await _dir();
-    await _fileFor(dir, agent.name).writeAsString(jsonEncode(agent.toJson()));
+    // Atomic write: serialize to a sibling `.tmp` then rename over the target,
+    // so an interrupted write can never leave a half-written `.json` that
+    // [list] would have to skip.
+    final target = _fileFor(dir, agent.name);
+    final tmp = File('${target.path}.tmp');
+    await tmp.writeAsString(jsonEncode(agent.toJson()));
+    await tmp.rename(target.path);
   }
 
   @override
@@ -64,9 +71,17 @@ class FileAgentStore implements AgentStore {
     final dir = await _dir();
     final out = <ImportedAgent>[];
     await for (final entity in dir.list()) {
-      if (entity is File && entity.path.endsWith('.json')) {
-        final json = jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
+      if (entity is! File || !entity.path.endsWith('.json')) continue;
+      // Isolate each agent: one corrupt/partial file must not break the whole
+      // store (which would silently kill all reminders + «Мои агенты»). Log +
+      // skip on failure; [fromJson] stays strict per-agent.
+      try {
+        final json =
+            jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
         out.add(ImportedAgent.fromJson(json));
+      } on Object catch (e, st) {
+        log('skipping unreadable agent file ${entity.path}',
+            name: 'AgentStore', error: e, stackTrace: st);
       }
     }
     return out;
