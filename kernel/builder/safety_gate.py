@@ -58,6 +58,31 @@ _BLOCKED_ATTR_CHAINS: frozenset[str] = frozenset(
     }
 )
 
+# Dunder attribute names used to escape the sandbox by walking the object graph
+# (e.g. ``().__class__.__bases__[0].__subclasses__()`` reaches ``os`` / ``eval``
+# without ever naming a blocked import). Any access to one of these is a hard
+# block: no legitimate auto-generated skill needs introspection into the class
+# hierarchy or the interpreter's builtins.
+_BLOCKED_DUNDER_ATTRS: frozenset[str] = frozenset(
+    {
+        "__class__",
+        "__bases__",
+        "__base__",
+        "__mro__",
+        "__subclasses__",
+        "__subclasshook__",
+        "__globals__",
+        "__builtins__",
+        "__import__",
+        "__getattribute__",
+        "__dict__",
+        "__code__",
+        "__closure__",
+        "__func__",
+        "__self__",
+    }
+)
+
 
 @dataclass
 class SafetyResult:
@@ -152,6 +177,14 @@ class _SafetyVisitor(ast.NodeVisitor):
         Args:
             node: The Attribute AST node.
         """
+        # Sandbox-escape dunder access (e.g. ``x.__class__.__bases__``) is a hard
+        # block regardless of the base object, so string/tuple/int-rooted chains
+        # that never name a blocked import are still caught.
+        if node.attr in _BLOCKED_DUNDER_ATTRS:
+            self.issues.append(
+                f"Blocked dunder attribute '{node.attr}' at line {node.lineno}"
+            )
+
         chain = self._get_attr_chain(node)
         if chain in _BLOCKED_ATTR_CHAINS:
             # Only warn if not already caught as a call (parent handles calls)
@@ -193,9 +226,11 @@ def check_code(source: str) -> SafetyResult:
     """Analyse Python source code for security violations.
 
     Uses true AST parsing — not string matching — so obfuscation via
-    string concatenation or renamed imports is NOT detected. This is
-    intentional: the gate targets naive/auto-generated code, not
-    adversarial inputs.
+    string concatenation or renamed imports is NOT detected. The gate targets
+    naive/auto-generated code; it additionally hard-blocks the common
+    object-graph sandbox-escape dunders (``__class__``/``__subclasses__``/
+    ``__globals__``/…) so a trivial ``().__class__`` bypass does not slip
+    through, but it is still not a substitute for a real sandbox.
 
     Args:
         source: Python source code to analyse.
