@@ -20,6 +20,14 @@ void main() {
     final c = parseReminderConfig({'schedule': {'cron': '*/30 * * * *'}}, fallbackMessage: 'x');
     expect(c.intervalHours, closeTo(0.5, 1e-9));
   });
+  test('hour-field cron parses as hours, not minutes', () {
+    final c = parseReminderConfig({'schedule': {'cron': '0 */2 * * *'}}, fallbackMessage: 'x');
+    expect(c.intervalHours, closeTo(2.0, 1e-9)); // not 0.25 (2/60 clamped)
+  });
+  test('unrecognized cron defaults to 1h', () {
+    final c = parseReminderConfig({'schedule': {'cron': '5 4 * * *'}}, fallbackMessage: 'x');
+    expect(c.intervalHours, 1);
+  });
   test('defaults when nothing parses', () {
     final c = parseReminderConfig({'interval': 'абракадабра'}, fallbackMessage: '  ');
     expect(c.intervalHours, 1);
