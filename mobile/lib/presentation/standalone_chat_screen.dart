@@ -66,9 +66,25 @@ class _StandaloneChatScreenState extends ConsumerState<StandaloneChatScreen> {
     });
   }
 
-  List<ChatMsg> _history() => _messages
-      .map((m) => m.isUser ? ChatMsg.user(m.text) : ChatMsg.assistant(m.text))
-      .toList();
+  /// Max prior turns sent to the model per request. The full thread stays on
+  /// screen, but only the last [_historyCap] turns go over the wire — bounding
+  /// token cost/latency on the user's BYO key (a long chat otherwise resends
+  /// everything each turn).
+  static const int _historyCap = 20;
+
+  List<ChatMsg> _history() {
+    final recent = _messages.length > _historyCap
+        ? _messages.sublist(_messages.length - _historyCap)
+        : _messages;
+    return recent
+        .map((m) => m.isUser ? ChatMsg.user(m.text) : ChatMsg.assistant(m.text))
+        .toList();
+  }
+
+  void _clearChat() => setState(() {
+        _messages.clear();
+        _needsKey = false;
+      });
 
   Future<void> _send() async {
     final text = _controller.text.trim();
@@ -89,18 +105,23 @@ class _StandaloneChatScreenState extends ConsumerState<StandaloneChatScreen> {
         systemPrompt: widget.agent.skillMd,
         history: _history(),
       );
+      if (!mounted) return; // back-nav mid-request: don't setState after dispose
       setState(() => _messages.add(ChatMessage(reply, false)));
     } on LlmError catch (e) {
+      if (!mounted) return;
       if (e.kind == LlmErrorKind.noKey) {
         setState(() => _needsKey = true);
       } else {
         setState(() => _messages.add(ChatMessage(_errorText(t, e.kind), false)));
       }
     } catch (_) {
+      if (!mounted) return;
       setState(() => _messages.add(ChatMessage(t.llmErrorNetwork, false)));
     } finally {
-      setState(() => _isLoading = false);
-      _scrollToBottom();
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _scrollToBottom();
+      }
     }
   }
 
@@ -124,6 +145,14 @@ class _StandaloneChatScreenState extends ConsumerState<StandaloneChatScreen> {
         ),
         backgroundColor: Colors.transparent,
         centerTitle: true,
+        actions: [
+          if (_messages.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded),
+              tooltip: t.chatClear,
+              onPressed: _clearChat,
+            ),
+        ],
       ),
       body: Column(
         children: [

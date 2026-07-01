@@ -79,6 +79,7 @@ class L10n {
   String get chatEmpty => _t({'ru': '\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435...', 'en': 'Start a conversation...', 'es': 'Inicia una conversaci\u00f3n...', 'zh': '\u5f00\u59cb\u5bf9\u8bdd...', 'de': 'Schreibe eine Nachricht...'});
   String get chatInputHint => _t({'ru': '\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435...', 'en': 'Message...', 'es': 'Mensaje...', 'zh': '\u8f93\u5165\u6d88\u606f...', 'de': 'Nachricht...'});
   String get chatTyping => _t({'ru': 'Jarvis \u043f\u0438\u0448\u0435\u0442...', 'en': 'Jarvis is typing...', 'es': 'Jarvis est\u00e1 escribiendo...', 'zh': 'Jarvis\u8f93\u5165\u4e2d...', 'de': 'Jarvis schreibt...'});
+  String get chatClear => _t({'ru': '\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0447\u0430\u0442', 'en': 'Clear chat', 'es': 'Borrar chat', 'zh': '\u6e05\u9664\u804a\u5929', 'de': 'Chat leeren'});
   String get notConnected => _t({'ru': '\u041d\u0435\u0442 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u043a \u0441\u0435\u0440\u0432\u0435\u0440\u0443', 'en': 'Not connected to server', 'es': 'Sin conexi\u00f3n al servidor', 'zh': '\u672a\u8fde\u63a5\u670d\u52a1\u5668', 'de': 'Nicht mit Server verbunden'});
 
   // ── Agent Store ──
