@@ -63,6 +63,23 @@ class TestSkillTemplateStorage:
         assert await t1.load_data("val.json") == {"x": 1}
         assert await t2.load_data("val.json") == {"x": 2}
 
+    @pytest.mark.asyncio
+    async def test_cyrillic_roundtrip_on_windows_codepage(self, template, monkeypatch):
+        """Cyrillic data round-trips exactly regardless of the OS codepage.
+
+        Simulates a Windows non-UTF-8 default encoding (cp1252) to prove the
+        save/load path forces utf-8 and never raises UnicodeEncodeError.
+        """
+        import locale
+
+        monkeypatch.setattr(
+            locale, "getpreferredencoding", lambda *a, **k: "cp1252",
+        )
+        payload = {"message": "Не забудь выпить таблетки в 9 утра"}
+        await template.save_data("history.json", payload)
+        loaded = await template.load_data("history.json")
+        assert loaded == payload
+
 
 # ---------------------------------------------------------------------------
 # TrackerTemplate
