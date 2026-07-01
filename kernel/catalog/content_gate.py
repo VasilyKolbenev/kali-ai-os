@@ -106,6 +106,48 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\b(?:do\s+not|don'?t|never)\s+(?:tell|inform|notify|ask|warn|alert)\s+(?:the\s+)?user\b", re.I),
         "social-engineering: hide the action from the user",
     ),
+    # -----------------------------------------------------------------------
+    # Russian (RU) needles — most voice-built KALI skills are Russian prose, so
+    # an English-only gate is trivially bypassed by writing the injection in RU.
+    # Deliberately broad (false-positive bias); \w with re.UNICODE matches
+    # Cyrillic, and trailing чему matches inflected endings (е/ь/те/ий/…).
+    # -----------------------------------------------------------------------
+    # Instruction-override: «игнорируй/забудь/не выполняй … предыдущие/все инструкции».
+    (
+        re.compile(r"игнорир\w*\s+(?:все\s+|любые\s+)?(?:предыдущ\w*|прежн\w*|вышеуказанн\w*|ранее)", re.I),
+        "instruction-override (ru): 'игнорируй предыдущие инструкции'",
+    ),
+    (
+        re.compile(r"забудь\s+(?:всё|все|про\s+все|предыдущ\w*|прежн\w*|свои)\b", re.I),
+        "instruction-override (ru): 'забудь всё/предыдущие инструкции'",
+    ),
+    (
+        re.compile(r"не\s+выполняй\s+(?:предыдущ\w*|прежн\w*|прошл\w*|ранее|указанн\w*)", re.I),
+        "instruction-override (ru): 'не выполняй предыдущие инструкции'",
+    ),
+    # Role hijack: «теперь ты …», «притворись/представь, что ты …».
+    (
+        re.compile(r"\bтеперь\s+ты\b", re.I),
+        "role-hijack (ru): 'теперь ты ...'",
+    ),
+    (
+        re.compile(r"(?:притвор\w*|представь|веди\s+себя|действуй)\s+(?:как\s+)?(?:будто\s+|что\s+)?(?:ты\b)?", re.I),
+        "role-hijack (ru): 'притворись/веди себя как ...'",
+    ),
+    # Exfiltration: «отправь/перешли … данные/секрет/ключ/пароль».
+    (
+        re.compile(r"(?:отправь\w*|перешл\w*|передай\w*|выгруз\w*|слей\b)\s+[^.\n]{0,60}(?:данн\w*|секрет\w*|ключ\w*|парол\w*|токен\w*|информаци\w*|сообщени\w*|перепис\w*)", re.I),
+        "exfiltration (ru): 'отправь/перешли данные/секрет/ключ'",
+    ),
+    # Bypass / hide: «без согласия», «не сообщай пользователю».
+    (
+        re.compile(r"без\s+(?:согласия|разрешения|подтверждения|ведома|спроса)", re.I),
+        "safety-bypass (ru): act без согласия/разрешения",
+    ),
+    (
+        re.compile(r"не\s+(?:сообщ\w*|говор\w*|рассказыв\w*|уведомл\w*|предупрежд\w*)\s+(?:пользовател\w*|юзер\w*)", re.I),
+        "social-engineering (ru): hide the action от пользователя",
+    ),
 )
 
 
