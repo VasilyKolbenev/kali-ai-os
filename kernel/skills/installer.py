@@ -33,6 +33,11 @@ from kernel.skills.validator import ValidationError
 
 logger = logging.getLogger(__name__)
 
+# Decompression-bomb guard: cap the total (and per-member) uncompressed size of
+# an untrusted bundle. A shared skill is tiny (Markdown + a few small assets), so
+# 25 MiB is generous while still refusing a gzip bomb that inflates to gigabytes.
+_MAX_BUNDLE_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
+
 
 class InstallError(RuntimeError):
     """Raised when a skill cannot be installed."""
@@ -324,6 +329,20 @@ def install_from_bundle(
         staging = Path(tmp)
         try:
             with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+                # Decompression-bomb guard: reject before extracting if the
+                # declared uncompressed total (or any single member) exceeds the
+                # cap, so a gzip bomb never inflates onto disk.
+                total = 0
+                for member in tar.getmembers():
+                    total += member.size
+                    if (
+                        member.size > _MAX_BUNDLE_UNCOMPRESSED_BYTES
+                        or total > _MAX_BUNDLE_UNCOMPRESSED_BYTES
+                    ):
+                        return InstallResult(
+                            ok=False, skill_name=name_hint,
+                            error="Bundle too large",
+                        )
                 # filter="data" (PEP 706) blocks path traversal, absolute paths,
                 # symlinks and special files — refuses an unsafe bundle outright.
                 tar.extractall(staging, filter="data")

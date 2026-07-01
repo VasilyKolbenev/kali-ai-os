@@ -8,15 +8,18 @@ executable ``scripts/``.
 
 from __future__ import annotations
 
+import base64
 import io
 import tarfile
 from pathlib import Path
 
 import pytest
 
+from kernel.skills import installer as installer_mod
 from kernel.skills.installer import (
     InstallError,
     _download_repo_subtree,
+    install_from_bundle,
 )
 
 
@@ -65,3 +68,42 @@ def test_catalog_tar_traversal_rejected(tmp_path: Path, monkeypatch) -> None:
     assert not sentinel.exists()
     # Nothing escaped the staging dir.
     assert not (tmp_path / "pwned.py").exists()
+
+
+def _bundle_b64_from_bytes(raw: bytes) -> str:
+    """base64url-encode a raw .tar.gz for install_from_bundle."""
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def test_bundle_size_cap_rejects_oversized_member(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A member whose (declared) size exceeds the cap is rejected before
+    extractall — a decompression bomb never inflates onto disk.
+
+    The cap is lowered so a valid, tiny tar still trips it; this keeps the tar
+    well-formed (real bytes) while exercising the guard's per-member/total check.
+    """
+    monkeypatch.setattr(installer_mod, "_MAX_BUNDLE_UNCOMPRESSED_BYTES", 16)
+
+    payload = b"x" * 64  # 64 bytes > 16-byte cap
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(name="demo-agent/SKILL.md")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    data = _bundle_b64_from_bytes(buf.getvalue())
+
+    called = {"extractall": False}
+    real_extractall = tarfile.TarFile.extractall
+
+    def _spy_extractall(self, *a, **k):  # noqa: ANN001, ANN202
+        called["extractall"] = True
+        return real_extractall(self, *a, **k)
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", _spy_extractall)
+
+    result = install_from_bundle(data, target_dir=tmp_path / "installed")
+    assert not result.ok
+    assert result.error == "Bundle too large"
+    assert called["extractall"] is False
