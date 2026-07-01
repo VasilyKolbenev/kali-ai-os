@@ -1,5 +1,6 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../core/token_store.dart' show kaliAndroidSecureStorage;
 import 'llm_client.dart';
 
 /// Secure-storage keys for the BYO-LLM settings.
@@ -17,7 +18,11 @@ abstract class LlmKeyValueStore {
 
 /// Adapts [FlutterSecureStorage] to [LlmKeyValueStore].
 class SecureLlmKeyValueStore implements LlmKeyValueStore {
-  const SecureLlmKeyValueStore([this._storage = const FlutterSecureStorage()]);
+  const SecureLlmKeyValueStore([
+    this._storage = const FlutterSecureStorage(
+      aOptions: kaliAndroidSecureStorage,
+    ),
+  ]);
 
   final FlutterSecureStorage _storage;
 
