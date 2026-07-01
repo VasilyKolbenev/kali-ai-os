@@ -11,6 +11,24 @@ final wsClientProvider = Provider(
   (ref) => WebSocketClient(tokenHolder: ref.read(tokenHolderProvider)),
 );
 
+/// Returns a log-safe rendering of [wsUrl] with any `token` query value
+/// replaced by `token=***`.
+///
+/// The LAN pairing token is the control-plane security boundary — it must never
+/// reach logs (dart:developer `log`, `debugPrint`, crash reports). This strips
+/// the value while keeping the host/port/path visible for diagnostics. Pure so
+/// it can be unit-tested. Falls back to a scheme+authority-only string if the
+/// input can't be parsed as a URI.
+String redactWsUrl(String wsUrl) {
+  final uri = Uri.tryParse(wsUrl);
+  if (uri == null) return wsUrl;
+  if (!uri.queryParameters.containsKey('token')) return wsUrl;
+  final query = uri.queryParameters.entries
+      .map((e) => e.key == 'token' ? 'token=***' : '${e.key}=${e.value}')
+      .join('&');
+  return uri.replace(query: query).toString();
+}
+
 class WebSocketClient {
   WebSocketClient({TokenHolder? tokenHolder}) : _tokenHolder = tokenHolder;
 
@@ -70,7 +88,9 @@ class WebSocketClient {
           _scheduleReconnect();
         },
       );
-      log("WS Connected to $wsUrl", name: 'WebSocketClient');
+      // Never log the tokenized URL — the token is the LAN-security boundary.
+      log("WS Connected to $ipAddress:${ServerConfig.port}",
+          name: 'WebSocketClient');
       _reconnectAttempts = 0; // reset on successful connection
       return true;
     } catch (e) {
