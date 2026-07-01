@@ -295,9 +295,10 @@ def install_from_bundle(
     """Install a skill from a base64url(.tar.gz) bundle — the P2P share path.
 
     The bundle layout matches ``publisher.package_skill``: a single top-level
-    ``<name>/`` directory containing SKILL.md (+ optional scripts/references/
-    assets). The same validation and AST safety gate as catalog installs apply,
-    so an imported agent is held to the identical bar as a downloaded one.
+    ``<name>/`` directory containing SKILL.md (+ optional references/assets).
+    Shared bundles are declarative-only: a bundle carrying a ``scripts/`` dir is
+    rejected outright (voice-built shared agents carry none). The AST safety gate
+    is a best-effort screen, not a sandbox.
 
     Args:
         bundle_b64: base64url-encoded .tar.gz (padding optional).
@@ -336,6 +337,17 @@ def install_from_bundle(
                 error="Bundle must contain exactly one skill directory",
             )
         extracted_dir = subdirs[0]
+
+        # Policy: shared bundles are declarative-only. Voice-built shared agents
+        # carry no scripts/ dir; the AST gate is a best-effort screen, not a
+        # sandbox, so a bundle that ships executable scripts/ is refused outright
+        # rather than run. This closes the arbitrary-code-exec surface on the P2P
+        # share path.
+        if (extracted_dir / "scripts").is_dir():
+            return InstallResult(
+                ok=False, skill_name=name_hint,
+                error="scripts not permitted in shared bundles",
+            )
 
         try:
             manifest = load_skill(extracted_dir, source="bundle", strict=True)
