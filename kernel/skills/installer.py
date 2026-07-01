@@ -138,6 +138,8 @@ def _download_repo_subtree(
         top_prefix = members[0].name.split("/", 1)[0] + "/"
         want_prefix = top_prefix + subpath.strip("/") + "/"
 
+        containment_root = target_subdir.resolve()
+
         extracted = False
         for m in members:
             if not m.name.startswith(want_prefix):
@@ -146,6 +148,16 @@ def _download_repo_subtree(
             if not relative:
                 continue
             out_path = target_subdir / relative
+            # Path-traversal containment: a malicious tarball can carry a member
+            # like "skills/x/../../../../pwned.py". Resolve the destination and
+            # refuse anything that escapes the extraction subtree.
+            resolved = out_path.resolve()
+            if resolved != containment_root and not resolved.is_relative_to(
+                containment_root
+            ):
+                raise InstallError(
+                    f"Tarball member escapes staging dir: {m.name}"
+                )
             if m.isdir():
                 out_path.mkdir(parents=True, exist_ok=True)
             elif m.isfile():
