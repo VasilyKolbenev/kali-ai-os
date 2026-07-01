@@ -39,4 +39,35 @@ void main() {
       expect(redactWsUrl(url), url);
     });
   });
+
+  group('isCleartextTargetAllowed', () {
+    test('allows cleartext ws to a LAN 192.168.x.x host', () {
+      expect(isCleartextTargetAllowed(ServerConfig.ws('192.168.1.50')), isTrue);
+    });
+
+    test('allows cleartext ws to the emulator host bridge and loopback', () {
+      expect(isCleartextTargetAllowed(ServerConfig.ws('10.0.2.2')), isTrue);
+      expect(isCleartextTargetAllowed(ServerConfig.ws('127.0.0.1')), isTrue);
+    });
+
+    test('rejects cleartext ws to a public host', () {
+      expect(isCleartextTargetAllowed('ws://93.184.216.34:3006/ws'), isFalse);
+      expect(isCleartextTargetAllowed('ws://relay.kali.app/ws'), isFalse);
+    });
+
+    test('rejects cleartext http to a public/cloud host', () {
+      expect(isCleartextTargetAllowed('http://api.kali.app/v1'), isFalse);
+    });
+
+    test('requires https/wss for a cloud endpoint', () {
+      // A cloud endpoint is only allowed over TLS, regardless of host.
+      expect(isCleartextTargetAllowed('https://api.kali.app/v1'), isTrue);
+      expect(isCleartextTargetAllowed('wss://relay.kali.app/ws'), isTrue);
+    });
+
+    test('rejects octal/hex-looking octets that a resolver could widen', () {
+      // 010.x parses as 8.x (public) in a libc resolver — must be rejected.
+      expect(isCleartextTargetAllowed('ws://010.0.0.1:3006/ws'), isFalse);
+    });
+  });
 }
