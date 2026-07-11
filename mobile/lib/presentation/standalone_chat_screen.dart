@@ -6,6 +6,8 @@ import '../core/theme.dart';
 import '../standalone/imported_agent.dart';
 import '../standalone/llm_client.dart';
 import '../standalone/llm_settings_store.dart';
+import '../standalone/profile_block.dart';
+import '../standalone/profile_store.dart';
 import 'llm_settings_screen.dart';
 import 'widgets/message_bubble.dart';
 
@@ -27,6 +29,10 @@ final chatFnProvider = Provider<ChatFn>((ref) {
     return client.chat(systemPrompt: systemPrompt, history: history);
   };
 });
+
+/// The questionnaire store consulted before each standalone turn.
+/// Overridden in widget tests with an in-memory fake (no path_provider).
+final profileStoreProvider = Provider<ProfileStore>((ref) => FileProfileStore());
 
 /// A thin chat with an [ImportedAgent]: the agent's SKILL.md is the system
 /// prompt, and turns go to the cloud LLM via [chatFnProvider]. Honest failure —
@@ -101,8 +107,11 @@ class _StandaloneChatScreenState extends ConsumerState<StandaloneChatScreen> {
     final chat = ref.read(chatFnProvider);
     final t = L10n.of(ref);
     try {
+      // Profile is optional garnish: load() degrades to an empty profile on
+      // any failure, and an empty profile prepends nothing.
+      final profile = await ref.read(profileStoreProvider).load();
       final reply = await chat(
-        systemPrompt: widget.agent.skillMd,
+        systemPrompt: profileBlock(profile) + widget.agent.skillMd,
         history: _history(),
       );
       if (!mounted) return; // back-nav mid-request: don't setState after dispose

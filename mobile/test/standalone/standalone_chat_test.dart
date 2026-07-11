@@ -17,6 +17,8 @@ import 'package:kali_mobile/presentation/standalone_chat_screen.dart';
 import 'package:kali_mobile/presentation/widgets/message_bubble.dart';
 import 'package:kali_mobile/standalone/imported_agent.dart';
 import 'package:kali_mobile/standalone/llm_client.dart';
+import 'package:kali_mobile/standalone/profile_store.dart';
+import 'package:kali_mobile/standalone/user_profile.dart';
 
 final _agent = ImportedAgent(
   name: 'chef',
@@ -25,8 +27,23 @@ final _agent = ImportedAgent(
   installedAt: DateTime.utc(2026, 6, 29),
 );
 
-Widget _wrap(ChatFn chat) => ProviderScope(
-      overrides: [chatFnProvider.overrideWithValue(chat)],
+/// In-memory [ProfileStore]: the default FileProfileStore would hit the
+/// path_provider platform channel, which does not exist in VM widget tests.
+class _FakeProfileStore implements ProfileStore {
+  _FakeProfileStore([this.profile = const UserProfile()]);
+  UserProfile profile;
+  @override
+  Future<UserProfile> load() async => profile;
+  @override
+  Future<void> save(UserProfile p) async => profile = p;
+}
+
+Widget _wrap(ChatFn chat, {UserProfile profile = const UserProfile()}) =>
+    ProviderScope(
+      overrides: [
+        chatFnProvider.overrideWithValue(chat),
+        profileStoreProvider.overrideWithValue(_FakeProfileStore(profile)),
+      ],
       child: MaterialApp(
         theme: AppTheme.darkTheme,
         home: StandaloneChatScreen(agent: _agent),
@@ -62,6 +79,24 @@ void main() {
     await _send(tester, 'привет');
 
     expect(capturedSystem, _agent.skillMd);
+  });
+
+  testWidgets('system prompt = profile block + SKILL.md', (tester) async {
+    String? capturedSystem;
+    await tester.pumpWidget(_wrap(
+      ({required systemPrompt, required history}) async {
+        capturedSystem = systemPrompt;
+        return 'ok';
+      },
+      profile: const UserProfile(name: 'Вася'),
+    ));
+    await tester.pumpAndSettle();
+
+    await _send(tester, 'привет');
+
+    expect(capturedSystem, startsWith('Профиль пользователя'));
+    expect(capturedSystem, contains('Имя: «Вася»'));
+    expect(capturedSystem, endsWith(_agent.skillMd));
   });
 
   testWidgets('noKey error shows the add-key CTA', (tester) async {
