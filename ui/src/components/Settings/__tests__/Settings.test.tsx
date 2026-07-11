@@ -7,6 +7,7 @@ import { api } from "../../../api/client";
 // Child sections own their own behaviour + tests; stub them so this suite
 // isolates the LLM-picker save path (the WS-2 #2.5 fix).
 vi.mock("../sections/VoiceSettings", () => ({ VoiceSettings: () => null }));
+vi.mock("../sections/ProfileSettings", () => ({ ProfileSettings: () => null }));
 vi.mock("../sections/AdvancedSettings", () => ({ AdvancedSettings: () => null }));
 
 vi.mock("../../../api/client", () => ({

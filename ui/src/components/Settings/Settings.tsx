@@ -3,6 +3,7 @@ import { Settings as SettingsIcon, Save } from "lucide-react";
 import { api } from "../../api/client";
 import { LlmSettings, type LlmSettingsValue } from "./sections/LlmSettings";
 import { VoiceSettings } from "./sections/VoiceSettings";
+import { ProfileSettings } from "./sections/ProfileSettings";
 import { AdvancedSettings } from "./sections/AdvancedSettings";
 import { HexFrame, HudDivider } from "../hud";
 
@@ -203,6 +204,8 @@ export function Settings() {
         />
 
         <VoiceSettings />
+
+        <ProfileSettings />
 
         <AdvancedSettings />
 
