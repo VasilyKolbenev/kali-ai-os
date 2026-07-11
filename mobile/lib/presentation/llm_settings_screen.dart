@@ -5,6 +5,7 @@ import '../core/l10n.dart';
 import '../core/theme.dart';
 import '../standalone/llm_client.dart';
 import '../standalone/llm_settings_store.dart';
+import 'profile_screen.dart';
 
 /// The [LlmSettingsStore] used by the standalone settings screen.
 ///
@@ -171,6 +172,32 @@ class _LlmSettingsScreenState extends ConsumerState<LlmSettingsScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     child: Text(t.save, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // Navigation section: the standalone questionnaire lives here
+                // (below Save so the key-save flow stays within the viewport).
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppTheme.glassSurface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.glassBorder),
+                  ),
+                  // ListTile paints ink on the nearest Material — give it a
+                  // transparent one so the decorated Container stays visible.
+                  child: Material(
+                    color: Colors.transparent,
+                    child: ListTile(
+                      leading: const Icon(Icons.person_outline,
+                          color: AppTheme.textSecondary),
+                      title: Text(t.profileTitle,
+                          style: Theme.of(context).textTheme.bodyLarge),
+                      trailing: const Icon(Icons.chevron_right_rounded,
+                          color: Colors.white54),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                      ),
+                    ),
                   ),
                 ),
               ],
