@@ -15,27 +15,35 @@ import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
 import { AnimatePresence, motion } from "framer-motion";
 
-/** True only after the kernel has been unreachable for a few seconds —
-    avoids flashing the banner during normal startup/reconnect blips. */
-function useKernelOffline(graceMs = 3000): boolean {
+/** Kernel connectivity stage:
+    - 0: connected / brief blip (no banner)
+    - 1: unreachable > graceMs → "reconnecting" (transient)
+    - 2: unreachable > failMs → treat as a terminal backend-start failure and
+         stop pretending we're still reconnecting (Rust also emits
+         `backend://failed` for logs). */
+function useKernelStage(graceMs = 3000, failMs = 12000): 0 | 1 | 2 {
   const connected = useAppStore((s) => s.kernelConnected);
-  const [offline, setOffline] = useState(false);
+  const [stage, setStage] = useState<0 | 1 | 2>(0);
   useEffect(() => {
     if (connected) {
-      setOffline(false);
+      setStage(0);
       return;
     }
-    const timer = setTimeout(() => setOffline(true), graceMs);
-    return () => clearTimeout(timer);
-  }, [connected, graceMs]);
-  return offline;
+    const t1 = setTimeout(() => setStage(1), graceMs);
+    const t2 = setTimeout(() => setStage(2), failMs);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [connected, graceMs, failMs]);
+  return stage;
 }
 
 export default function App() {
   const mode = useAppStore((s) => s.mode);
   useWebSocket();
   const { loading: onboardingLoading, gated: onboardingGated, slow } = useOnboardingGate();
-  const kernelOffline = useKernelOffline();
+  const kernelStage = useKernelStage();
 
   if (onboardingLoading) {
     return (
@@ -77,8 +85,23 @@ export default function App() {
 
       <Sidebar />
 
-      {/* Kernel connectivity — plain words instead of raw fetch errors */}
-      {kernelOffline && (
+      {/* Kernel connectivity — plain words instead of raw fetch errors.
+          After a prolonged outage we stop pretending we're "reconnecting" and
+          show an honest terminal failure (red) telling the user to restart. */}
+      {kernelStage === 2 ? (
+        <div
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl
+            text-sm flex items-center gap-2 border backdrop-blur-md max-w-md text-center"
+          style={{
+            color: "var(--j-red, #ef4444)",
+            borderColor: "color-mix(in srgb, var(--j-red, #ef4444) 40%, transparent)",
+            background: "rgba(0,0,0,0.6)",
+          }}
+        >
+          <span className="w-2 h-2 rounded-full bg-current shrink-0" />
+          Ядро не запустилось. Перезапусти приложение; если не помогает — проверь логи в папке данных KALI.
+        </div>
+      ) : kernelStage === 1 ? (
         <div
           className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl
             text-sm flex items-center gap-2 border backdrop-blur-md"
@@ -91,7 +114,7 @@ export default function App() {
           <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
           Джарвис просыпается — восстанавливаю связь… Если это надолго, перезапусти приложение.
         </div>
-      )}
+      ) : null}
 
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         {/* mode="wait" deadlocks if a mode view contains a shared `layoutId`
