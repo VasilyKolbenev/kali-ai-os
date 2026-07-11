@@ -63,8 +63,19 @@ android {
 
     buildTypes {
         release {
-            // Use the real upload key when keystore.properties (or env) provides
-            // one; otherwise fall back to debug so local/release builds still run.
+            // CI/release must fail fast rather than silently ship a debug-signed
+            // AAB: set -PkaliRequireSigning=true (fastlane/CI) to enforce a real
+            // upload key. Local `flutter run --release` (property unset) still
+            // falls back to debug so on-device testing keeps working.
+            val requireSigning =
+                (project.findProperty("kaliRequireSigning") as String?) == "true"
+            if (requireSigning && !hasReleaseSigning) {
+                throw GradleException(
+                    "Release signing not configured: provide KALI_UPLOAD_* env or " +
+                        "keystore.properties (or drop -PkaliRequireSigning for a " +
+                        "local debug-signed build)."
+                )
+            }
             signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
             } else {

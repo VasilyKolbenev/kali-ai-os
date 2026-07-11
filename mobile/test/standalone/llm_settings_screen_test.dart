@@ -59,4 +59,30 @@ void main() {
     // Default provider persisted too.
     expect(kv.data[kLlmProviderKey], LlmProvider.anthropic.name);
   });
+
+  testWidgets('saving an empty key is rejected with an honest error',
+      (tester) async {
+    final kv = _MemoryKv();
+    final store = LlmSettingsStore(storage: kv);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [llmSettingsStoreProvider.overrideWithValue(store)],
+        child: MaterialApp(
+          theme: AppTheme.darkTheme,
+          home: const LlmSettingsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Leave the field empty and tap Save.
+    final t = L10n('ru');
+    await tester.tap(find.text(t.save));
+    await tester.pumpAndSettle();
+
+    expect(find.text(t.llmKeyEmpty), findsOneWidget);
+    expect(find.text(t.llmKeySaved), findsNothing);
+    expect(kv.data[kLlmApiKeyKey], isNull); // nothing written
+  });
 }
