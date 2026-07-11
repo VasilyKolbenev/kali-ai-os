@@ -60,7 +60,9 @@ class SkillTemplate(ABC):
             data: JSON-serializable data to persist.
         """
         path = self._validate_filename(filename)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
 
     async def load_data(self, filename: str, default: Any = None) -> Any:
         """Load JSON data from skill's storage directory.
@@ -76,7 +78,7 @@ class SkillTemplate(ABC):
         if not path.exists():
             return default
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s", path, e)
             return default

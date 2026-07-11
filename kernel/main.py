@@ -143,7 +143,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append(f"Weather: {temp}°C, {cond}.")
     except Exception:
-        pass
+        logger.debug("briefing: weather section unavailable", exc_info=True)
 
     # Tasks
     try:
@@ -159,7 +159,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append("Нет активных задач." if is_ru else "No active tasks.")
     except Exception:
-        pass
+        logger.debug("briefing: tasks section unavailable", exc_info=True)
 
     # Calendar
     try:
@@ -176,7 +176,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append("Календарь на сегодня пуст." if is_ru else "Calendar is clear today.")
     except Exception:
-        pass
+        logger.debug("briefing: calendar section unavailable", exc_info=True)
 
     # Active agents count
     try:
@@ -187,7 +187,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append(f"{count} agents active.")
     except Exception:
-        pass
+        logger.debug("briefing: agents section unavailable", exc_info=True)
 
     # Skills
     try:
@@ -198,7 +198,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
             else:
                 parts.append(f"{skill_count} skills loaded.")
     except Exception:
-        pass
+        logger.debug("briefing: skills section unavailable", exc_info=True)
 
     # Final
     if is_ru:
@@ -220,14 +220,22 @@ def _save_env(updates: dict[str, str]) -> None:
         env_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         env_path = Path(".env")
+    # Guard the .env boundary: a newline or other control char in a value would
+    # inject a spurious KEY=VALUE line (e.g. token='x\nADMIN=1'). Reject rather
+    # than silently corrupt the environment file.
+    for k, v in updates.items():
+        if any(ord(c) < 0x20 for c in f"{k}{v}"):
+            raise ValueError(f"Control character not allowed in env entry: {k!r}")
     existing: dict[str, str] = {}
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
                 existing[k.strip()] = v.strip()
     existing.update(updates)
-    env_path.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+    env_path.write_text(
+        "\n".join(f"{k}={v}" for k, v in existing.items()) + "\n", encoding="utf-8"
+    )
 
 
 def _play_audio(audio: Any, sr: int) -> None:
@@ -461,6 +469,13 @@ def create_app(
         app.state.database = database
         app.state.scheduler = scheduler
         app.state.ws_connections: list[WebSocket] = []
+        # Strong references to background auto-speak tasks. Without a retained
+        # ref the GC can cancel a task mid-speech (asyncio fire-and-forget trap).
+        app.state._speak_tasks: set[asyncio.Task[None]] = set()
+        # Retained refs to model-download failure-event publishes. A weakly
+        # referenced publish (ensure_future + drop) can be GC-cancelled before
+        # it runs, so the failure event would never reach the bus.
+        app.state._download_publish_tasks: set[asyncio.Task[None]] = set()
 
         # Forward events to WebSocket clients (skip events originating from WS itself)
         async def ws_forwarder(event: Event) -> None:
@@ -730,7 +745,19 @@ def create_app(
 
                 success = await asyncio.to_thread(download_model, item["name"], item["url"], progress_cb)
                 if not success:
-                    break
+                    # Soft failure (returned False, no raise): report it honestly
+                    # and do NOT fall through to a false download_complete.
+                    asyncio.run_coroutine_threadsafe(
+                        event_bus.publish(Event(
+                            topic="system.models.download_failed",
+                            source="kernel",
+                            payload={
+                                "filename": item["name"],
+                                "error": f"download_model returned False for {item['name']}",
+                            },
+                        )), loop
+                    )
+                    return
 
             asyncio.run_coroutine_threadsafe(
                 event_bus.publish(Event(
@@ -740,7 +767,35 @@ def create_app(
                 )), loop
             )
 
-        asyncio.create_task(_download_task())
+        def _on_download_done(task: "asyncio.Task[None]") -> None:
+            """Surface a stalled/failed download as an event so the UI can react.
+
+            Without this a GC-cancelled or crashed task leaves the onboarding
+            UI hanging on a download_complete that never arrives.
+            """
+            if task.cancelled():
+                exc: BaseException | None = asyncio.CancelledError()
+            else:
+                exc = task.exception()
+            if exc is None:
+                return
+            logger.error("Model download task exited abnormally", exc_info=exc)
+            # Retain the publish task so the GC cannot cancel it before the
+            # failure event reaches the bus; discard it when it finishes.
+            state = request.app.state
+            publish_task = asyncio.create_task(
+                state.event_bus.publish(Event(
+                    topic="system.models.download_failed",
+                    source="kernel",
+                    payload={"error": str(exc) or type(exc).__name__},
+                ))
+            )
+            state._download_publish_tasks.add(publish_task)
+            publish_task.add_done_callback(state._download_publish_tasks.discard)
+
+        task = asyncio.create_task(_download_task())
+        request.app.state._model_download_task = task
+        task.add_done_callback(_on_download_done)
         return {"status": "started", "message": "Download task started"}
 
     @app.get("/health")
@@ -1415,15 +1470,18 @@ def create_app(
     async def chat(request: Request) -> dict[str, Any]:
         """Process a chat message through LLM or agents. Auto-speaks response."""
         result = await _chat_logic(request)
-        # Auto-speak the response through system speakers
+        # Auto-speak the response through system speakers. Retain the task in a
+        # set so the GC cannot cancel it mid-speech; discard it when it finishes.
         import asyncio as _aio
-        _aio.create_task(_speak_response(result.get("response", "")))
+        speak_task = _aio.create_task(_speak_response(result.get("response", "")))
+        request.app.state._speak_tasks.add(speak_task)
+        speak_task.add_done_callback(request.app.state._speak_tasks.discard)
         return result
 
     async def _chat_logic(request: Request) -> dict[str, Any]:
         """Internal chat logic — returns response dict using LLMRouter."""
         from kernel.llm_router import LLMRouter, LLMRequest
-        from kernel.tool_dispatch import execute_tool_call
+        from kernel.tool_dispatch import execute_tool_calls
 
         body = await request.json()
         text = body.get("text", "")
@@ -1462,6 +1520,16 @@ def create_app(
         )
         response = await router.route(req)
 
+        # No AI key / total LLM outage: the router returns provider_used="error"
+        # with an English fallback. A skip-key RU non-tech user must not see that
+        # dead-end — return an honest Russian prompt routing them to settings.
+        if response.provider_used == "error":
+            return {
+                "response": "Я пока без ключа от ИИ. Открой Настройки → Модель "
+                "и вставь ключ — и я сразу отвечу.",
+                "source": "no-key",
+            }
+
         # Personal memory: extract any new permanent facts from this turn
         # (fire-and-forget; never blocks the reply).
         if lt_memory:
@@ -1473,12 +1541,14 @@ def create_app(
         # 4. Handle tool calls — shared execution path with the voice pipelines
         # (kernel/tool_dispatch.py) so chat and voice can never diverge again.
         if response.tool_calls:
-            call = response.tool_calls[0]
             try:
-                dispatched = await execute_tool_call(s, router, call, req.context, text)
+                dispatched = await execute_tool_calls(
+                    s, router, response.tool_calls, req.context, text
+                )
             except Exception as e:
-                logger.exception("Tool execution failed for %s", call.name)
-                return {"response": f"Error executing {call.name}: {e}", "source": "system"}
+                names = ", ".join(c.name for c in response.tool_calls)
+                logger.exception("Tool execution failed for %s", names)
+                return {"response": f"Error executing {names}: {e}", "source": "system"}
             if dispatched is not None:
                 final_text, result, source = dispatched
                 s.memory.add_turn("user", text)
@@ -2625,7 +2695,7 @@ def create_app(
     async def skills_publish(request: Request) -> dict[str, Any]:
         """Prepare a skill bundle for community catalog submission.
 
-        Body: {"name": "my-skill", "skip_safety": false}
+        Body: {"name": "my-skill"}
 
         Returns bundle path + next-step instructions (does not push to GitHub).
         """
@@ -2641,9 +2711,11 @@ def create_app(
         if skill is None:
             return {"status": "error", "message": f"Skill '{name}' not found locally"}
 
+        # skip_safety is NOT exposed over HTTP — the AST safety gate must always
+        # run on a publish path (it is an internal/testing-only kwarg).
         result = publish_skill(
             skill.skill_dir,
-            skip_safety=bool(body.get("skip_safety", False)),
+            skip_safety=False,
             include_scripts=bool(body.get("include_scripts", True)),
         )
 

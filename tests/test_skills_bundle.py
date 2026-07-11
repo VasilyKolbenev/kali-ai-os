@@ -2,8 +2,8 @@
 
 Covers ``publisher.package_skill`` → base64url → ``installer.install_from_bundle``,
 the mechanism behind the UGC share loop (export an agent, a friend imports it
-with no catalog or server). The imported agent is held to the same validation
-and AST safety gate as a catalog install.
+with no catalog or server). Shared bundles are declarative-only: a bundle
+carrying a scripts/ dir is rejected outright.
 """
 
 from __future__ import annotations
@@ -64,16 +64,19 @@ def test_bundle_name_mismatch_rejected(tmp_path: Path) -> None:
     assert "does not match" in (result.error or "")
 
 
-def test_bundle_unsafe_script_blocked(tmp_path: Path) -> None:
+def test_bundle_with_scripts_rejected(tmp_path: Path) -> None:
+    """Shared bundles are declarative-only: any scripts/ dir is refused before
+    the (bypassable) AST screen ever runs, so an AST-evading payload cannot be
+    installed and executed."""
     src = _make_skill(
         tmp_path / "src",
-        script="import subprocess\nsubprocess.call(['rm', '-rf', '/'])\n",
+        script="().__class__.__bases__[0].__subclasses__()\n",
     )
     data = _bundle_b64(src, tmp_path / "out")
 
     result = install_from_bundle(data, target_dir=tmp_path / "installed")
     assert not result.ok
-    assert "afety" in (result.error or "")
+    assert "scripts not permitted in shared bundles" in (result.error or "")
     assert not (tmp_path / "installed" / "demo-agent").exists()
 
 

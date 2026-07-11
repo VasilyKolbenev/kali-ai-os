@@ -114,3 +114,53 @@ async def execute_tool_call(
         LLMRequest(text=system_msg, context=tool_context, available_tools=[])
     )
     return formatted.text, result, source
+
+
+#: Hard cap on tool calls executed per turn. A multi-intent utterance («запиши
+#: воду и напомни позвонить») yields several calls; we run a small bounded
+#: number rather than only the first (silently dropped before) or an unbounded
+#: chain.
+MAX_TOOL_CALLS_PER_TURN = 3
+
+
+async def execute_tool_calls(
+    state: Any,
+    router: LLMRouter,
+    calls: list[ToolCall],
+    context: list[dict[str, Any]],
+    user_text: str,
+) -> tuple[str, list[dict[str, Any]], str] | None:
+    """Execute up to :data:`MAX_TOOL_CALLS_PER_TURN` tool calls and combine them.
+
+    Chat, voice, and remote all funnel multi-intent turns through here so they
+    stay identical: every dispatchable call (capped) runs, and the natural-
+    language summaries are joined into one reply. Previously each caller ran only
+    ``tool_calls[0]`` and silently dropped the rest.
+
+    Args:
+        state: The app state (registry, executors, runtime).
+        router: LLM router for the per-call natural-language second pass.
+        calls: The tool calls the model emitted, in order.
+        context: Prior conversation turns for the second-pass prompt.
+        user_text: The user's original message.
+
+    Returns:
+        ``(combined_text, raw_results, source)`` where ``raw_results`` holds one
+        entry per dispatched call and ``source`` is the first call's source, or
+        ``None`` if no call was dispatchable (caller falls back to plain text).
+    """
+    texts: list[str] = []
+    results: list[dict[str, Any]] = []
+    source: str | None = None
+    for call in calls[:MAX_TOOL_CALLS_PER_TURN]:
+        dispatched = await execute_tool_call(state, router, call, context, user_text)
+        if dispatched is None:
+            continue
+        text, result, call_source = dispatched
+        texts.append(text)
+        results.append(result)
+        if source is None:
+            source = call_source
+    if source is None:
+        return None
+    return "\n".join(t for t in texts if t), results, source

@@ -46,17 +46,46 @@ PairInfo? parsePairLink(Uri uri) {
   final ip = uri.queryParameters['ip']?.trim() ?? '';
   final token = uri.queryParameters['token']?.trim() ?? '';
   if (ip.isEmpty || token.isEmpty) return null;
-  if (!_looksLikeHost(ip)) return null;
+  if (!_isPrivateHost(ip)) return null;
 
   return PairInfo(ip: ip, token: token);
 }
 
-/// Loose `host[:port]` sanity check — rejects whitespace and unparseable
-/// authorities without imposing a strict IP/DNS grammar.
-bool _looksLikeHost(String value) {
+/// Whether `value` (a `host[:port]`) is a private/loopback/CGNAT IPv4 literal.
+///
+/// Pairing is LAN-only by design: the token is the LAN-security boundary, so a
+/// public host or a DNS name means an attacker is trying to exfiltrate the
+/// token to a server they control. Only literal IPv4 in 10/8, 172.16/12,
+/// 192.168/16, 127/8 or 100.64/10 is accepted; everything else (public IPs,
+/// DNS names like `evil.com`/`localhost`, malformed input) is rejected.
+bool _isPrivateHost(String value) {
   if (value.contains(RegExp(r'\s'))) return false;
   final probe = Uri.tryParse('http://$value');
-  return probe != null && probe.host.isNotEmpty;
+  final host = probe?.host ?? '';
+  if (host.isEmpty) return false;
+
+  final octets = host.split('.');
+  if (octets.length != 4) return false; // non-literal DNS name or IPv6
+  final parts = <int>[];
+  for (final o in octets) {
+    // Strict ASCII-decimal, no leading zero: reject hex (0x7f) and octal-looking
+    // (010) octets — int.tryParse would accept them as 127/10, but a libc-style
+    // OS resolver reads 010 as octal 8 (public), diverging from this guard and
+    // letting the token leak. Only canonical decimal octets pass.
+    if (!RegExp(r'^(0|[1-9]\d{0,2})$').hasMatch(o)) return false;
+    final n = int.parse(o);
+    if (n > 255) return false;
+    parts.add(n);
+  }
+
+  final a = parts[0];
+  final b = parts[1];
+  if (a == 10) return true; // 10.0.0.0/8
+  if (a == 127) return true; // 127.0.0.0/8 (loopback)
+  if (a == 192 && b == 168) return true; // 192.168.0.0/16
+  if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a == 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (CGNAT)
+  return false;
 }
 
 /// Persists the paired token and updates the live in-memory holder, so a
@@ -79,10 +108,32 @@ Future<void> applyPairing(
 bool shouldImportOnDevice({required bool standaloneMode, required String? serverIp}) =>
     standaloneMode || serverIp == null;
 
+/// Persists a freshly-decoded [agent], carrying forward local reminder state.
+///
+/// Re-importing a same-name bundle must not silently reset the user's
+/// `enabled` toggle / `snoozeUntil`: those are local to this device and the
+/// sharer can't know them. So when an agent with the same name already exists,
+/// we replace its shared content (`skillMd`/`description`/`config`/`template`)
+/// while preserving the existing `enabled` + `snoozeUntil`. Returns the agent
+/// actually persisted. Side-effect-only (no UI) so it stays unit-testable.
+Future<ImportedAgent> saveImported(ImportedAgent agent,
+    {required AgentStore store}) async {
+  final existing = await store.get(agent.name);
+  final toSave = existing == null
+      ? agent
+      : agent.copyWith(
+          enabled: existing.enabled,
+          snoozeUntil: existing.snoozeUntil,
+        );
+  await store.save(toSave);
+  return toSave;
+}
+
 /// Imports a `kali://import` bundle on-device and persists it.
 ///
-/// Decodes [payload] via [importBundle] then saves to [store], returning the
-/// imported agent. [importer] is injectable so tests stub the decode; in
+/// Decodes [payload] via [importBundle] then persists via [saveImported]
+/// (which carries forward an existing agent's reminder state), returning the
+/// stored agent. [importer] is injectable so tests stub the decode; in
 /// production it defaults to [importBundle]. Lets a [BundleImportError]
 /// propagate (the caller surfaces an honest snackbar).
 Future<ImportedAgent> importOnDevice(
@@ -92,8 +143,7 @@ Future<ImportedAgent> importOnDevice(
 }) async {
   final decode = importer ?? importBundle;
   final agent = await decode(payload);
-  await store.save(agent);
-  return agent;
+  return saveImported(agent, store: store);
 }
 
 /// After a standalone import, registers the reminder's notifications.
@@ -200,7 +250,13 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
 
     if (ip == null ||
         shouldImportOnDevice(standaloneMode: standalone, serverIp: ip)) {
-      await _importStandalone(data, t, messenger);
+      await importStandaloneWithConsent(
+        data: data,
+        ref: ref,
+        t: t,
+        messenger: messenger,
+        confirmContext: navigatorKey.currentContext,
+      );
       return;
     }
 
@@ -229,40 +285,110 @@ class _DeepLinkHandlerState extends ConsumerState<DeepLinkHandler> {
     }
   }
 
-  /// On-device import: decode + persist the bundle, then route into the main
-  /// screen (standalone mode surfaces «Мои агенты»). Honest failure — a
-  /// [BundleImportError] (or anything else) shows the existing import-failed
-  /// snackbar and never crashes.
-  Future<void> _importStandalone(
-    String data,
-    L10n t,
-    ScaffoldMessengerState? messenger,
-  ) async {
-    ref.read(standaloneModeProvider.notifier).state = true;
-    messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
-    try {
-      final agent =
-          await importOnDevice(data, store: ref.read(agentStoreProvider));
-      // Reminder agents start firing immediately; conversational ones don't.
-      await scheduleImportedReminder(
-        agent,
-        scheduler: ref.read(reminderSchedulerProvider),
-        gateway: ref.read(notificationGatewayProvider),
-        now: DateTime.now(),
-      );
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(
-        SnackBar(content: Text(t.importedStandalone(agent.name))),
-      );
-      navigatorKey.currentState?.pushReplacement(
-        MaterialPageRoute(builder: (_) => const MainScreen()),
-      );
-    } catch (_) {
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
-    }
-  }
-
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+/// Decodes a `kali://import` bundle, asks the user to confirm, and only then
+/// installs it on-device.
+///
+/// Consent-gated: `kali://import` brings an *untrusted* agent from a stranger's
+/// share link, so we never silently persist it, flip to standalone, or request
+/// notification permission. We decode first ([decoder], default [importBundle])
+/// — a pure, side-effect-free step — to show the parsed name in a confirm sheet
+/// ([confirm], default [showImportConsent]); the persist + permission + schedule
+/// side effects run only after an explicit Confirm. A decode failure or a
+/// cancel both leave the store and OS untouched. Injectable seams keep it
+/// widget-testable without app_links or native channels.
+Future<void> importStandaloneWithConsent({
+  required String data,
+  required WidgetRef ref,
+  required L10n t,
+  required ScaffoldMessengerState? messenger,
+  required BuildContext? confirmContext,
+  Future<ImportedAgent> Function(String)? decoder,
+  Future<bool> Function(BuildContext, ImportedAgent, L10n)? confirm,
+}) async {
+  final decode = decoder ?? importBundle;
+  final ask = confirm ?? showImportConsent;
+
+  // Decode first (pure) so the confirm sheet can show the real name; a bad
+  // bundle fails honestly here, before any side effect.
+  final ImportedAgent decoded;
+  try {
+    decoded = await decode(data);
+  } catch (_) {
+    messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
+    return;
+  }
+
+  final ctx = confirmContext;
+  // No live UI to confirm against (no Navigator yet, or it was torn down across
+  // the decode await) — abort without any side effect.
+  if (ctx == null || !ctx.mounted) return;
+  final ok = await ask(ctx, decoded, t);
+  if (!ok) return; // user declined: nothing persisted, no permission prompt
+
+  // Confirmed: now flip to standalone, persist, request permission + schedule.
+  ref.read(standaloneModeProvider.notifier).state = true;
+  messenger?.showSnackBar(SnackBar(content: Text(t.importInstalling)));
+  try {
+    // Carry forward any existing enabled/snooze state on a same-name re-import.
+    await saveImported(decoded, store: ref.read(agentStoreProvider));
+    // Reminder agents start firing immediately; conversational ones don't.
+    await scheduleImportedReminder(
+      decoded,
+      scheduler: ref.read(reminderSchedulerProvider),
+      gateway: ref.read(notificationGatewayProvider),
+      now: DateTime.now(),
+    );
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      SnackBar(content: Text(t.importedStandalone(decoded.name))),
+    );
+    navigatorKey.currentState?.pushReplacement(
+      MaterialPageRoute(builder: (_) => const MainScreen()),
+    );
+  } catch (_) {
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(SnackBar(content: Text(t.importFailed)));
+  }
+}
+
+/// Shows the import-consent dialog for [agent] and resolves to the user's
+/// choice (true = install). One extra tap, to keep the UGC flow frictionless
+/// while never installing a stranger's agent silently.
+Future<bool> showImportConsent(
+  BuildContext context,
+  ImportedAgent agent,
+  L10n t,
+) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(t.importConfirmTitle),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(t.importConfirmBody(agent.name)),
+          if (agent.description.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(agent.description),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: Text(t.importConfirmCancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text(t.importConfirmInstall),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
 }

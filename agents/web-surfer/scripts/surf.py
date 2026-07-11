@@ -76,9 +76,12 @@ def _extract_text(html: str) -> str:
 
 def fetch_url(url: str) -> str:
     # The URL is user/voice-supplied — route through the SSRF guard, which
-    # blocks private/loopback/link-local hosts and re-checks redirects. The
-    # configured target host is whitelisted (the user explicitly asked for it);
-    # the private-IP block still rejects an internal target regardless.
+    # blocks private/loopback/link-local hosts and re-checks redirects. By
+    # design web-surfer fetches arbitrary PUBLIC pages, so the host allowlist is
+    # the requested host itself; the private-IP block (not the allowlist) is the
+    # real SSRF defense here. Require https to avoid cleartext/MITM.
+    if not url.lower().startswith("https://"):
+        return "Error fetching URL: only https:// URLs are allowed"
     host = (urlparse(url).hostname or "").lower()
     try:
         html = _guarded_get(url, allowed_hosts=[host] if host else [])

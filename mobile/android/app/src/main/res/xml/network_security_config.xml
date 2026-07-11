@@ -18,6 +18,12 @@
   This is deliberately scoped to be TIGHTENED once the cloud/relay switch lands
   (the public endpoint will be HTTPS): at that point base cleartext flips to
   false and only the explicit local hosts below keep cleartext for local dev.
+
+  DEFENSE-IN-DEPTH: because this base config is broad, the app ALSO enforces the
+  LAN-only rule in code — `isCleartextTargetAllowed` in
+  mobile/lib/core/websocket_client.dart rejects any cleartext (ws/http) target
+  that is not a private/loopback/CGNAT IPv4 literal, so a cloud endpoint must be
+  wss/https regardless of what this file permits.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />

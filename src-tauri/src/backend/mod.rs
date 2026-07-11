@@ -91,7 +91,20 @@ pub async fn serve() -> anyhow::Result<()> {
         token,
     )
     .layer(build_cors_layer())
-    .layer(TraceLayer::new_for_http());
+    // Record only method + PATH in the request span — never the query string,
+    // which carries the LAN control-plane token on /ws?token=… (a debug-level
+    // full-URI span would leak it into logs).
+    .layer(
+        TraceLayer::new_for_http().make_span_with(
+            |req: &axum::http::Request<axum::body::Body>| {
+                tracing::info_span!(
+                    "http",
+                    method = %req.method(),
+                    path = %req.uri().path(),
+                )
+            },
+        ),
+    );
 
     let bind = resolve_bind_addr();
     let addr: SocketAddr = bind.parse().with_context(|| format!("parse bind address {bind}"))?;

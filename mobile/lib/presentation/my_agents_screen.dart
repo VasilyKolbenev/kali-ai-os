@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -31,6 +33,17 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>(
   ),
 );
 
+/// Awaits [scheduler.syncAll], swallowing+logging any failure so a single bad
+/// agent file can't become an unhandled async error (which would poison the
+/// app-resume handler / tile bootstrap and silently desync reminders).
+Future<void> guardedSyncAll(ReminderScheduler scheduler, DateTime now) async {
+  try {
+    await scheduler.syncAll(now);
+  } on Object catch (e, st) {
+    log('reminder syncAll failed', name: 'ReminderScheduler', error: e, stackTrace: st);
+  }
+}
+
 /// Lists the agents imported on-device (standalone mode). Tapping a
 /// conversational agent opens a chat with it via the cloud LLM
 /// ([StandaloneChatScreen]); a reminder agent gets an inline on/off toggle,
@@ -45,10 +58,37 @@ class MyAgentsScreen extends ConsumerStatefulWidget {
 class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
   late Future<List<ImportedAgent>> _agents;
 
+  /// Whether OS notification permission is granted. Resolved ONCE at the screen
+  /// level (not per tile) and passed down to every [_ReminderTile].
+  bool? _permissionGranted;
+
   @override
   void initState() {
     super.initState();
     _agents = ref.read(agentStoreProvider).list();
+    _bootstrapReminders();
+  }
+
+  /// Requests permission once and runs a SINGLE store-wide [syncAll] for the
+  /// whole screen. Previously each reminder tile did this on build, causing
+  /// O(N²) cancel/reschedule churn (and amplifying the syncAll race). Awaited +
+  /// guarded so a failure logs instead of becoming an unhandled async error.
+  Future<void> _bootstrapReminders() async {
+    await guardedSyncAll(ref.read(reminderSchedulerProvider), DateTime.now());
+    // Only prompt for notification permission when the user actually has a
+    // reminder agent — a chat-only user shouldn't get an OS permission dialog
+    // for a capability they don't use yet.
+    final List<ImportedAgent> agents;
+    try {
+      agents = await _agents;
+    } catch (_) {
+      return; // list() failure is surfaced by the FutureBuilder, not here
+    }
+    if (!agents.any((a) => a.template == 'reminder')) return;
+    final granted =
+        await ref.read(notificationGatewayProvider).requestPermission();
+    if (!mounted) return;
+    setState(() => _permissionGranted = granted);
   }
 
   @override
@@ -71,6 +111,9 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
           }
+          if (snapshot.hasError) {
+            return _errorState(context, t);
+          }
           final agents = snapshot.data ?? const <ImportedAgent>[];
           if (agents.isEmpty) {
             return _emptyState(context, t);
@@ -85,6 +128,37 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
       ),
     );
   }
+
+  /// Surfaces a `list()` failure honestly (instead of the misleading
+  /// empty-state) with a retry that re-reads the store.
+  Widget _errorState(BuildContext context, L10n t) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline_rounded,
+                  size: 64, color: AppTheme.accent.withValues(alpha: 0.6)),
+              const SizedBox(height: 16),
+              Text(
+                t.myAgentsError,
+                textAlign: TextAlign.center,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyLarge
+                    ?.copyWith(color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: () =>
+                    setState(() => _agents = ref.read(agentStoreProvider).list()),
+                icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary),
+                label: Text(t.retry, style: const TextStyle(color: AppTheme.primary)),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _emptyState(BuildContext context, L10n t) => Center(
         child: Padding(
@@ -106,7 +180,7 @@ class _MyAgentsScreenState extends ConsumerState<MyAgentsScreen> {
 
   Widget _agentTile(BuildContext context, ImportedAgent agent) {
     if (agent.template == 'reminder') {
-      return _ReminderTile(agent: agent);
+      return _ReminderTile(agent: agent, permissionGranted: _permissionGranted);
     }
     return _glassTile(
       child: ListTile(
@@ -138,11 +212,16 @@ Widget _glassTile({required Widget child}) => Container(
 
 /// A reminder agent row: on/off [Switch], the next fire time, an "Отложить на
 /// час" snooze action, and an honest note when notification permission is
-/// denied. Owns its own sync lifecycle so the OS schedule reflects the toggle.
+/// denied. Toggle/snooze re-sync the OS schedule; the screen owns the one-shot
+/// permission request + initial store-wide sync ([permissionGranted] is passed
+/// down rather than re-resolved per tile).
 class _ReminderTile extends ConsumerStatefulWidget {
-  const _ReminderTile({required this.agent});
+  const _ReminderTile({required this.agent, required this.permissionGranted});
 
   final ImportedAgent agent;
+
+  /// Screen-resolved permission state; null until the one-shot request settles.
+  final bool? permissionGranted;
 
   @override
   ConsumerState<_ReminderTile> createState() => _ReminderTileState();
@@ -150,26 +229,12 @@ class _ReminderTile extends ConsumerStatefulWidget {
 
 class _ReminderTileState extends ConsumerState<_ReminderTile> {
   late bool _enabled = widget.agent.enabled;
-  bool? _permissionGranted;
   DateTime? _snoozeUntil;
 
   @override
   void initState() {
     super.initState();
     _snoozeUntil = widget.agent.snoozeUntil;
-    _bootstrap();
-  }
-
-  /// Requests permission once, then schedules this agent's reminders so the
-  /// next-fire label and OS schedule are live when the tile appears.
-  Future<void> _bootstrap() async {
-    final gateway = ref.read(notificationGatewayProvider);
-    final granted = await gateway.requestPermission();
-    if (_enabled) {
-      await ref.read(reminderSchedulerProvider).syncAll(DateTime.now());
-    }
-    if (!mounted) return;
-    setState(() => _permissionGranted = granted);
   }
 
   Future<void> _onToggle(bool value) async {
@@ -215,7 +280,7 @@ class _ReminderTileState extends ConsumerState<_ReminderTile> {
   Widget build(BuildContext context) {
     final t = L10n.of(ref);
     final next = _enabled ? _nextFireLabel() : null;
-    final denied = _permissionGranted == false;
+    final denied = widget.permissionGranted == false;
 
     final subtitle = <Widget>[
       Text(

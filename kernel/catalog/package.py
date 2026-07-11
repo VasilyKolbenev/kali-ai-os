@@ -129,7 +129,9 @@ def unpack(package_path: Path, target_dir: Path) -> Path:
 
     Raises:
         FileNotFoundError: If checksums.json is missing from the archive.
-        ValueError: If any file's checksum does not match.
+        ValueError: If a member is not listed in checksums.json (or a listed
+            member is absent), if a member path escapes ``target_dir``, or if
+            any file's checksum does not match.
     """
     package_path = Path(package_path)
     target_dir = Path(target_dir)
@@ -142,17 +144,43 @@ def unpack(package_path: Path, target_dir: Path) -> Path:
 
         checksums: dict[str, str] = json.loads(zf.read(_CHECKSUMS_FILE))
         base = target_dir.resolve()
+
+        # Zip-slip validation runs first (over every member) so a traversal
+        # member is reported as a slip, not merely as an unlisted one.
         for info in zf.infolist():
             if info.filename == _CHECKSUMS_FILE:
                 continue
-            # Zip slip protection: reject absolute or traversal member names,
-            # then require the resolved target to be contained in target_dir.
             member = info.filename
             if Path(member).is_absolute() or os.path.isabs(member) or ".." in Path(member).parts:
                 raise ValueError(f"Zip slip detected: {member}")
             target = (target_dir / member).resolve()
             if os.path.commonpath([str(target), str(base)]) != str(base):
                 raise ValueError(f"Zip slip detected: {member}")
+
+        # checksums.json is an EXHAUSTIVE manifest: the set of extractable file
+        # members (everything but checksums.json and directory entries) must
+        # equal the manifest keys. Reject any UNLISTED member before writing it
+        # so an attacker cannot smuggle an extra file past checksum verification.
+        expected_keys = {k.replace("\\", "/") for k in checksums}
+        member_keys = {
+            info.filename.replace("\\", "/")
+            for info in zf.infolist()
+            if info.filename != _CHECKSUMS_FILE and not info.is_dir()
+        }
+        extra = sorted(member_keys - expected_keys)
+        if extra:
+            raise ValueError(
+                f"Members not listed in checksums.json: {', '.join(extra)}"
+            )
+        missing = sorted(expected_keys - member_keys)
+        if missing:
+            raise ValueError(
+                f"Members listed in checksums.json but absent: {', '.join(missing)}"
+            )
+
+        for info in zf.infolist():
+            if info.filename == _CHECKSUMS_FILE or info.is_dir():
+                continue
             zf.extract(info, target_dir)
 
     for rel_path, expected in checksums.items():

@@ -33,6 +33,11 @@ from kernel.skills.validator import ValidationError
 
 logger = logging.getLogger(__name__)
 
+# Decompression-bomb guard: cap the total (and per-member) uncompressed size of
+# an untrusted bundle. A shared skill is tiny (Markdown + a few small assets), so
+# 25 MiB is generous while still refusing a gzip bomb that inflates to gigabytes.
+_MAX_BUNDLE_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
+
 
 class InstallError(RuntimeError):
     """Raised when a skill cannot be installed."""
@@ -138,6 +143,8 @@ def _download_repo_subtree(
         top_prefix = members[0].name.split("/", 1)[0] + "/"
         want_prefix = top_prefix + subpath.strip("/") + "/"
 
+        containment_root = target_subdir.resolve()
+
         extracted = False
         for m in members:
             if not m.name.startswith(want_prefix):
@@ -146,6 +153,16 @@ def _download_repo_subtree(
             if not relative:
                 continue
             out_path = target_subdir / relative
+            # Path-traversal containment: a malicious tarball can carry a member
+            # like "skills/x/../../../../pwned.py". Resolve the destination and
+            # refuse anything that escapes the extraction subtree.
+            resolved = out_path.resolve()
+            if resolved != containment_root and not resolved.is_relative_to(
+                containment_root
+            ):
+                raise InstallError(
+                    f"Tarball member escapes staging dir: {m.name}"
+                )
             if m.isdir():
                 out_path.mkdir(parents=True, exist_ok=True)
             elif m.isfile():
@@ -283,9 +300,10 @@ def install_from_bundle(
     """Install a skill from a base64url(.tar.gz) bundle — the P2P share path.
 
     The bundle layout matches ``publisher.package_skill``: a single top-level
-    ``<name>/`` directory containing SKILL.md (+ optional scripts/references/
-    assets). The same validation and AST safety gate as catalog installs apply,
-    so an imported agent is held to the identical bar as a downloaded one.
+    ``<name>/`` directory containing SKILL.md (+ optional references/assets).
+    Shared bundles are declarative-only: a bundle carrying a ``scripts/`` dir is
+    rejected outright (voice-built shared agents carry none). The AST safety gate
+    is a best-effort screen, not a sandbox.
 
     Args:
         bundle_b64: base64url-encoded .tar.gz (padding optional).
@@ -311,6 +329,20 @@ def install_from_bundle(
         staging = Path(tmp)
         try:
             with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+                # Decompression-bomb guard: reject before extracting if the
+                # declared uncompressed total (or any single member) exceeds the
+                # cap, so a gzip bomb never inflates onto disk.
+                total = 0
+                for member in tar.getmembers():
+                    total += member.size
+                    if (
+                        member.size > _MAX_BUNDLE_UNCOMPRESSED_BYTES
+                        or total > _MAX_BUNDLE_UNCOMPRESSED_BYTES
+                    ):
+                        return InstallResult(
+                            ok=False, skill_name=name_hint,
+                            error="Bundle too large",
+                        )
                 # filter="data" (PEP 706) blocks path traversal, absolute paths,
                 # symlinks and special files — refuses an unsafe bundle outright.
                 tar.extractall(staging, filter="data")
@@ -324,6 +356,17 @@ def install_from_bundle(
                 error="Bundle must contain exactly one skill directory",
             )
         extracted_dir = subdirs[0]
+
+        # Policy: shared bundles are declarative-only. Voice-built shared agents
+        # carry no scripts/ dir; the AST gate is a best-effort screen, not a
+        # sandbox, so a bundle that ships executable scripts/ is refused outright
+        # rather than run. This closes the arbitrary-code-exec surface on the P2P
+        # share path.
+        if (extracted_dir / "scripts").is_dir():
+            return InstallResult(
+                ok=False, skill_name=name_hint,
+                error="scripts not permitted in shared bundles",
+            )
 
         try:
             manifest = load_skill(extracted_dir, source="bundle", strict=True)

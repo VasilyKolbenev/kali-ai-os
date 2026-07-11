@@ -60,8 +60,17 @@ class _LlmSettingsScreenState extends ConsumerState<LlmSettingsScreen> {
   Future<void> _save() async {
     final store = ref.read(llmSettingsStoreProvider);
     final t = L10n.of(ref);
+    final key = _keyController.text.trim();
+    if (key.isEmpty) {
+      // Don't silently "save" a blank key — chat would then dead-end with no
+      // explanation. Surface an honest error and keep the prior key.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.llmKeyEmpty)),
+      );
+      return;
+    }
     await store.setProvider(_provider);
-    await store.setApiKey(_keyController.text.trim());
+    await store.setApiKey(key);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(t.llmKeySaved)),

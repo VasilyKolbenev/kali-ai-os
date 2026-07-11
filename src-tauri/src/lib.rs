@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 struct BackendProcess(Mutex<Option<Child>>);
 
@@ -142,6 +142,13 @@ fn start_backend(app: &AppHandle) {
         Some(path) => path,
         None => {
             eprintln!("kali-backend.exe not found. Start kernel manually: uv run python -m kernel.main");
+            let _ = app.emit(
+                "backend://failed",
+                serde_json::json!({
+                    "reason": "kali-backend.exe not found",
+                    "log_path": runtime_data_dir().join("logs"),
+                }),
+            );
             return;
         }
     };
@@ -187,9 +194,25 @@ fn start_backend(app: &AppHandle) {
                     "Backend did not become healthy within 5s. Check logs in {:?}",
                     logs_dir
                 );
+                let _ = app.emit(
+                    "backend://failed",
+                    serde_json::json!({
+                        "reason": "backend did not become healthy within 5s",
+                        "log_path": logs_dir,
+                    }),
+                );
             }
         }
-        Err(err) => eprintln!("Failed to start kali-backend: {}", err),
+        Err(err) => {
+            eprintln!("Failed to start kali-backend: {}", err);
+            let _ = app.emit(
+                "backend://failed",
+                serde_json::json!({
+                    "reason": format!("failed to spawn backend: {err}"),
+                    "log_path": logs_dir,
+                }),
+            );
+        }
     }
 }
 

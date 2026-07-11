@@ -332,3 +332,33 @@ def test_aiohttp_import_blocked() -> None:
 def test_http_import_blocked() -> None:
     result = check_code("from http import client")
     assert not result.safe
+
+
+# Sandbox-escape dunders (object-graph traversal)
+
+
+def test_class_bases_subclasses_escape_blocked() -> None:
+    """The classic ``().__class__.__bases__[0].__subclasses__()`` escape — which
+    reaches os/eval without naming a blocked import — is hard-blocked."""
+    code = "sink = ().__class__.__bases__[0].__subclasses__()\n"
+    result = check_code(code)
+    assert not result.safe
+    assert any("dunder" in i for i in result.issues)
+
+
+def test_globals_dunder_blocked() -> None:
+    """Access to __globals__ (a route to builtins) is blocked."""
+    result = check_code("g = (lambda: 0).__globals__\n")
+    assert not result.safe
+
+
+def test_builtins_dunder_blocked() -> None:
+    result = check_code("b = [].__class__.__base__.__subclasses__\n")
+    assert not result.safe
+
+
+def test_plain_attribute_access_still_safe() -> None:
+    """A normal (non-dunder) attribute chain is not falsely flagged."""
+    code = "import json\nx = json.dumps({'a': 1})\n"
+    result = check_code(code)
+    assert result.safe

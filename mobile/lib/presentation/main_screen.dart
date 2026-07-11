@@ -12,7 +12,7 @@ import 'agent_store_screen.dart';
 import 'settings_screen.dart';
 import 'my_agents_screen.dart';
 import 'llm_settings_screen.dart';
-// reminderSchedulerProvider is declared in my_agents_screen.dart.
+// reminderSchedulerProvider + guardedSyncAll are declared in my_agents_screen.dart.
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -40,9 +40,11 @@ class _MainScreenState extends ConsumerState<MainScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Top up scheduled reminders whenever the app returns to the foreground —
-    // the app-open half of the pre-schedule + top-up strategy.
+    // the app-open half of the pre-schedule + top-up strategy. Guarded so a
+    // bad agent file logs instead of throwing an unhandled async error that
+    // would poison the resume handler.
     if (state == AppLifecycleState.resumed) {
-      ref.read(reminderSchedulerProvider).syncAll(DateTime.now());
+      guardedSyncAll(ref.read(reminderSchedulerProvider), DateTime.now());
     }
   }
 

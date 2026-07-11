@@ -7,10 +7,11 @@ from typing import Any
 
 from kernel.event_bus import EventBus
 from kernel.models import Event
+from kernel.runtime_paths import appdata_dir
 
 logger = logging.getLogger(__name__)
 
-ROUTINES_FILE = Path("data/routines.json")
+ROUTINES_FILE = appdata_dir() / "data" / "routines.json"
 
 
 class RoutineManager:
@@ -21,9 +22,25 @@ class RoutineManager:
         self._routines: dict[str, list[dict[str, Any]]] = self._load()
 
     def _load(self) -> dict[str, list[dict[str, Any]]]:
-        if ROUTINES_FILE.exists():
-            return json.loads(ROUTINES_FILE.read_text(encoding="utf-8"))
-        return {}
+        """Load routines from disk, self-healing on corruption.
+
+        Returns:
+            The parsed routines map, or an empty dict if the file is missing,
+            unreadable, contains invalid JSON, or is not a JSON object.
+        """
+        if not ROUTINES_FILE.exists():
+            return {}
+        try:
+            data = json.loads(ROUTINES_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("routines: unreadable %s, starting empty: %s",
+                           ROUTINES_FILE, exc)
+            return {}
+        if not isinstance(data, dict):
+            logger.warning("routines: %s is not a JSON object, starting empty",
+                           ROUTINES_FILE)
+            return {}
+        return data
 
     def _save(self) -> None:
         ROUTINES_FILE.parent.mkdir(parents=True, exist_ok=True)

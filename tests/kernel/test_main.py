@@ -491,6 +491,142 @@ class TestWebSocket:
                 assert response["type"] == "error"
 
 
+class TestSpeakTaskLifetime:
+    """The auto-speak task must be retained in a set so the GC can't cancel it."""
+
+    async def test_speak_tasks_set_initialized(self, app) -> None:
+        assert isinstance(app.state._speak_tasks, set)
+
+    async def test_chat_tracks_then_discards_speak_task(
+        self, app, client: AsyncClient
+    ) -> None:
+        import threading
+
+        import kernel.voice.jarvis_sounds as js
+        from kernel.llm_router import LLMResponse, LLMRouter
+
+        release = threading.Event()
+
+        def _block_play(_clip) -> None:  # type: ignore[no-untyped-def]
+            release.wait(timeout=5.0)
+
+        canned = LLMResponse(
+            text="Hi there friend", tool_calls=None, provider_used="mock", latency_ms=0
+        )
+
+        with patch.object(LLMRouter, "route", AsyncMock(return_value=canned)), \
+                patch.object(js, "should_use_clip", return_value="clip.wav"), \
+                patch.object(js, "play_reaction", side_effect=_block_play):
+            await client.post("/chat", json={"text": "hello there friend"})
+            # The speak task is created synchronously before /chat returns and
+            # is blocked inside play_reaction → it must be tracked.
+            assert len(app.state._speak_tasks) >= 1
+            release.set()
+
+        # Drain: _speak_response has a trailing 0.5s anti-echo sleep, so give
+        # it room; the done-callback then discards the task from the set.
+        for _ in range(400):
+            if not app.state._speak_tasks:
+                break
+            await asyncio.sleep(0.02)
+        assert len(app.state._speak_tasks) == 0
+
+
+class TestModelDownloadTaskLifetime:
+    """The first-run download task must be retained + report failures honestly.
+
+    Fire-and-forget create_task could be GC-cancelled, stalling the download so
+    download_complete never fires and the onboarding UI hangs forever.
+    """
+
+    async def test_download_retains_live_task(self, app, client: AsyncClient) -> None:
+        import threading
+
+        import kernel.model_downloader as md
+
+        release = threading.Event()
+
+        def _block(name, url, cb):  # type: ignore[no-untyped-def]
+            release.wait(timeout=5.0)
+            return True
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_block):
+            resp = await client.post("/models/download")
+            assert resp.json()["status"] == "started"
+            task = app.state._model_download_task
+            assert isinstance(task, asyncio.Task)
+            assert not task.done()
+            release.set()
+            task.cancel()
+
+    async def test_download_failure_publishes_failed_event(
+        self, app, client: AsyncClient
+    ) -> None:
+        import kernel.model_downloader as md
+
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        app.state.event_bus.subscribe("system.models.download_failed", handler)
+
+        def _boom(name, url, cb):  # type: ignore[no-untyped-def]
+            raise OSError("disk full")
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_boom):
+            await client.post("/models/download")
+            task = app.state._model_download_task
+            with pytest.raises(OSError):
+                await task
+
+        # done-callback fires after the task finishes and schedules the publish
+        # on the loop; poll a few ticks for it to run.
+        for _ in range(20):
+            if received:
+                break
+            await asyncio.sleep(0.01)
+        assert any(e.topic == "system.models.download_failed" for e in received)
+
+    async def test_soft_failure_publishes_failed_not_complete(
+        self, app, client: AsyncClient
+    ) -> None:
+        """download_model returning False (no raise) must be reported as a
+        failure, never a falsely-emitted download_complete (success)."""
+        import kernel.model_downloader as md
+
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        app.state.event_bus.subscribe("system.models.download_failed", handler)
+        app.state.event_bus.subscribe("system.models.download_complete", handler)
+
+        def _soft_fail(name, url, cb):  # type: ignore[no-untyped-def]
+            return False
+
+        with patch.object(md, "get_missing_models", return_value=[
+            {"name": "m", "url": "http://x", "description": "d"}
+        ]), patch.object(md, "download_model", side_effect=_soft_fail):
+            await client.post("/models/download")
+            task = app.state._model_download_task
+            await task
+
+        # The publish runs on the loop; poll a few ticks for it to land.
+        for _ in range(20):
+            if received:
+                break
+            await asyncio.sleep(0.01)
+        topics = {e.topic for e in received}
+        assert "system.models.download_failed" in topics
+        assert "system.models.download_complete" not in topics
+
+
 class _StubSocialCatalog:
     """A stand-in catalog_client recording social calls + returning canned results.
 
@@ -965,3 +1101,30 @@ class TestCommunityAccountRoutes:
         assert resp.status_code == 200
         assert resp.json() == {"status": "sent"}
         identity.request_magic_link.assert_called_once_with("a@b.ru")
+
+
+class TestChatNoKeyHonestFallback:
+    """A skip-key user (no AI key → provider error) must get an honest Russian
+    prompt routing them to settings, never the English fallback text."""
+
+    async def test_no_key_returns_russian_no_key_source(
+        self, app, client: AsyncClient
+    ) -> None:
+        from kernel.llm_router import LLMResponse
+
+        async def _error_route(self, request):  # type: ignore[no-untyped-def]
+            return LLMResponse(
+                text="I'm sorry, I couldn't process that request.",
+                tool_calls=None,
+                provider_used="error",
+                latency_ms=0,
+            )
+
+        with patch("kernel.llm_router.LLMRouter.route", _error_route):
+            resp = await client.post("/chat", json={"text": "привет"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source"] == "no-key"
+        assert "I'm sorry" not in body["response"]
+        assert "Настройки" in body["response"]

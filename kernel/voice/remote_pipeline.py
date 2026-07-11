@@ -74,14 +74,14 @@ class RemoteVoicePipeline:
             return
             
         state_str = event.payload.get("state")
-        print(f"DEBUG: _on_voice_state received: {state_str}")
+        logger.debug("Remote pipeline: voice.state received: %s", state_str)
         if state_str == "listening":
-            print("DEBUG: Client started listening")
+            logger.debug("Remote pipeline: client started listening")
             self._audio_buffer.clear()
             self._audio_buffer_bytes = 0
             self._state = PipelineState.LISTENING
         elif state_str == "idle" and self._state == PipelineState.LISTENING:
-            print("DEBUG: Client stopped listening, processing utterance...")
+            logger.debug("Remote pipeline: client stopped listening, processing utterance")
             self._state = PipelineState.THINKING
             asyncio.create_task(self._process_utterance())
 
@@ -93,8 +93,8 @@ class RemoteVoicePipeline:
         if chunk_b64:
             try:
                 raw_bytes = base64.b64decode(chunk_b64)
-            except Exception as e:
-                print(f"DEBUG: Failed to decode audio chunk: {e}")
+            except (ValueError, TypeError) as e:
+                logger.warning("Remote pipeline: failed to decode audio chunk: %s", e)
                 return
             # Bound memory: an untrusted LAN /ws client could stream chunks forever
             # without sending voice.state=idle. Drop the utterance past the cap
@@ -113,9 +113,9 @@ class RemoteVoicePipeline:
             self._audio_buffer_bytes += len(raw_bytes)
 
     async def _process_utterance(self) -> None:
-        print("DEBUG: _process_utterance called")
+        logger.debug("Remote pipeline: _process_utterance called")
         if not self._audio_buffer:
-            print("DEBUG: audio buffer is empty")
+            logger.debug("Remote pipeline: audio buffer is empty")
             self._state = PipelineState.IDLE
             return
 
@@ -126,22 +126,27 @@ class RemoteVoicePipeline:
             audio = audio_np_int16.astype(np.float32) / 32768.0
 
             if audio is None or len(audio) == 0:
-                print("DEBUG: Audio decode failed or empty")
+                logger.debug("Remote pipeline: audio decode failed or empty")
                 self._state = PipelineState.IDLE
                 return
 
             duration_s = len(audio) / 16000
-            print(f"DEBUG: Processing utterance: {duration_s:.1f}s of audio")
+            logger.debug("Remote pipeline: processing utterance: %.1fs of audio", duration_s)
 
             # STT is blocking, run in thread
             from kernel.voice.transcribe_helper import get_or_create_stt
             stt = get_or_create_stt(self._app_state)
             stt_result = await asyncio.to_thread(stt.transcribe, audio)
-            print(f"DEBUG: STT result: {stt_result.text} (conf={stt_result.confidence})")
-        except Exception as e:
-            print(f"DEBUG: _process_utterance exception: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.debug(
+                "Remote pipeline: STT result: %s (conf=%.2f)",
+                stt_result.text,
+                stt_result.confidence,
+            )
+        except Exception:
+            # Honest-fail: log with traceback AND tell the client, so the phone
+            # shows an error instead of going mute on a swallowed exception.
+            logger.exception("remote pipeline utterance failed")
+            await self._publish_voice_error("Не удалось распознать речь. Попробуйте ещё раз.")
             self._state = PipelineState.IDLE
             return
         
@@ -200,18 +205,18 @@ class RemoteVoicePipeline:
         if tail:
             await self._emit_tts_for(tail)
 
-        # If the model asked for a tool, EXECUTE it (shared path with chat) and
-        # speak the result — previously the call was only announced and the
-        # pipeline went idle, so the voice command silently did nothing.
+        # If the model asked for tools, EXECUTE them (shared path with chat) and
+        # speak the combined result — previously only the first call ran (and
+        # earlier none did), so multi-intent voice commands lost work.
         final_text = response.text
         if response.tool_calls and self._app_state is not None:
-            from kernel.tool_dispatch import execute_tool_call
+            from kernel.tool_dispatch import execute_tool_calls
 
             try:
-                dispatched = await execute_tool_call(
+                dispatched = await execute_tool_calls(
                     self._app_state,
                     self._llm,
-                    response.tool_calls[0],
+                    response.tool_calls,
                     self._context[-10:],
                     stt_result.text,
                 )
@@ -246,6 +251,23 @@ class RemoteVoicePipeline:
                 logger.warning(f"Background memory extraction failed: {e}")
 
         self._state = PipelineState.IDLE
+
+    async def _publish_voice_error(self, message: str) -> None:
+        """Publish a 'voice.error' event so the client surfaces an honest error.
+
+        Without this the phone has no signal that an utterance failed — it just
+        goes silent. The message is user-facing (Russian) and safe to display.
+
+        Args:
+            message: Human-readable error text for the client to show.
+        """
+        await self._bus.publish(
+            Event(
+                topic="voice.error",
+                source="remote-pipeline",
+                payload={"message": message},
+            )
+        )
 
     async def _emit_tts_for(self, text: str) -> None:
         """Synthesize one text unit (a sentence) and publish it as a tts_chunk.

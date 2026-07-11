@@ -218,3 +218,29 @@ class TestFactory:
         # Should not raise
         client = SandboxHttpClient.for_agent("x", ctx)
         assert client._allowed == []
+
+
+class TestResolveValidatedRebindGuard:
+    """DNS-rebinding guard: resolve once, fail closed on any private address."""
+
+    def test_private_address_returns_none(self) -> None:
+        from kernel.sandbox import http_client as hc
+
+        with patch.object(
+            hc.socket, "getaddrinfo",
+            return_value=[(2, 1, 6, "", ("10.0.0.5", 0))],
+        ):
+            assert hc._resolve_validated("evil.internal") is None
+
+    def test_public_address_returned(self) -> None:
+        from kernel.sandbox import http_client as hc
+
+        infos = [(2, 1, 6, "", ("93.184.216.34", 0))]
+        with patch.object(hc.socket, "getaddrinfo", return_value=infos):
+            assert hc._resolve_validated("api.example.com") == infos
+
+    def test_unresolvable_returns_none(self) -> None:
+        from kernel.sandbox import http_client as hc
+
+        with patch.object(hc.socket, "getaddrinfo", side_effect=OSError):
+            assert hc._resolve_validated("nope.invalid") is None

@@ -171,6 +171,27 @@ class TestUnpack:
         with pytest.raises(ValueError, match="[Zz]ip slip"):
             unpack(malicious_zip, tmp_path / "agents")
 
+    def test_unpack_rejects_unlisted_file(self, tmp_path: Path) -> None:
+        """checksums.json is an EXHAUSTIVE manifest: a member not listed in it
+        (e.g. a smuggled evil.py) makes unpack() raise, and the extra file is
+        not left behind in the target directory."""
+        agent_dir = _make_agent_dir(tmp_path / "src")
+        pkg = pack(agent_dir, tmp_path / "pkg.kali-agent")
+
+        # Rebuild the zip with an extra member NOT present in checksums.json.
+        smuggled = tmp_path / "smuggled.kali-agent"
+        with zipfile.ZipFile(pkg, "r") as src_zf, zipfile.ZipFile(
+            smuggled, "w", zipfile.ZIP_DEFLATED
+        ) as dst_zf:
+            for item in src_zf.infolist():
+                dst_zf.writestr(item, src_zf.read(item.filename))
+            dst_zf.writestr("evil.py", b"# not in checksums.json\n")
+
+        dest = tmp_path / "dest"
+        with pytest.raises(ValueError, match="not listed in checksums"):
+            unpack(smuggled, dest)
+        assert not (dest / "evil.py").exists()
+
     def test_unpack_corrupted_file_raises(self, tmp_path: Path) -> None:
         """ValueError when a file's content has been tampered with."""
         agent_dir = _make_agent_dir(tmp_path / "src")

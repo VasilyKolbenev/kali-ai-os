@@ -16,6 +16,9 @@ import 'package:kali_mobile/presentation/main_screen.dart';
 import 'package:kali_mobile/presentation/my_agents_screen.dart';
 import 'package:kali_mobile/standalone/agent_store.dart';
 import 'package:kali_mobile/standalone/imported_agent.dart';
+import 'package:kali_mobile/standalone/scheduling/notification_gateway.dart';
+
+import 'scheduling/fake_notification_gateway.dart';
 
 /// Empty in-memory store so the standalone MainScreen (which renders
 /// MyAgentsScreen) doesn't touch the native path_provider channel.
@@ -45,7 +48,13 @@ void main() {
     late ProviderContainer container;
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [agentStoreProvider.overrideWithValue(_EmptyStore())],
+        overrides: [
+          agentStoreProvider.overrideWithValue(_EmptyStore()),
+          // MyAgentsScreen now requests permission on entry; keep it off the
+          // native channel.
+          notificationGatewayProvider
+              .overrideWithValue(FakeNotificationGateway()),
+        ],
         child: Consumer(
           builder: (context, ref, _) {
             container = ProviderScope.containerOf(context);

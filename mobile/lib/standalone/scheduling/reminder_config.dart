@@ -18,6 +18,25 @@ class ReminderConfig {
 double? _toDouble(Object? v) =>
     v is num ? v.toDouble() : (v is String ? double.tryParse(v) : null);
 
+/// Field-aware 5-field cron → interval in hours; null if unrecognized.
+///
+/// `*/N * * * *`  → every N minutes (N/60 hours).
+/// `0 */M * * *`  → every M hours (minute fixed, hour steps).
+/// Anything else recognized loosely returns null so the caller keeps its
+/// 1h default rather than mis-dividing the first `*/N` by 60.
+double? _cronIntervalHours(String cron) {
+  final fields = cron.trim().split(RegExp(r'\s+'));
+  if (fields.length < 2) return null;
+  final minute = fields[0];
+  final hour = fields[1];
+  final minStep = RegExp(r'^\*/(\d+)$').firstMatch(minute);
+  if (minStep != null) return int.parse(minStep.group(1)!) / 60;
+  final hourStep = RegExp(r'^\*/(\d+)$').firstMatch(hour);
+  final minuteFixed = minute == '0' || RegExp(r'^\d+$').hasMatch(minute);
+  if (hourStep != null && minuteFixed) return int.parse(hourStep.group(1)!).toDouble();
+  return null;
+}
+
 /// Parse the nested wizard config a voice-built reminder carries.
 /// Precedence: reminders.interval_hours → free-text `interval` → schedule.cron
 /// `*/N` → default 1h. Window from `time_window` free-text or 8..22.
@@ -41,8 +60,8 @@ ReminderConfig parseReminderConfig(
       interval = hrs.toDouble();
     }
   } else if (sched is Map && sched['cron'] is String) {
-    final m = RegExp(r'\*/(\d+)').firstMatch(sched['cron'] as String);
-    if (m != null) interval = int.parse(m.group(1)!) / 60;
+    final parsed = _cronIntervalHours(sched['cron'] as String);
+    if (parsed != null) interval = parsed;
   }
   interval = interval.clamp(0.25, 24).toDouble(); // num.clamp -> num; keep double
 

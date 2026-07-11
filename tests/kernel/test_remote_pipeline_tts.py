@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 
 from kernel.models import LLMConfig, VoiceConfig
+from kernel.voice.pipeline import PipelineState
 from kernel.voice.remote_pipeline import RemoteVoicePipeline
 
 
@@ -128,3 +129,42 @@ async def test_streaming_deltas_emit_per_sentence_as_they_complete() -> None:
         "Чем я могу помочь вам прямо сейчас, сэр?",
     ]
     assert pipe._bus.publish.await_count == 2
+
+
+def test_no_debug_print_in_remote_pipeline() -> None:
+    """The mobile-tethered path must not swallow failures into stdout prints —
+    invisible errors leave the phone mute. All diagnostics go through logging."""
+    import pathlib
+
+    src = pathlib.Path(
+        "kernel/voice/remote_pipeline.py"
+    ).read_text(encoding="utf-8")
+    assert "print(" not in src
+    assert "traceback.print_exc" not in src
+
+
+async def test_stt_failure_logs_and_publishes_voice_error() -> None:
+    """An STT exception must be logged via logger.exception AND surfaced to the
+    client as a 'voice.error' event — not silently reset to IDLE."""
+    pipe = _pipeline()
+    pipe._app_state = MagicMock()
+    pipe._audio_buffer = [b"\x00\x01" * 100]
+    pipe._state = PipelineState.THINKING
+
+    failing_stt = MagicMock()
+    failing_stt.transcribe = MagicMock(side_effect=RuntimeError("ct2 blew up"))
+
+    with patch(
+        "kernel.voice.transcribe_helper.get_or_create_stt",
+        return_value=failing_stt,
+    ), patch("kernel.voice.remote_pipeline.logger") as mock_logger:
+        await pipe._process_utterance()
+
+    mock_logger.exception.assert_called_once()
+    topics = [
+        c.kwargs.get("event", c.args[0] if c.args else None)
+        for c in pipe._bus.publish.await_args_list
+    ]
+    published_topics = [getattr(t, "topic", None) for t in topics]
+    assert "voice.error" in published_topics
+    assert pipe._state == PipelineState.IDLE

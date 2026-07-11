@@ -41,6 +41,24 @@ def _detect_builder_trigger(text: str) -> bool:
     return any(re.search(p, lowered) for p in _BUILDER_TRIGGER_PATTERNS)
 
 
+def _has_word(text: str, words: tuple[str, ...]) -> bool:
+    """Return True if ``text`` contains any of ``words`` as a whole word.
+
+    Whole-word (``\\b``) matching prevents a short confirmation token like «да»
+    from matching inside «даже», which previously triggered an unintended
+    deploy on «даже не думай».
+
+    Args:
+        text: The transcribed utterance to scan.
+        words: Candidate whole words to look for (case-insensitive).
+
+    Returns:
+        True if any candidate appears as a standalone word.
+    """
+    lowered = text.lower()
+    return any(re.search(rf"\b{re.escape(w)}\b", lowered) for w in words)
+
+
 # Timeout: reset LISTENING → IDLE if no speech after wake word
 _LISTEN_TIMEOUT_S = 3.0
 # Minimum speech chunks before we try STT (avoid noise triggers)
@@ -91,6 +109,9 @@ class VoicePipeline:
         self._state = PipelineState.IDLE
         self._context: list[dict[str, Any]] = []
         self._started = False
+        # Strong reference to the background loop task. Without it the task can
+        # be garbage-collected and silently cancelled mid-run, killing capture.
+        self._main_loop_task: asyncio.Task[None] | None = None
 
         # Components (lazy-initialized)
         self._recorder = AudioRecorder()
@@ -165,11 +186,28 @@ class VoicePipeline:
         await self._set_state(PipelineState.IDLE)
         await self._publish_pipeline_status(active=True)
         logger.info("Voice pipeline started (mode=%s)", self.mode)
-        asyncio.create_task(self._main_loop())
+        # Retain a strong reference so the GC cannot cancel the loop mid-run.
+        self._main_loop_task = asyncio.create_task(self._main_loop())
+        self._main_loop_task.add_done_callback(self._on_main_loop_done)
+
+    def _on_main_loop_done(self, task: asyncio.Task[None]) -> None:
+        """Log an unexpected main-loop exit (a clean cancel is not an error)."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Voice pipeline main loop exited unexpectedly", exc_info=exc)
 
     async def stop(self) -> None:
         """Stop the voice pipeline and audio capture."""
         self._started = False
+        if self._main_loop_task is not None:
+            self._main_loop_task.cancel()
+            try:
+                await self._main_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._main_loop_task = None
         await self._recorder.stop()
         self._reset_wake_state()
         await self._set_state(PipelineState.IDLE)
@@ -303,18 +341,23 @@ class VoicePipeline:
 
         # 1. Deploy confirmation — highest priority
         if self._awaiting_deploy_confirm and flow and self._active_builder_session:
-            positive = any(w in text.lower() for w in ("да", "запускай", "давай", "ок", "поехали"))
-            negative = any(w in text.lower() for w in ("нет", "отмени", "переделай"))
+            # Whole-word matching: a substring check fired «да» inside «даже»
+            # («даже не думай» triggered an unintended deploy). Ambiguous input
+            # (both a yes AND a no word) re-asks rather than defaulting to deploy.
+            positive = _has_word(text, ("да", "запускай", "давай", "ок", "поехали"))
+            negative = _has_word(text, ("нет", "отмени", "переделай"))
+            # Unclear / ambiguous (neither, or both) → re-ask WITHOUT clearing the
+            # confirm state, so the next utterance is still treated as the answer.
+            if positive == negative:
+                await self._speak("Не понял. Запускать? Скажи да или нет.")
+                return
             try:
                 if positive:
                     result = await flow.deploy(self._active_builder_session)
                     await self._speak(f"Готово! Агент {result.get('name', '')} запущен.")
-                elif negative:
+                else:
                     flow.cancel(self._active_builder_session)
                     await self._speak("Отменил. Попробуем ещё раз?")
-                else:
-                    await self._speak("Не понял. Запускать? Скажи да или нет.")
-                    return
             except Exception:
                 logger.exception("Builder deploy/cancel failed")
             finally:
@@ -414,18 +457,18 @@ class VoicePipeline:
             except Exception as e:
                 logger.warning("Background memory extraction failed: %s", e)
 
-        # If the model asked for a tool, EXECUTE it (shared path with chat) and
-        # speak the result — previously the call was only announced, so a spoken
-        # command that needed an agent did nothing.
+        # If the model asked for tools, EXECUTE them (shared path with chat) and
+        # speak the combined result — previously only the first call ran (and
+        # earlier none did), so multi-intent spoken commands lost work.
         final_text = response.text
         if response.tool_calls and self._app_state is not None:
-            from kernel.tool_dispatch import execute_tool_call
+            from kernel.tool_dispatch import execute_tool_calls
 
             try:
-                dispatched = await execute_tool_call(
+                dispatched = await execute_tool_calls(
                     self._app_state,
                     self._llm,
-                    response.tool_calls[0],
+                    response.tool_calls,
                     self._context[-10:],
                     stt_result.text,
                 )

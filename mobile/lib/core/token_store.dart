@@ -7,6 +7,13 @@ const String kControlPlaneTokenKey = 'kali_control_plane_token';
 /// HTTP header the Rust control plane accepts for LAN auth.
 const String kaliTokenHeader = 'X-KALI-Token';
 
+/// Android secure-storage options that force AES-backed
+/// `EncryptedSharedPreferences` instead of the legacy (deprecated) keystore
+/// path. minSdk 24 supports it. Shared by all `FlutterSecureStorage` users so
+/// the LLM key and the pairing token are always encrypted at rest.
+const AndroidOptions kaliAndroidSecureStorage =
+    AndroidOptions(encryptedSharedPreferences: true);
+
 /// Minimal key/value contract so [TokenStore] can be unit-tested with an
 /// in-memory fake instead of the real platform keystore.
 abstract class TokenKeyValueStore {
@@ -17,7 +24,11 @@ abstract class TokenKeyValueStore {
 
 /// Adapts [FlutterSecureStorage] to [TokenKeyValueStore].
 class SecureTokenKeyValueStore implements TokenKeyValueStore {
-  const SecureTokenKeyValueStore([this._storage = const FlutterSecureStorage()]);
+  const SecureTokenKeyValueStore([
+    this._storage = const FlutterSecureStorage(
+      aOptions: kaliAndroidSecureStorage,
+    ),
+  ]);
 
   final FlutterSecureStorage _storage;
 

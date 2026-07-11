@@ -5,14 +5,23 @@
 // on-device import action are extracted into pure, injectable functions so they
 // can be tested without a Navigator, secure storage, or the network.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:kali_mobile/core/deep_link_service.dart';
+import 'package:kali_mobile/core/l10n.dart';
+import 'package:kali_mobile/core/standalone_mode.dart';
+import 'package:kali_mobile/presentation/my_agents_screen.dart';
 import 'package:kali_mobile/standalone/agent_store.dart';
 import 'package:kali_mobile/standalone/imported_agent.dart';
+import 'package:kali_mobile/standalone/scheduling/notification_gateway.dart';
+
+import 'scheduling/fake_notification_gateway.dart';
 
 /// In-memory [AgentStore] that records saves.
 class _FakeStore implements AgentStore {
@@ -35,6 +44,32 @@ class _FakeStore implements AgentStore {
   @override
   Future<void> delete(String name) async =>
       saved.removeWhere((a) => a.name == name);
+}
+
+/// In-memory [AgentStore] that upserts by name (like the real file store).
+class _UpsertStore implements AgentStore {
+  final List<ImportedAgent> agents = [];
+
+  @override
+  Future<void> save(ImportedAgent agent) async {
+    agents.removeWhere((a) => a.name == agent.name);
+    agents.add(agent);
+  }
+
+  @override
+  Future<List<ImportedAgent>> list() async => List.of(agents);
+
+  @override
+  Future<ImportedAgent?> get(String name) async {
+    for (final a in agents) {
+      if (a.name == name) return a;
+    }
+    return null;
+  }
+
+  @override
+  Future<void> delete(String name) async =>
+      agents.removeWhere((a) => a.name == name);
 }
 
 String _payload(String name, String skillMd) {
@@ -81,5 +116,171 @@ void main() {
       );
       expect(store.saved, isEmpty);
     });
+
+    test('re-import carries forward enabled + snoozeUntil of existing agent',
+        () async {
+      final store = _UpsertStore();
+      final snooze = DateTime.utc(2027, 1, 1);
+      await store.save(ImportedAgent(
+        name: 'water-reminder',
+        description: 'old',
+        skillMd: 'old',
+        installedAt: DateTime.utc(2026, 6, 1),
+        template: 'reminder',
+        enabled: false,
+        snoozeUntil: snooze,
+      ));
+
+      const md = '---\nname: water-reminder\ndescription: new\n---\nbody';
+      await importOnDevice(_payload('water-reminder', md), store: store);
+
+      final got = (await store.get('water-reminder'))!;
+      // User's toggle/snooze preserved...
+      expect(got.enabled, isFalse);
+      expect(got.snoozeUntil, snooze);
+      // ...while the freshly-shared content replaces the old.
+      expect(got.description, 'new');
+      expect(got.skillMd, contains('body'));
+    });
+  });
+
+  group('importStandaloneWithConsent (consent + e2e)', () {
+    testWidgets('shows a confirm dialog; no save/permission until Confirm',
+        (tester) async {
+      final store = _FakeStore();
+      final gw = FakeNotificationGateway();
+      const md = '---\nname: chef\ndescription: повар\n---\nТы — повар.';
+      late WidgetRef capturedRef;
+      late BuildContext dialogCtx;
+
+      await tester.pumpWidget(_harness(store, gw, (ref, ctx) {
+        capturedRef = ref;
+        dialogCtx = ctx;
+      }));
+      await tester.pumpAndSettle();
+
+      // Kick off the consent-gated import (don't await — the dialog blocks).
+      final future = importStandaloneWithConsent(
+        data: _payload('chef', md),
+        ref: capturedRef,
+        t: L10n('ru'),
+        messenger: ScaffoldMessenger.of(dialogCtx),
+        confirmContext: dialogCtx,
+      );
+      await tester.pumpAndSettle();
+
+      // Confirm dialog is up, but nothing has been installed yet.
+      expect(find.text(L10n('ru').importConfirmTitle), findsOneWidget);
+      expect(find.textContaining('chef'), findsWidgets);
+      expect(store.saved, isEmpty);
+      expect(gw.permissionRequested, isFalse);
+      expect(capturedRef.read(standaloneModeProvider), isFalse);
+
+      // Cancel: still nothing installed.
+      await tester.tap(find.text(L10n('ru').importConfirmCancel));
+      await tester.pumpAndSettle();
+      await future;
+      expect(store.saved, isEmpty);
+      expect(gw.permissionRequested, isFalse);
+      expect(capturedRef.read(standaloneModeProvider), isFalse);
+    });
+
+    testWidgets('Confirm installs: standalone on, agent on MyAgents, snackbar',
+        (tester) async {
+      final store = _FakeStore();
+      final gw = FakeNotificationGateway();
+      const md = '---\nname: chef\ndescription: повар\n---\nТы — повар.';
+      late WidgetRef capturedRef;
+      late BuildContext dialogCtx;
+
+      await tester.pumpWidget(_harness(store, gw, (ref, ctx) {
+        capturedRef = ref;
+        dialogCtx = ctx;
+      }));
+      await tester.pumpAndSettle();
+
+      final messenger = ScaffoldMessenger.of(dialogCtx);
+      unawaited(importStandaloneWithConsent(
+        data: _payload('chef', md),
+        ref: capturedRef,
+        t: L10n('ru'),
+        messenger: messenger,
+        confirmContext: dialogCtx,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text(L10n('ru').importConfirmInstall));
+      await tester.pumpAndSettle();
+
+      // Persisted + standalone flipped.
+      expect(store.saved.single.name, 'chef');
+      expect(capturedRef.read(standaloneModeProvider), isTrue);
+      // Imported-standalone snackbar shown.
+      expect(find.text(L10n('ru').importedStandalone('chef')), findsOneWidget);
+
+      // The imported agent appears on MyAgentsScreen.
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            agentStoreProvider.overrideWithValue(store),
+            notificationGatewayProvider.overrideWithValue(gw),
+          ],
+          child: const MaterialApp(home: MyAgentsScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('chef'), findsOneWidget);
+    });
+
+    testWidgets('malformed bundle: importFailed snackbar, no crash, no save',
+        (tester) async {
+      final store = _FakeStore();
+      final gw = FakeNotificationGateway();
+      late WidgetRef capturedRef;
+      late BuildContext dialogCtx;
+
+      await tester.pumpWidget(_harness(store, gw, (ref, ctx) {
+        capturedRef = ref;
+        dialogCtx = ctx;
+      }));
+      await tester.pumpAndSettle();
+
+      await importStandaloneWithConsent(
+        data: 'not-a-bundle!!!',
+        ref: capturedRef,
+        t: L10n('ru'),
+        messenger: ScaffoldMessenger.of(dialogCtx),
+        confirmContext: dialogCtx,
+      );
+      await tester.pumpAndSettle();
+
+      // No confirm dialog, an honest failure, nothing persisted.
+      expect(find.text(L10n('ru').importConfirmTitle), findsNothing);
+      expect(find.text(L10n('ru').importFailed), findsOneWidget);
+      expect(store.saved, isEmpty);
+      expect(capturedRef.read(standaloneModeProvider), isFalse);
+    });
   });
 }
+
+/// Pumps a minimal app exposing a [WidgetRef] + a dialog-capable [BuildContext]
+/// (under a Navigator + ScaffoldMessenger) with the on-device providers faked.
+Widget _harness(
+  AgentStore store,
+  NotificationGateway gw,
+  void Function(WidgetRef, BuildContext) capture,
+) =>
+    ProviderScope(
+      overrides: [
+        agentStoreProvider.overrideWithValue(store),
+        notificationGatewayProvider.overrideWithValue(gw),
+      ],
+      child: MaterialApp(
+        home: Consumer(
+          builder: (context, ref, _) {
+            capture(ref, context);
+            return const Scaffold(body: SizedBox.shrink());
+          },
+        ),
+      ),
+    );

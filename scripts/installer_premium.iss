@@ -63,6 +63,10 @@ Name: "startmenuicon"; Description: "Добавить в меню Пуск"; Gro
 Source: "..\dist_premium\premium_stage\*"; DestDir: "{app}"; \
     Excludes: "install.bat,sfx_config.txt"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
+; Stage the WebView2 bootstrap script directly from scripts/ — the [Run] step
+; below invokes {app}\install-webview2.ps1, but no build step copies it into
+; premium_stage, so pull it in deterministically here.
+Source: "..\scripts\install-webview2.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\KALI"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: startmenuicon

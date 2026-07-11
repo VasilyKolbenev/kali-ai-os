@@ -23,12 +23,58 @@ class ReminderScheduler {
   /// Target the fire times are registered with.
   final NotificationGateway gateway;
 
+  /// The tail of the serialized sync chain, or null when idle. Each [syncAll]
+  /// chains onto this so cancel-then-schedule passes never interleave (an
+  /// interleaved cancel would wipe another call's freshly-scheduled fires —
+  /// see [_syncAllOnce]).
+  Future<void>? _running;
+
+  /// The single coalesced follow-up Future, or null when none is queued. A 2nd
+  /// concurrent call queues it; a 3rd+ joins the same one (the OS state only
+  /// needs ONE re-sync of the latest store snapshot once the in-flight drains).
+  Future<void>? _pending;
+
+  /// `now` captured for the queued follow-up; refreshed by each call that joins
+  /// it so the follow-up runs against the latest clock.
+  DateTime? _pendingNow;
+
+  /// Serialized entry point: at most one sync runs at a time, with at most one
+  /// coalesced follow-up. Callers get a Future that completes once a sync that
+  /// reflects (at least) their request has finished. [now] is injected so
+  /// callers/tests control the clock; production callers pass `DateTime.now()`.
+  Future<void> syncAll(DateTime now) {
+    final running = _running;
+    if (running == null) {
+      return _running = _run(now);
+    }
+    // A sync is in flight. Join (or create) the single follow-up; refresh its
+    // clock so it reflects the latest request.
+    _pendingNow = now;
+    return _pending ??= running.then((_) {
+      final at = _pendingNow ?? now;
+      _pending = null;
+      _pendingNow = null;
+      return _running = _run(at);
+    });
+  }
+
+  Future<void> _run(DateTime now) async {
+    try {
+      await _syncAllOnce(now);
+    } finally {
+      // Mark idle iff no follow-up is queued. A queued follow-up will have
+      // re-armed _running via its `.then` continuation before any new call can
+      // observe idle, so we never clear a live follow-up.
+      if (_pending == null) _running = null;
+    }
+  }
+
   /// Cancels every stored agent's block, then reschedules enabled reminders.
   ///
   /// Two-pass to guarantee stale ids are cleared even for agents that became
   /// disabled / non-reminder since the last sync. [now] is injected so callers
   /// (and tests) control the clock; production callers pass `DateTime.now()`.
-  Future<void> syncAll(DateTime now) async {
+  Future<void> _syncAllOnce(DateTime now) async {
     final agents = await store.list();
     final active =
         agents.where((a) => a.template == 'reminder' && a.enabled).toList();

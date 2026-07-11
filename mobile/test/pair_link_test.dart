@@ -28,9 +28,9 @@ void main() {
   group('parsePairLink', () {
     test('extracts ip + token from a kali://pair link', () {
       final info =
-          parsePairLink(Uri.parse('kali://pair?ip=1.2.3.4:3006&token=ABC'));
+          parsePairLink(Uri.parse('kali://pair?ip=192.168.1.5:3006&token=ABC'));
       expect(info, isNotNull);
-      expect(info!.ip, '1.2.3.4:3006');
+      expect(info!.ip, '192.168.1.5:3006');
       expect(info.token, 'ABC');
     });
 
@@ -43,7 +43,7 @@ void main() {
     });
 
     test('rejects a link missing the token', () {
-      expect(parsePairLink(Uri.parse('kali://pair?ip=1.2.3.4')), isNull);
+      expect(parsePairLink(Uri.parse('kali://pair?ip=192.168.1.5')), isNull);
     });
 
     test('rejects a link missing the ip', () {
@@ -52,11 +52,59 @@ void main() {
 
     test('rejects empty ip or token values', () {
       expect(parsePairLink(Uri.parse('kali://pair?ip=&token=ABC')), isNull);
-      expect(parsePairLink(Uri.parse('kali://pair?ip=1.2.3.4&token=')), isNull);
+      expect(parsePairLink(Uri.parse('kali://pair?ip=192.168.1.5&token=')),
+          isNull);
     });
 
     test('rejects a malformed host', () {
       expect(parsePairLink(Uri.parse('kali://pair?ip=not a host&token=ABC')),
+          isNull);
+    });
+
+    // Pairing is LAN-only by design (the token is the LAN-security boundary).
+    // A public host or a DNS name in the link means an attacker is trying to
+    // exfiltrate the token to a server they control — reject both.
+    test('rejects a public IP host (token exfiltration)', () {
+      expect(parsePairLink(Uri.parse('kali://pair?ip=1.2.3.4&token=x')), isNull);
+      expect(
+          parsePairLink(Uri.parse('kali://pair?ip=8.8.8.8:3006&token=x')),
+          isNull);
+    });
+
+    test('rejects a non-literal DNS host', () {
+      expect(
+          parsePairLink(Uri.parse('kali://pair?ip=evil.com&token=x')), isNull);
+      expect(
+          parsePairLink(Uri.parse('kali://pair?ip=localhost&token=x')), isNull);
+    });
+
+    test('accepts private / loopback / CGNAT hosts', () {
+      for (final ip in [
+        '192.168.1.5',
+        '10.0.2.2',
+        '172.16.0.1',
+        '127.0.0.1',
+        '100.64.0.1',
+      ]) {
+        expect(parsePairLink(Uri.parse('kali://pair?ip=$ip&token=x')),
+            isNotNull, reason: ip);
+      }
+    });
+
+    // Hex/octal-prefixed octets parse as "private" via int.tryParse but a libc
+    // OS resolver may read them differently (010 → octal 8 = public) — that
+    // divergence is the token-exfil bypass. Reject non-canonical octets.
+    test('rejects hex / octal-looking octets (resolver-divergence bypass)', () {
+      for (final ip in ['0x7f.0.0.1', '0x0a.0.0.1', '010.0.0.1', '0177.0.0.1']) {
+        expect(parsePairLink(Uri.parse('kali://pair?ip=$ip&token=x')), isNull,
+            reason: ip);
+      }
+    });
+
+    test('rejects 172.x outside the 16-31 private range', () {
+      expect(parsePairLink(Uri.parse('kali://pair?ip=172.15.0.1&token=x')),
+          isNull);
+      expect(parsePairLink(Uri.parse('kali://pair?ip=172.32.0.1&token=x')),
           isNull);
     });
 

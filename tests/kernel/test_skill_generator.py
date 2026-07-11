@@ -52,3 +52,50 @@ def test_generate_skill_writes_cron_keys(tmp_path) -> None:
     )
     data = yaml.safe_load((skill_dir / "skill.yaml").read_text(encoding="utf-8"))
     assert data["config"]["reminders"]["interval_hours"] == 2
+
+
+# --- Finding 1: collision must NOT overwrite an existing agent ---
+
+
+def test_generate_skill_dedups_on_collision(tmp_path) -> None:
+    """A second build with a colliding slug must NOT overwrite the first; it gets
+    a de-duped directory name instead, so the prior agent's files survive."""
+    first = generate_skill(
+        name="foo",
+        template="reminder",
+        description="first foo",
+        config={},
+        agents_dir=tmp_path,
+    )
+    second = generate_skill(
+        name="foo",
+        template="reminder",
+        description="second foo",
+        config={},
+        agents_dir=tmp_path,
+    )
+    assert first != second
+    assert first.name == "foo"
+    assert second.name == "foo-2"
+    # First skill's manifest preserved (not overwritten).
+    first_manifest = yaml.safe_load((first / "manifest.yaml").read_text(encoding="utf-8"))
+    assert first_manifest["description"] == "first foo"
+
+
+# --- Finding 3: zero-minute interval must not yield an invalid cron ---
+
+
+def test_parse_interval_minutes_clamps_zero() -> None:
+    from kernel.builder.skill_generator import _parse_interval_minutes
+
+    result = _parse_interval_minutes("каждые 0 минут")
+    assert result is None or result >= 1
+
+
+def test_with_schedule_zero_minutes_valid_cron() -> None:
+    from croniter import croniter
+
+    new = _with_schedule({"interval": "каждые 0 минут"})
+    schedule = new.get("schedule")
+    if schedule and schedule.get("cron"):
+        assert croniter.is_valid(schedule["cron"])

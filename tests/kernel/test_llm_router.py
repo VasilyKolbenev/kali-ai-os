@@ -317,3 +317,19 @@ class TestLLMRouter:
         assert deltas == []
         assert resp.tool_calls is not None
         mock_route.assert_awaited_once()
+
+
+class TestDoubleOutage:
+    """Cloud + local both failing must degrade to an honest error, not raise."""
+
+    async def test_double_outage_returns_error_response(self) -> None:
+        router = LLMRouter(LLMConfig())  # auto_route default → tries cloud first
+        req = LLMRequest(text="привет", context=[], available_tools=[])
+        with patch.object(
+            router, "_call_cloud", AsyncMock(side_effect=RuntimeError("cloud down"))
+        ), patch.object(
+            router, "_call_local", AsyncMock(side_effect=RuntimeError("local down"))
+        ):
+            resp = await router.route(req)
+        assert resp.provider_used == "error"
+        assert resp.tool_calls is None
