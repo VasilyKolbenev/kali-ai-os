@@ -4,6 +4,7 @@ import { WelcomeStep } from "./steps/WelcomeStep";
 import { ApiKeyStep } from "./steps/ApiKeyStep";
 import { ModelsDownloadStep } from "./steps/ModelsDownloadStep";
 import { MicTestStep } from "./steps/MicTestStep";
+import { ProfileStep } from "./steps/ProfileStep";
 import { FirstAgentStep } from "./steps/FirstAgentStep";
 import { LandingStep } from "./steps/LandingStep";
 
@@ -32,6 +33,7 @@ export function OnboardingRoot() {
       {step === "api-key" && <ApiKeyStep />}
       {step === "models-download" && <ModelsDownloadStep />}
       {step === "mic-test" && <MicTestStep />}
+      {step === "profile" && <ProfileStep />}
       {step === "first-agent" && <FirstAgentStep />}
       {step === "landing" && <LandingStep />}
     </div>
