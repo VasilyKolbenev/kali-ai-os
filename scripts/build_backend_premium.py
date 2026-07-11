@@ -168,6 +168,31 @@ COLLECT_ALL = [
 ]
 
 
+def prune_gpl_codecs(out_dir: Path) -> list[str]:
+    """Delete GPL-licensed libx264/libx265 DLLs PyAV bundles under av.libs.
+
+    KALI's proprietary installer must not ship GPL (``--enable-gpl``) codecs.
+    The reel encoder uses libopenh264 (BSD); libx264/libx265 are never invoked,
+    so removing them keeps the bundle LGPL/BSD-clean without affecting encoding.
+
+    Args:
+        out_dir: The PyInstaller onedir output (contains ``_internal/av.libs``).
+
+    Returns:
+        The names of the DLLs removed (empty if none were present).
+    """
+    av_libs = out_dir / "_internal" / "av.libs"
+    if not av_libs.is_dir():
+        return []
+    removed: list[str] = []
+    for dll in av_libs.iterdir():
+        low = dll.name.lower()
+        if "x264" in low or "x265" in low:
+            dll.unlink()
+            removed.append(dll.name)
+    return removed
+
+
 def main() -> None:
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -211,6 +236,13 @@ def main() -> None:
     if result.returncode == 0:
         out_dir = DIST / NAME
         if out_dir.exists():
+            # Strip GPL libx264/libx265 DLLs PyAV bundles — the proprietary
+            # installer must stay LGPL/BSD-clean (reel uses libopenh264).
+            pruned = prune_gpl_codecs(out_dir)
+            if pruned:
+                print(f"GPL codecs pruned from av.libs: {', '.join(pruned)}")
+            else:
+                print("av.libs already free of libx264/libx265 (LGPL-clean)")
             total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
             print(f"\nSuccess! Built Premium backend at {out_dir}")
             print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
