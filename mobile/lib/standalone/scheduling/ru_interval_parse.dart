@@ -40,7 +40,14 @@ int? parseIntervalMinutes(String text) {
   if (nums.length < 2) return null;
   var s = nums[0];
   var e = nums[1];
-  if (t.contains('вечера') && e < 12) e += 12;
+  final pm = t.contains('вечера') || t.contains('вечером');
+  final amStart = t.contains('утра') || t.contains('утром');
+  if (pm && e < 12) {
+    e += 12;
+    // Evening-only phrasing («с 6 до 9 вечера») leaves the start in AM; shift
+    // it too when it stays before the PM end and has no explicit morning marker.
+    if (!amStart && s < 12 && s + 12 < e) s += 12;
+  }
   if (s < 0 || s > 23 || e <= s || e > 24) return null;
   return (s, e);
 }

@@ -17,6 +17,7 @@ void main() {
   group('parseTimeWindow', () {
     test('с 8 до 22', () => expect(parseTimeWindow('с 8 до 22'), (8, 22)));
     test('вечера shifts end', () => expect(parseTimeWindow('с 8 утра до 10 вечера'), (8, 22)));
+    test('evening-only shifts start too', () => expect(parseTimeWindow('с 6 до 9 вечера'), (18, 21)));
     test('unparseable -> null', () => expect(parseTimeWindow('когда захочу'), isNull));
   });
 }
