@@ -1564,6 +1564,65 @@ def create_app(
             "source": f"llm-{response.provider_used}",
         }
 
+    # Onboarding questionnaire («анкета»): profile fields live in user_facts
+    # under fixed profile.* topics with upsert semantics (see
+    # docs/superpowers/specs/2026-07-11-profile-anketa.md).
+    PROFILE_FIELDS = ("name", "gender", "occupation", "city", "age_range")
+    PROFILE_GENDERS = {"male": "мужской", "female": "женский"}
+    PROFILE_AGE_RANGES = {"18-25", "26-35", "36-45", "46-55", "55+"}
+    MAX_PROFILE_FIELD_CHARS = 200
+
+    @app.get("/profile")
+    async def get_profile(request: Request) -> dict[str, Any]:
+        """Current questionnaire values (None for unset fields)."""
+        facts = await request.app.state.database.get_user_facts()
+        by_topic = {f["topic"]: f["fact"] for f in facts}
+        out: dict[str, Any] = {}
+        for field in PROFILE_FIELDS:
+            value = by_topic.get(f"profile.{field}")
+            if field == "gender" and value is not None:
+                # Stored as the Russian fact word; API speaks enum values.
+                ru_to_enum = {v: k for k, v in PROFILE_GENDERS.items()}
+                value = ru_to_enum.get(value)
+            out[field] = value
+        return out
+
+    @app.post("/profile")
+    async def post_profile(request: Request) -> Any:
+        """Upsert questionnaire fields. Missing = skip, "" = clear, value = set."""
+        from fastapi.responses import JSONResponse
+
+        body = await request.json()
+        db = request.app.state.database
+        updates: list[tuple[str, str | None]] = []
+        for field in PROFILE_FIELDS:
+            if field not in body:
+                continue
+            raw = body[field]
+            if not isinstance(raw, str):
+                return JSONResponse({"error": f"{field} must be a string"}, status_code=400)
+            value = raw.strip()
+            if value == "":
+                updates.append((field, None))
+                continue
+            if len(value) > MAX_PROFILE_FIELD_CHARS:
+                return JSONResponse({"error": f"{field} too long"}, status_code=400)
+            if field == "gender":
+                if value not in PROFILE_GENDERS:
+                    return JSONResponse({"error": "gender must be male|female"}, status_code=400)
+                value = PROFILE_GENDERS[value]
+            if field == "age_range" and value not in PROFILE_AGE_RANGES:
+                return JSONResponse({"error": "invalid age_range"}, status_code=400)
+            updates.append((field, value))
+
+        for field, value in updates:
+            topic = f"profile.{field}"
+            if value is None:
+                await db.delete_user_facts_by_topic(topic)
+            else:
+                await db.upsert_user_fact(topic, value)
+        return {"status": "ok", "saved": [f for f, v in updates if v is not None]}
+
     @app.get("/skills")
     async def list_skills_route(request: Request) -> list[dict[str, Any]]:
         """List all loaded skills."""
