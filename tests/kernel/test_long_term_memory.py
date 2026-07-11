@@ -99,6 +99,43 @@ class TestLongTermMemory:
         assert len(lines) == LongTermMemory.MAX_INJECTED_FACTS
 
 
+class TestProfileFactPinning:
+    """profile.* facts are identity — never displaced by the newest-50 cap."""
+
+    async def test_profile_facts_survive_cap_overflow(
+        self, ltm: LongTermMemory, db: Database
+    ) -> None:
+        await db.upsert_user_fact("profile.name", "Вася")
+        await db.upsert_user_fact("profile.gender", "женский")
+        for i in range(LongTermMemory.MAX_INJECTED_FACTS + 10):
+            await db.save_user_fact(f"t{i}", f"fact {i}")
+        ctx = await ltm.get_user_context_string()
+        assert "Имя: «Вася»" in ctx
+        assert "Пол: «женский»" in ctx
+
+    async def test_profile_topics_render_russian_labels(
+        self, ltm: LongTermMemory, db: Database
+    ) -> None:
+        await db.upsert_user_fact("profile.occupation", "строитель")
+        await db.upsert_user_fact("profile.city", "Ереван")
+        await db.upsert_user_fact("profile.age_range", "36-45")
+        ctx = await ltm.get_user_context_string()
+        assert "Род занятий: «строитель»" in ctx
+        assert "Город: «Ереван»" in ctx
+        assert "Возраст: «36-45»" in ctx
+        assert "profile." not in ctx  # raw topic keys never leak into the prompt
+
+    async def test_non_profile_cap_still_enforced(
+        self, ltm: LongTermMemory, db: Database
+    ) -> None:
+        await db.upsert_user_fact("profile.name", "Вася")
+        for i in range(LongTermMemory.MAX_INJECTED_FACTS + 10):
+            await db.save_user_fact(f"t{i}", f"fact {i}")
+        ctx = await ltm.get_user_context_string()
+        lines = [line for line in ctx.splitlines() if line.startswith("- ")]
+        assert len(lines) == LongTermMemory.MAX_INJECTED_FACTS + 1  # cap + pinned profile
+
+
 class TestSanitization:
     """A spoken phrase must never persist as a standing instruction."""
 
