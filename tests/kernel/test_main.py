@@ -1101,3 +1101,30 @@ class TestCommunityAccountRoutes:
         assert resp.status_code == 200
         assert resp.json() == {"status": "sent"}
         identity.request_magic_link.assert_called_once_with("a@b.ru")
+
+
+class TestChatNoKeyHonestFallback:
+    """A skip-key user (no AI key → provider error) must get an honest Russian
+    prompt routing them to settings, never the English fallback text."""
+
+    async def test_no_key_returns_russian_no_key_source(
+        self, app, client: AsyncClient
+    ) -> None:
+        from kernel.llm_router import LLMResponse
+
+        async def _error_route(self, request):  # type: ignore[no-untyped-def]
+            return LLMResponse(
+                text="I'm sorry, I couldn't process that request.",
+                tool_calls=None,
+                provider_used="error",
+                latency_ms=0,
+            )
+
+        with patch("kernel.llm_router.LLMRouter.route", _error_route):
+            resp = await client.post("/chat", json={"text": "привет"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source"] == "no-key"
+        assert "I'm sorry" not in body["response"]
+        assert "Настройки" in body["response"]

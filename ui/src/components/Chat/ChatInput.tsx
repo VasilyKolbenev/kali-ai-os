@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useChatStore } from "../../stores/chatStore";
 import { useVoiceStore } from "../../stores/voiceStore";
+import { useAppStore } from "../../stores/appStore";
 import { api } from "../../api/client";
 import { apiUrl } from "../../api/runtime";
 
@@ -38,6 +39,7 @@ export function ChatInput() {
   const addMessage = useChatStore((s) => s.addMessage);
   const isLoading = useChatStore((s) => s.isLoading);
   const setLoading = useChatStore((s) => s.setLoading);
+  const setMode = useAppStore((s) => s.setMode);
   const pendingMessage = useChatStore((s) => s.pendingMessage);
   const setPendingMessage = useChatStore((s) => s.setPendingMessage);
   const setVoiceState = useVoiceStore((s) => s.setState);
@@ -129,6 +131,11 @@ export function ChatInput() {
     try {
       const res = await api.chat(msg.trim());
       addMessage("assistant", res.response, res.source);
+      // Skip-key user with no AI key: the backend returns an honest RU prompt
+      // (source "no-key"); route them straight to settings to paste a key.
+      if (res.source === "no-key") {
+        setMode("settings");
+      }
       // Backend auto-speaks — STOP mic to prevent self-echo
       setVoiceState("speaking");
       if (recognitionRef.current && listening) {

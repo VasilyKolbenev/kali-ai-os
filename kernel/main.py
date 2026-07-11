@@ -1512,6 +1512,16 @@ def create_app(
         )
         response = await router.route(req)
 
+        # No AI key / total LLM outage: the router returns provider_used="error"
+        # with an English fallback. A skip-key RU non-tech user must not see that
+        # dead-end — return an honest Russian prompt routing them to settings.
+        if response.provider_used == "error":
+            return {
+                "response": "Я пока без ключа от ИИ. Открой Настройки → Модель "
+                "и вставь ключ — и я сразу отвечу.",
+                "source": "no-key",
+            }
+
         # Personal memory: extract any new permanent facts from this turn
         # (fire-and-forget; never blocks the reply).
         if lt_memory:
