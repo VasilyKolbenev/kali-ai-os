@@ -6,6 +6,7 @@ export type OnboardingStep =
   | "api-key"
   | "models-download"
   | "mic-test"
+  | "profile"
   | "first-agent"
   | "landing";
 
@@ -24,6 +25,7 @@ const STEP_ORDER: OnboardingStep[] = [
   "api-key",
   "models-download",
   "mic-test",
+  "profile",
   "first-agent",
   "landing",
 ];

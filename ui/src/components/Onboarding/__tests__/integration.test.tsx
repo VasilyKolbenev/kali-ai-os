@@ -44,6 +44,8 @@ describe("Onboarding integration", () => {
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("mic-test");
     advance();
+    expect(useOnboardingStore.getState().currentStep).toBe("profile");
+    advance();
     expect(useOnboardingStore.getState().currentStep).toBe("first-agent");
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("landing");

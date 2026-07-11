@@ -37,6 +37,20 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ text }),
   }),
+  // Onboarding questionnaire («анкета») — profile.* facts in kernel memory
+  profile: () =>
+    fetchJSON<{
+      name: string | null;
+      gender: "male" | "female" | null;
+      occupation: string | null;
+      city: string | null;
+      age_range: string | null;
+    }>("/profile"),
+  updateProfile: (patch: Record<string, string>) =>
+    fetchJSON<{ status: string; saved: string[] }>("/profile", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    }),
   config: () => fetchJSON<Record<string, unknown>>("/config"),
   updateConfig: (patch: DeepPartial<Record<string, unknown>>) =>
     fetchJSON<Record<string, unknown>>("/config", {

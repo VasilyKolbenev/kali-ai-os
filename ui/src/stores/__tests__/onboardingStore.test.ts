@@ -26,9 +26,19 @@ describe("onboardingStore", () => {
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("mic-test");
     advance();
+    expect(useOnboardingStore.getState().currentStep).toBe("profile");
+    advance();
     expect(useOnboardingStore.getState().currentStep).toBe("first-agent");
     advance();
     expect(useOnboardingStore.getState().currentStep).toBe("landing");
+  });
+
+  it("advances mic-test → profile → first-agent", () => {
+    useOnboardingStore.setState({ currentStep: "mic-test" });
+    useOnboardingStore.getState().advance();
+    expect(useOnboardingStore.getState().currentStep).toBe("profile");
+    useOnboardingStore.getState().advance();
+    expect(useOnboardingStore.getState().currentStep).toBe("first-agent");
   });
 
   it("completes on final advance from landing", () => {
