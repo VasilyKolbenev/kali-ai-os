@@ -117,7 +117,18 @@ class LLMRouter:
             if provider == "cloud":
                 self._cloud_available = False
                 self._cloud_last_fail = time.time()
-                response = await self._call_local(request)
+                # Cloud is down; try local. If local ALSO fails (double outage)
+                # degrade to an honest error rather than letting it propagate.
+                try:
+                    response = await self._call_local(request)
+                except Exception:
+                    logger.exception("Local fallback also failed (double outage)")
+                    response = LLMResponse(
+                        text="I'm sorry, I couldn't process that request.",
+                        tool_calls=None,
+                        provider_used="error",
+                        latency_ms=0,
+                    )
             else:
                 self._local_fails += 1
                 if self._local_fails >= 2:

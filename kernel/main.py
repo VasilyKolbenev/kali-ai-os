@@ -143,7 +143,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append(f"Weather: {temp}°C, {cond}.")
     except Exception:
-        pass
+        logger.debug("briefing: weather section unavailable", exc_info=True)
 
     # Tasks
     try:
@@ -159,7 +159,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append("Нет активных задач." if is_ru else "No active tasks.")
     except Exception:
-        pass
+        logger.debug("briefing: tasks section unavailable", exc_info=True)
 
     # Calendar
     try:
@@ -176,7 +176,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append("Календарь на сегодня пуст." if is_ru else "Calendar is clear today.")
     except Exception:
-        pass
+        logger.debug("briefing: calendar section unavailable", exc_info=True)
 
     # Active agents count
     try:
@@ -187,7 +187,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         else:
             parts.append(f"{count} agents active.")
     except Exception:
-        pass
+        logger.debug("briefing: agents section unavailable", exc_info=True)
 
     # Skills
     try:
@@ -198,7 +198,7 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
             else:
                 parts.append(f"{skill_count} skills loaded.")
     except Exception:
-        pass
+        logger.debug("briefing: skills section unavailable", exc_info=True)
 
     # Final
     if is_ru:
@@ -220,14 +220,22 @@ def _save_env(updates: dict[str, str]) -> None:
         env_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         env_path = Path(".env")
+    # Guard the .env boundary: a newline or other control char in a value would
+    # inject a spurious KEY=VALUE line (e.g. token='x\nADMIN=1'). Reject rather
+    # than silently corrupt the environment file.
+    for k, v in updates.items():
+        if any(ord(c) < 0x20 for c in f"{k}{v}"):
+            raise ValueError(f"Control character not allowed in env entry: {k!r}")
     existing: dict[str, str] = {}
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
                 existing[k.strip()] = v.strip()
     existing.update(updates)
-    env_path.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+    env_path.write_text(
+        "\n".join(f"{k}={v}" for k, v in existing.items()) + "\n", encoding="utf-8"
+    )
 
 
 def _play_audio(audio: Any, sr: int) -> None:
@@ -2687,7 +2695,7 @@ def create_app(
     async def skills_publish(request: Request) -> dict[str, Any]:
         """Prepare a skill bundle for community catalog submission.
 
-        Body: {"name": "my-skill", "skip_safety": false}
+        Body: {"name": "my-skill"}
 
         Returns bundle path + next-step instructions (does not push to GitHub).
         """
@@ -2703,9 +2711,11 @@ def create_app(
         if skill is None:
             return {"status": "error", "message": f"Skill '{name}' not found locally"}
 
+        # skip_safety is NOT exposed over HTTP — the AST safety gate must always
+        # run on a publish path (it is an internal/testing-only kwarg).
         result = publish_skill(
             skill.skill_dir,
-            skip_safety=bool(body.get("skip_safety", False)),
+            skip_safety=False,
             include_scripts=bool(body.get("include_scripts", True)),
         )
 
