@@ -67,3 +67,51 @@ class TestRoutineManager:
         manager.create("test", [])
         result = manager.delete("test")
         assert result["status"] == "deleted"
+
+
+class TestRoutineManagerResilience:
+    def test_corrupt_json_self_heals(
+        self, bus: EventBus, tmp_path, monkeypatch,
+    ) -> None:
+        """A garbage routines.json must not crash boot; routines start empty."""
+        import kernel.routines as routines_mod
+
+        bad = tmp_path / "routines.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setattr(routines_mod, "ROUTINES_FILE", bad)
+        mgr = RoutineManager(bus)  # must not raise
+        assert mgr.list_routines() == {"routines": []}
+
+    def test_non_dict_json_self_heals(
+        self, bus: EventBus, tmp_path, monkeypatch,
+    ) -> None:
+        """A structurally valid but non-dict JSON is rejected to an empty map."""
+        import kernel.routines as routines_mod
+
+        bad = tmp_path / "routines.json"
+        bad.write_text("[1, 2, 3]", encoding="utf-8")
+        monkeypatch.setattr(routines_mod, "ROUTINES_FILE", bad)
+        mgr = RoutineManager(bus)
+        assert mgr.list_routines() == {"routines": []}
+
+    def test_default_path_is_absolute_under_appdata(
+        self, bus: EventBus, tmp_path, monkeypatch,
+    ) -> None:
+        """The default data path resolves under appdata_dir(), absolute."""
+        import kernel.runtime_paths as rp
+
+        monkeypatch.setattr(rp, "appdata_dir", lambda: tmp_path)
+        # Re-import to recompute the module-level default from the patched dir.
+        import importlib
+
+        import kernel.routines as routines_mod
+
+        importlib.reload(routines_mod)
+        try:
+            assert routines_mod.ROUTINES_FILE.is_absolute()
+            assert routines_mod.ROUTINES_FILE == tmp_path / "data" / "routines.json"
+            mgr = routines_mod.RoutineManager(bus)
+            mgr.create("morning", [{"action": "x"}])
+            assert (tmp_path / "data" / "routines.json").exists()
+        finally:
+            importlib.reload(routines_mod)
