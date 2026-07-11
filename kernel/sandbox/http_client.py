@@ -74,6 +74,32 @@ def _resolves_to_private(host: str) -> bool:
     return False
 
 
+def _resolve_validated(host: str) -> list[Any] | None:
+    """Resolve ``host`` and return its addrinfo entries iff EVERY resolved
+    address is public.
+
+    Returns None when the host is unresolvable or ANY address is
+    private/loopback/link-local/reserved (fail closed). Resolving once here and
+    pinning the connection to these vetted addresses closes the DNS-rebinding
+    TOCTOU window — otherwise the guard's ``getaddrinfo`` and urllib's connect
+    resolve separately and an attacker-controlled DNS could rebind in between.
+    """
+    if not host:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return None
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return None
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return None
+    return infos
+
+
 class SandboxHttpError(RuntimeError):
     """Base for any sandbox-level HTTP problem."""
 
@@ -211,7 +237,8 @@ class SandboxHttpClient:
                 f"Add it to 'permissions: network: domains: [...]' in SKILL.md."
             )
 
-        if _resolves_to_private(host):
+        validated = _resolve_validated(host)
+        if validated is None:
             self._emit_audit(
                 status="denied", reason="domain_blocked",
                 url=req.url, duration_ms=0, error=f"host '{host}' resolves to private range",
@@ -243,7 +270,25 @@ class SandboxHttpClient:
         opener = urllib.request.build_opener(
             _ValidatingRedirectHandler(self._host_allowed)
         )
+
+        # Pin urllib's resolution to the addresses we just validated so a DNS
+        # rebind between the check and the connect cannot redirect the socket to
+        # a private target. The pin substitutes the caller's port into the vetted
+        # sockaddr (validated was resolved with port None → port 0). Scoped to
+        # this synchronous request via try/finally. (Global patch — sequential
+        # per agent; not for concurrent multi-host use.)
+        _real_gai = socket.getaddrinfo
+
+        def _pinned_gai(h: str, port: Any, *a: Any, **k: Any) -> list[Any]:
+            if h == host:
+                return [
+                    (fam, typ, proto, cname, (sa[0], port) + tuple(sa[2:]))
+                    for (fam, typ, proto, cname, sa) in validated
+                ]
+            return _real_gai(h, port, *a, **k)
+
         start = time.perf_counter()
+        socket.getaddrinfo = _pinned_gai  # type: ignore[assignment]
         try:
             with opener.open(py_req, data=data, timeout=timeout) as resp:
                 body = resp.read(MAX_RESPONSE_BYTES + 1)
@@ -271,6 +316,8 @@ class SandboxHttpClient:
                 error=str(exc.reason),
             )
             raise SandboxHttpError(f"URL error: {exc.reason}") from exc
+        finally:
+            socket.getaddrinfo = _real_gai  # type: ignore[assignment]
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         self._emit_audit(
