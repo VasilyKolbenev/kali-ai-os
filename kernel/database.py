@@ -245,3 +245,21 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    async def upsert_user_fact(self, topic: str, fact: str) -> None:
+        """Replace-then-insert a fact for a stable topic (profile fields).
+
+        Unlike append-only ``save_user_fact``, re-saving the questionnaire
+        must not accumulate contradictory rows («Город: Москва» + «Ереван»).
+        """
+        await self._db.execute("DELETE FROM user_facts WHERE topic = ?", (topic,))
+        await self._db.execute(
+            "INSERT INTO user_facts (topic, fact, confidence) VALUES (?, ?, 1.0)",
+            (topic, fact),
+        )
+        await self._db.commit()
+
+    async def delete_user_facts_by_topic(self, topic: str) -> None:
+        """Remove all facts under a topic (clearing a profile field)."""
+        await self._db.execute("DELETE FROM user_facts WHERE topic = ?", (topic,))
+        await self._db.commit()
