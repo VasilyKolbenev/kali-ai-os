@@ -129,12 +129,13 @@ class VoicePipeline:
         self._wake_detected = False
         self._wake_time: float = 0.0
         self._silence_count = 0
-        # End an utterance only after a real thinking pause. Chunks are 32 ms
-        # (recorder default), so 78 ≈ 2.5 s — the old 30 (~1 s) cut people off
-        # mid-thought when they paused to phrase a sentence. Overridable via
-        # KALI_SILENCE_MS for tuning without a rebuild.
+        # End an utterance after 900 ms of silence (28 chunks x 32 ms) — the
+        # Rust path already lives with 960 ms (config.rs). 2026-06 raised this
+        # to 2500 because ~1 s cut people off mid-thought; 2026-07-12 latency
+        # sprint brings it back down as the single largest TTFA cost (+1.6 s).
+        # Revert without a rebuild: KALI_SILENCE_MS=2500.
         import os as _os
-        _silence_ms = int(_os.environ.get("KALI_SILENCE_MS", "2500"))
+        _silence_ms = int(_os.environ.get("KALI_SILENCE_MS", "900"))
         self._max_silence_chunks = max(1, _silence_ms // 32)
 
     @property
