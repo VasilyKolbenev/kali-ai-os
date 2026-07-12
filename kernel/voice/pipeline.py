@@ -562,7 +562,7 @@ class VoicePipeline:
         Does NOT set IDLE — the caller's final _set_state(IDLE) in
         _handle_transcription is load-bearing.
         """
-        from kernel.voice.sentence_buffer import SentenceBuffer
+        from kernel.voice.sentence_buffer import sentence_buffer_from_env
 
         was_recording = self._recorder.is_recording
         await self._set_state(PipelineState.SPEAKING)
@@ -593,7 +593,7 @@ class VoicePipeline:
                 await asyncio.to_thread(_play_audio, audio, sr)
 
         consumer_task = asyncio.create_task(consumer())
-        sb = SentenceBuffer()
+        sb = sentence_buffer_from_env()
         try:
             async def on_delta(delta: str) -> None:
                 for sentence in sb.feed(delta):

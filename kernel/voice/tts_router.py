@@ -135,9 +135,9 @@ async def generate_audio_by_sentence(text: str, language: str | None = None):
     time-to-first-audio, the dominant voice latency (P1). Text without sentence
     boundaries is synthesized as a single unit.
     """
-    from kernel.voice.sentence_buffer import SentenceBuffer
+    from kernel.voice.sentence_buffer import sentence_buffer_from_env
 
-    sb = SentenceBuffer()
+    sb = sentence_buffer_from_env()
     sentences = sb.feed(text)
     tail = sb.flush()
     if tail:

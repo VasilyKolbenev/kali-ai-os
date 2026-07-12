@@ -5,7 +5,53 @@ exercise the splitting logic in isolation; merge-policy tests use the default
 ``min_chars`` contract that kills mid-speech gaps on short sentences.
 """
 
-from kernel.voice.sentence_buffer import DEFAULT_MIN_CHARS, SentenceBuffer
+from kernel.voice.sentence_buffer import (
+    DEFAULT_MIN_CHARS,
+    SentenceBuffer,
+    sentence_buffer_from_env,
+)
+
+
+class TestFirstClause:
+    """KALI_TTS_FIRST_CLAUSE: the first clause plays before its sentence ends."""
+
+    def test_first_clause_emitted_before_sentence_closes(self) -> None:
+        sb = SentenceBuffer(first_clause=True)
+        assert sb.feed("Конечно, ") == ["Конечно,"]
+
+    def test_short_clause_not_emitted(self) -> None:
+        sb = SentenceBuffer(first_clause=True)
+        assert sb.feed("Да, ") == []  # < 8 chars — wait for the full sentence
+
+    def test_clause_does_not_consume_first_sentence_fast_path(self) -> None:
+        sb = SentenceBuffer(first_clause=True)
+        assert sb.feed("Конечно, ") == ["Конечно,"]
+        # Remainder closes as a short sentence → still emitted immediately
+        # (threshold 1, not min_chars=40): TTFA fast-path is not consumed.
+        assert sb.feed("сэр. ") == ["сэр."]
+
+    def test_only_one_clause_ever_emitted(self) -> None:
+        sb = SentenceBuffer(first_clause=True)
+        # The EARLIEST qualifying boundary wins («Секунду,» — 8 chars) —
+        # earliest possible audio; the rest of the sentence buffers normally.
+        assert sb.feed("Секунду, сэр, ") == ["Секунду,"]
+        assert sb.feed("сейчас проверю, ") == []  # later clauses buffer normally
+
+    def test_default_off_behavior_unchanged(self) -> None:
+        sb = SentenceBuffer()
+        assert sb.feed("Конечно, сэр. ") == ["Конечно, сэр."]
+
+    def test_factory_reads_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("KALI_TTS_FIRST_CLAUSE", "1")
+        assert sentence_buffer_from_env().first_clause is True
+        monkeypatch.delenv("KALI_TTS_FIRST_CLAUSE")
+        assert sentence_buffer_from_env().first_clause is False
+
+    def test_flush_resets_clause_state(self) -> None:
+        sb = SentenceBuffer(first_clause=True)
+        sb.feed("Конечно, ")
+        sb.flush()
+        assert sb.feed("Например, ") == ["Например,"]  # new turn → clause again
 
 
 class TestSentenceBoundaries:
