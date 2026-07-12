@@ -326,19 +326,50 @@ class VoicePipeline:
         logger.info("Processing utterance: %.1fs of audio", duration_s)
         await self._set_state(PipelineState.THINKING)
 
+        # Memory context is needed only AFTER transcription — start fetching
+        # it now so it overlaps the STT compute instead of adding to it.
+        ctx_task = asyncio.create_task(self._fetch_memory_context())
+
         # Off the event loop: a blocking Whisper call here froze every
         # concurrent task (UI events, websockets) for the whole transcription.
         stt_result = await asyncio.to_thread(self._stt.transcribe, audio)
         if stt_result.is_empty:
             logger.info("STT returned empty — ignoring")
+            ctx_task.cancel()
             await self._set_state(PipelineState.IDLE)
             return
 
         logger.info("STT: '%s' (lang=%s, conf=%.2f)", stt_result.text, stt_result.language, stt_result.confidence)
-        await self._handle_transcription(stt_result)
+        try:
+            facts_context = await ctx_task
+        except asyncio.CancelledError:
+            facts_context = ""
+        await self._handle_transcription(stt_result, facts_context)
 
-    async def _handle_transcription(self, stt_result: STTResult) -> None:
-        """Handle a completed transcription: publish event, call LLM, and speak response."""
+    async def _fetch_memory_context(self) -> str:
+        """User-facts block for the system prompt ('' when unavailable)."""
+        lt_memory = (
+            getattr(self._app_state, "long_term_memory", None)
+            if self._app_state
+            else None
+        )
+        if not lt_memory:
+            return ""
+        try:
+            return await lt_memory.get_user_context_string()
+        except Exception:
+            return ""
+
+    async def _handle_transcription(
+        self, stt_result: STTResult, facts_context: str | None = None
+    ) -> None:
+        """Handle a completed transcription: publish event, call LLM, and speak response.
+
+        Args:
+            stt_result: Completed transcription.
+            facts_context: Prefetched user-facts block (overlapped with STT in
+                _process_utterance); None → fetch here (direct callers/tests).
+        """
         text = stt_result.text
         flow = getattr(self._app_state, "builder_flow", None) if self._app_state else None
 
@@ -436,15 +467,12 @@ class VoicePipeline:
             if self._app_state
             else None
         )
+        if facts_context is None:
+            facts_context = await self._fetch_memory_context()
         system_prompt = None
-        if lt_memory:
-            try:
-                facts_context = await lt_memory.get_user_context_string()
-            except Exception:
-                facts_context = ""
-            if facts_context:
-                from kernel.jarvis_persona import get_prompt
-                system_prompt = get_prompt() + "\n\n" + facts_context
+        if facts_context:
+            from kernel.jarvis_persona import get_prompt
+            system_prompt = get_prompt() + "\n\n" + facts_context
 
         request = LLMRequest(
             text=stt_result.text,
