@@ -74,13 +74,12 @@ async def test_memory_context_prefetched_concurrently_with_stt() -> None:
 
     captured: dict = {}
 
-    async def fake_route(request):
+    async def fake_route_streaming(request, on_delta):
         captured["system_prompt"] = request.system_prompt
         from kernel.llm_router import LLMResponse
         return LLMResponse(text="", tool_calls=None, provider_used="test", latency_ms=1)
 
-    p._llm.route = fake_route  # type: ignore[method-assign]
-    p._llm.route_streaming = None  # not yet ported; route() path in use
+    p._llm.route_streaming = fake_route_streaming  # type: ignore[method-assign]
 
     t0 = _time.perf_counter()
     await p._process_utterance()

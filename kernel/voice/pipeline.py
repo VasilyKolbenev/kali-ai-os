@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from kernel.event_bus import EventBus
-from kernel.llm_router import LLMRequest, LLMRouter
+from kernel.llm_router import LLMRequest, LLMResponse, LLMRouter
 from kernel.models import Event, LLMConfig, VoiceConfig
 from kernel.voice import tts_router
 from kernel.voice.recorder import AudioChunk, AudioRecorder
@@ -480,7 +480,9 @@ class VoicePipeline:
             available_tools=self._live_tools(),
             system_prompt=system_prompt,
         )
-        response = await self._llm.route(request)
+        # P1 port of remote_pipeline: sentence 1 plays while the LLM is still
+        # generating the rest — instead of waiting for the complete reply.
+        response = await self._speak_streaming_response(request)
 
         if lt_memory:
             try:
@@ -525,7 +527,9 @@ class VoicePipeline:
         self._context.append({"role": "user", "content": stt_result.text})
         self._context.append({"role": "assistant", "content": final_text})
 
-        if final_text:
+        # A plain turn was already spoken sentence-by-sentence during the
+        # stream; only a tool-call turn (empty stream) speaks its result here.
+        if response.tool_calls and final_text:
             await self._play_tts_with_guard(final_text)
 
         await self._set_state(PipelineState.IDLE)
@@ -547,6 +551,73 @@ class VoicePipeline:
     async def _speak(self, text: str) -> None:
         """Synthesize and play text through the active TTS provider."""
         await self._play_tts_with_guard(text)
+
+    async def _speak_streaming_response(self, request: "LLMRequest") -> "LLMResponse":
+        """Stream the LLM reply into sentence-level TTS playback (P1 port of
+        remote_pipeline): sentence 1 plays while the LLM still generates the
+        rest. Returns the full response for context/tool handling. Tool-call
+        turns produce an empty stream (recovered non-streamed by the router) —
+        their result is spoken by the caller via _play_tts_with_guard.
+
+        Does NOT set IDLE — the caller's final _set_state(IDLE) in
+        _handle_transcription is load-bearing.
+        """
+        from kernel.voice.sentence_buffer import SentenceBuffer
+
+        was_recording = self._recorder.is_recording
+        await self._set_state(PipelineState.SPEAKING)
+        if was_recording:
+            await self._recorder.stop()
+        queue: asyncio.Queue[tuple[np.ndarray, int] | None] = asyncio.Queue()
+        spoke_any = False
+
+        async def synth(sentence: str) -> None:
+            # TTS failure must NEVER propagate: it would skip the caller's
+            # IDLE transition and deafen the pipeline until restart (parity
+            # with generate_task in _play_tts_with_guard).
+            nonlocal spoke_any
+            try:
+                async for audio, sr in tts_router.generate_audio_stream(sentence):
+                    if len(audio) > 0:
+                        spoke_any = True
+                        await queue.put((audio, sr))
+            except Exception:
+                logger.exception("Streaming TTS failed on %r", sentence[:40])
+
+        async def consumer() -> None:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                audio, sr = item
+                await asyncio.to_thread(_play_audio, audio, sr)
+
+        consumer_task = asyncio.create_task(consumer())
+        sb = SentenceBuffer()
+        try:
+            async def on_delta(delta: str) -> None:
+                for sentence in sb.feed(delta):
+                    await synth(sentence)
+
+            response = await self._llm.route_streaming(request, on_delta)
+            tail = sb.flush()
+            if tail and not response.tool_calls:
+                await synth(tail)
+        finally:
+            await queue.put(None)
+            await consumer_task
+            if spoke_any:
+                # anti-echo drain only if the speakers actually said something —
+                # a silent tool-call turn shouldn't pay 0.5s for nothing.
+                await asyncio.sleep(0.5)
+            if was_recording:
+                await self._recorder.start()
+            self._wake_word.reset()
+            self._vad.reset()
+            self._audio_buffer.clear()
+            self._silence_count = 0
+            self._speech_active = False
+        return response
 
     async def _play_tts_with_guard(self, text: str) -> None:
         """Play TTS through speakers with microphone anti-echo protection.
