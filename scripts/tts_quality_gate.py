@@ -213,7 +213,14 @@ def run_experiment(run_name: str, env_overrides: dict[str, str]) -> dict:
 
     phrases = _load_phrases()
     per_phrase: list[dict] = []
+    import torch
+
     for idx, phrase in enumerate(phrases):
+        # Deterministic noise per phrase: the fast path dropped api.infer's
+        # per-call seed_everything, so without this the flow-matching y0 noise
+        # differs run-to-run and CER deltas between configs drown in sampling
+        # variance (observed ±2+ п.п. on identical configs, 2026-07-12).
+        torch.manual_seed(42 + idx)
         t0 = time.perf_counter()
         audio, sr = tts_router.generate_audio(phrase)
         synth_ms = (time.perf_counter() - t0) * 1000

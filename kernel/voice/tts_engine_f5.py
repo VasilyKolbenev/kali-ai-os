@@ -91,9 +91,13 @@ SPEED = 1.0           # natural pacing
 
 def _nfe() -> int:
     """NFE steps, env-tunable per experiment (read per call so tests can
-    monkeypatch without a module reload). 7 activates the EPSS-7 schedule
-    built into f5-tts (f5_tts/model/utils.py get_epss_timesteps)."""
-    return int(os.environ.get("KALI_F5_NFE", "32"))
+    monkeypatch without a module reload).
+
+    Default 16 (EPSS-16 schedule built into f5-tts): 1.46x faster synth,
+    SIM identical to NFE32, ear-verified by Vasily 2026-07-12 (seeded gate:
+    docs/superpowers/data/). NFE7 was REJECTED — speaker-sim −0.026. Revert
+    to 32 via KALI_F5_NFE if a regression surfaces."""
+    return int(os.environ.get("KALI_F5_NFE", "16"))
 
 
 def _cfg() -> float:

@@ -77,7 +77,8 @@ def test_infer_defaults_without_env(fake_infra, monkeypatch) -> None:
     f5 = f5_mod._get_f5()
     f5_mod._infer_sentence(f5, "Привет.")
     kwargs = fake_infra["calls"][0]
-    assert kwargs["nfe_step"] == 32
+    # 16 = EPSS-16, quality-gate PASS + ear-verified 2026-07-12 (NFE7 rejected).
+    assert kwargs["nfe_step"] == 16
     assert kwargs["cfg_strength"] == 2.0
 
 
