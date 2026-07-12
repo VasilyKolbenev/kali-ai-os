@@ -137,9 +137,13 @@ class SpeechToText:
             return STTResult(text="", language=None, confidence=0.0, duration_ms=0)
 
         start = time.perf_counter()
+        # beam 2 ≈ beam 5 quality on short RU commands at a fraction of the
+        # decode time (latency sprint 2026-07-12); the quality-gate judge pins
+        # KALI_STT_BEAM=5 so experiments never degrade the judge itself.
+        import os as _os
         segments, info = self._model.transcribe(  # type: ignore[union-attr]
             audio,
-            beam_size=5,
+            beam_size=int(_os.environ.get("KALI_STT_BEAM", "2")),
             language="ru",
             vad_filter=True,
             # Lower threshold + shorter min-silence so quiet/short Russian

@@ -326,7 +326,9 @@ class VoicePipeline:
         logger.info("Processing utterance: %.1fs of audio", duration_s)
         await self._set_state(PipelineState.THINKING)
 
-        stt_result = self._stt.transcribe(audio)
+        # Off the event loop: a blocking Whisper call here froze every
+        # concurrent task (UI events, websockets) for the whole transcription.
+        stt_result = await asyncio.to_thread(self._stt.transcribe, audio)
         if stt_result.is_empty:
             logger.info("STT returned empty — ignoring")
             await self._set_state(PipelineState.IDLE)
