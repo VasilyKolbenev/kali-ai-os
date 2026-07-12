@@ -72,3 +72,6 @@ verify_builder.py
 
 # On-device TTS eval run artifacts (audio/results/logs â€” regenerable; BASELINE.md is the record)
 research/on-device-tts/runs/
+
+# TTS quality-gate run artifacts (WAVs + run.json — regenerable; docs/superpowers/data has the record)
+artifacts/
