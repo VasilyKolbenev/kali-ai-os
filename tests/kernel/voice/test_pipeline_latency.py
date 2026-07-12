@@ -45,27 +45,32 @@ async def test_stt_runs_off_the_event_loop() -> None:
 
 
 async def test_memory_context_prefetched_concurrently_with_stt() -> None:
-    """Memory-context fetch overlaps STT instead of running after it —
-    proven by wall-clock: 100ms STT + 80ms fetch must finish well under 180ms."""
+    """Memory-context fetch overlaps STT — the fetch coroutine must START
+    while transcribe is still in flight (event ordering, not wall-clock:
+    timing asserts flake under suite load)."""
     import time as _time
     from unittest.mock import AsyncMock, MagicMock
 
     import numpy as np
 
     p = _mk()
+    ctx_started_during_stt: list[bool] = []
+    ctx_started = False
 
     def slow_transcribe(audio):
-        _time.sleep(0.10)
+        # Runs in a worker thread; give the loop time to start the ctx task.
+        _time.sleep(0.05)
+        ctx_started_during_stt.append(ctx_started)
         from kernel.voice.stt import STTResult
-        return STTResult(text="привет", language="ru", confidence=1.0, duration_ms=100)
+        return STTResult(text="привет", language="ru", confidence=1.0, duration_ms=50)
 
-    async def slow_context() -> str:
-        import asyncio
-        await asyncio.sleep(0.08)
+    async def instrumented_context() -> str:
+        nonlocal ctx_started
+        ctx_started = True
         return "<UserFacts>\n- Имя: «Вася»\n</UserFacts>\n"
 
     app_state = MagicMock()
-    app_state.long_term_memory.get_user_context_string = slow_context
+    app_state.long_term_memory.get_user_context_string = instrumented_context
     app_state.long_term_memory.maybe_extract_and_save_facts = AsyncMock()
     app_state.builder_flow = None
     p._app_state = app_state
@@ -81,11 +86,9 @@ async def test_memory_context_prefetched_concurrently_with_stt() -> None:
 
     p._llm.route_streaming = fake_route_streaming  # type: ignore[method-assign]
 
-    t0 = _time.perf_counter()
     await p._process_utterance()
-    elapsed = _time.perf_counter() - t0
 
-    assert elapsed < 0.17, f"prefetch not concurrent: {elapsed:.3f}s (sequential would be ≥0.18)"
+    assert ctx_started_during_stt == [True], "context fetch did not overlap STT"
     assert captured["system_prompt"] and "Вася" in captured["system_prompt"]
 
 

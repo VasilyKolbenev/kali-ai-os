@@ -87,9 +87,18 @@ REFERENCE_TEXT = (
 
 # Tuned inference parameters — A/B winner "04_v2ref_aggressive" (2026-04-22)
 SPEED = 1.0           # natural pacing
-CFG_STRENGTH = 2.0    # balanced: voice similarity vs speed
-NFE_STEP = 32         # default quality (was 64 — high but slow, 32 is 2x faster)
-REMOVE_SILENCE = False  # preserve natural butler pauses
+
+
+def _nfe() -> int:
+    """NFE steps, env-tunable per experiment (read per call so tests can
+    monkeypatch without a module reload). 7 activates the EPSS-7 schedule
+    built into f5-tts (f5_tts/model/utils.py get_epss_timesteps)."""
+    return int(os.environ.get("KALI_F5_NFE", "32"))
+
+
+def _cfg() -> float:
+    """CFG strength; every step runs cond+uncond passes, so lower ≈ faster."""
+    return float(os.environ.get("KALI_F5_CFG", "2.0"))
 
 # Global state
 _f5_instance: Any = None
@@ -206,12 +215,18 @@ def _get_processed_reference_text() -> str:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split into sentences for chunked generation."""
+    """Split into sentences for chunked generation.
+
+    The 150-char merge cap replaces infer_process's chunk_text batching
+    (~160-170 RU chars for the 9.6s reference) which the fast path bypasses —
+    an unbounded merged chunk would hit model.sample with an unvalidated
+    duration.
+    """
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     result: list[str] = []
     buf = ""
     for p in parts:
-        if len(buf) + len(p) < 300:
+        if len(buf) + len(p) < 150:
             buf = f"{buf} {p}".strip() if buf else p
         else:
             if buf:
@@ -220,6 +235,54 @@ def _split_sentences(text: str) -> list[str]:
     if buf:
         result.append(buf)
     return result if result else [text]
+
+
+_ref_cache: tuple[Any, int, str] | None = None  # (audio_tensor, sr, ref_text)
+
+
+def _get_ref() -> tuple[Any, int, str]:
+    """Preprocess + load the reference ONCE.
+
+    api.F5TTS.infer re-reads and re-hashes the 9.6s WAV from disk, reseeds the
+    global RNG and prints progress on EVERY call — pure per-sentence overhead.
+    """
+    global _ref_cache
+    if _ref_cache is None:
+        import torchaudio
+        from f5_tts.infer.utils_infer import preprocess_ref_audio_text
+
+        ref_file, ref_text = preprocess_ref_audio_text(
+            str(REFERENCE_AUDIO),
+            _get_processed_reference_text(),
+            show_info=lambda *_: None,
+        )
+        audio, sr = torchaudio.load(ref_file)
+        _ref_cache = (audio, sr, ref_text)
+    return _ref_cache
+
+
+def _infer_sentence(f5: Any, sentence: str) -> np.ndarray:
+    """One sentence through cached-ref infer_batch_process (fast path)."""
+    from f5_tts.infer.utils_infer import infer_batch_process
+
+    audio, sr, ref_text = _get_ref()
+    wav, _out_sr, _spec = next(
+        infer_batch_process(
+            (audio, sr),
+            ref_text,
+            [sentence],
+            f5.ema_model,
+            f5.vocoder,
+            mel_spec_type=f5.mel_spec_type,
+            progress=None,
+            nfe_step=_nfe(),
+            cfg_strength=_cfg(),
+            sway_sampling_coef=-1,
+            speed=SPEED,
+            device=f5.device,
+        )
+    )
+    return np.asarray(wav, dtype=np.float32)
 
 
 def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, int]:
@@ -234,16 +297,7 @@ def generate_audio(text: str, language: str | None = None) -> tuple[np.ndarray, 
     t0 = time.perf_counter()
     for sentence in sentences:
         try:
-            wav, sr, _ = f5.infer(
-                ref_file=str(REFERENCE_AUDIO),
-                ref_text=_get_processed_reference_text(),
-                gen_text=sentence,
-                remove_silence=REMOVE_SILENCE,
-                speed=SPEED,
-                cfg_strength=CFG_STRENGTH,
-                nfe_step=NFE_STEP,
-            )
-            all_audio.append(np.asarray(wav, dtype=np.float32))
+            all_audio.append(_infer_sentence(f5, sentence))
         except Exception as exc:
             logger.warning("F5 failed on %r: %s", sentence[:40], exc)
             continue
@@ -274,17 +328,7 @@ async def generate_audio_stream(text: str, language: str | None = None):
     for sentence in sentences:
         t0 = time.perf_counter()
         try:
-            wav, sr, _ = await asyncio.to_thread(
-                f5.infer,
-                ref_file=str(REFERENCE_AUDIO),
-                ref_text=_get_processed_reference_text(),
-                gen_text=sentence,
-                remove_silence=REMOVE_SILENCE,
-                speed=SPEED,
-                cfg_strength=CFG_STRENGTH,
-                nfe_step=NFE_STEP,
-            )
-            audio = np.asarray(wav, dtype=np.float32)
+            audio = await asyncio.to_thread(_infer_sentence, f5, sentence)
             elapsed = time.perf_counter() - t0
             logger.info("F5-TTS stream: %d chars → %.1fs audio in %.2fs", len(sentence), len(audio) / 24000, elapsed)
             
