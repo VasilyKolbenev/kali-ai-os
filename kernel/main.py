@@ -1,6 +1,5 @@
 """FastAPI application — entry point for the KALI kernel."""
 
-import json
 import logging
 import os
 import sys
@@ -14,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from kernel import __version__
@@ -650,40 +649,6 @@ def create_app(
 
     # --- Routes ---
 
-    @app.websocket("/ws")
-    async def websocket_endpoint(ws: WebSocket) -> None:
-        s = ws.app.state
-        await ws.accept()
-        s.ws_connections.append(ws)
-        logger.info("WebSocket client connected (%d total)", len(s.ws_connections))
-
-        try:
-            while True:
-                raw = await ws.receive_text()
-                try:
-                    data = json.loads(raw)
-                    msg = WSMessage(**data)
-                    if msg.type in ("ui.command", "voice.state", "voice.audio_stream"):
-                        await s.event_bus.publish(
-                            Event(
-                                topic=msg.type,
-                                source="websocket",
-                                payload=msg.data,
-                            )
-                        )
-                        # We don't need to ACK audio streams to save bandwidth
-                        if msg.type == "ui.command":
-                            await ws.send_json({"type": "ui.command", "data": {"status": "received"}})
-                    else:
-                        await ws.send_json(
-                            {"type": "error", "data": {"message": f"Unknown type: {msg.type}"}}
-                        )
-                except (json.JSONDecodeError, ValueError) as e:
-                    await ws.send_json({"type": "error", "data": {"message": str(e)}})
-        except WebSocketDisconnect:
-            s.ws_connections.remove(ws)
-            logger.info("WebSocket client disconnected (%d remaining)", len(s.ws_connections))
-
     # Domain routers (2026-07-13 split) — imported here, not at module top,
     # so routers may import kernel.routers._shared without an import cycle.
     # Registration order is inter-module-safe: extracted paths are exact
@@ -696,6 +661,7 @@ def create_app(
     from kernel.routers import skills as skills_router
     from kernel.routers import system as system_router
     from kernel.routers import voice as voice_router
+    from kernel.routers import ws as ws_router
 
     app.include_router(chat_router.router)
     app.include_router(voice_router.router)
@@ -705,6 +671,7 @@ def create_app(
     app.include_router(builder_router.router)
     app.include_router(life_router.router)
     app.include_router(system_router.router)
+    app.include_router(ws_router.router)
 
     return app
 
