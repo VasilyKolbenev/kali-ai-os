@@ -20,7 +20,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from kernel.catalog.installer import install_package
-from kernel.catalog.package import pack as pack_agent, get_package_info
+from kernel.catalog.package import get_package_info
+from kernel.catalog.package import pack as pack_agent
 from kernel.routers._shared import _get_skills_catalog
 
 logger = logging.getLogger(__name__)

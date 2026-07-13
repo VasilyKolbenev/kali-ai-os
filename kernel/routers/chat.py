@@ -37,7 +37,7 @@ async def _speak_response(app: Any, text: str) -> None:
 
     try:
         # Try pre-recorded JARVIS clip first
-        from kernel.voice.jarvis_sounds import should_use_clip, play_reaction
+        from kernel.voice.jarvis_sounds import play_reaction, should_use_clip
         clip = should_use_clip(text)
         if clip:
             await asyncio.to_thread(play_reaction, clip)
@@ -84,7 +84,7 @@ async def chat(request: Request) -> dict[str, Any]:
 
 async def _chat_logic(request: Request) -> dict[str, Any]:
     """Internal chat logic — returns response dict using LLMRouter."""
-    from kernel.llm_router import LLMRouter, LLMRequest
+    from kernel.llm_router import LLMRequest, LLMRouter
     from kernel.tool_dispatch import execute_tool_calls
 
     body = await request.json()

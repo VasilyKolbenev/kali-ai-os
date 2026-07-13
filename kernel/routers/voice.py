@@ -26,10 +26,11 @@ async def get_models_status_api(request: Request) -> dict[str, Any]:
 
 @router.post("/models/download")
 async def download_models_api(request: Request) -> dict[str, str]:
-    from kernel.model_downloader import get_missing_models, download_model
-    from kernel.models import Event
     import asyncio
     import time
+
+    from kernel.model_downloader import download_model, get_missing_models
+    from kernel.models import Event
 
     missing = get_missing_models()
     if not missing:
@@ -84,7 +85,7 @@ async def download_models_api(request: Request) -> dict[str, str]:
             )), loop
         )
 
-    def _on_download_done(task: "asyncio.Task[None]") -> None:
+    def _on_download_done(task: asyncio.Task[None]) -> None:
         """Surface a stalled/failed download as an event so the UI can react.
 
         Without this a GC-cancelled or crashed task leaves the onboarding
@@ -227,8 +228,9 @@ async def voice_clone(request: Request) -> dict[str, Any]:
 @router.post("/tts")
 async def text_to_speech(request: Request) -> Any:
     """Convert text to speech — F5-TTS (local GPU) or ElevenLabs (cloud)."""
-    from fastapi.responses import JSONResponse, Response
     import asyncio
+
+    from fastapi.responses import JSONResponse, Response
 
     body = await request.json()
     text = body.get("text", "")
@@ -239,7 +241,10 @@ async def text_to_speech(request: Request) -> Any:
 
     try:
         from kernel.voice.tts_router import (
-            generate_audio, audio_to_wav_bytes, is_loaded, load_models,
+            audio_to_wav_bytes,
+            generate_audio,
+            is_loaded,
+            load_models,
         )
         if not is_loaded():
             logger.info("TTS loading on first request...")
@@ -277,7 +282,9 @@ async def tts_speak(request: Request) -> dict[str, Any]:
 
     try:
         from kernel.voice.tts_router import (
-            generate_audio, is_loaded, load_models,
+            generate_audio,
+            is_loaded,
+            load_models,
         )
         if not is_loaded():
             await asyncio.to_thread(load_models)
@@ -305,12 +312,14 @@ async def voice_transcribe(request: Request) -> Any:
     cached on app.state.stt) and reuses the i16 LE PCM decode +
     scipy resample logic from the bridge worker.
     """
-    from fastapi.responses import JSONResponse
     import asyncio
     import time
 
+    from fastapi.responses import JSONResponse
+
     from kernel.voice.transcribe_helper import (
-        decode_and_resample, get_or_create_stt,
+        decode_and_resample,
+        get_or_create_stt,
     )
 
     body = await request.json()
@@ -366,8 +375,8 @@ async def voice_transcribe(request: Request) -> Any:
 async def tts_health() -> dict[str, Any]:
     """TTS engine health check."""
     try:
-        from kernel.voice.tts_router import get_provider, is_loaded
         from kernel.model_downloader import get_models_status
+        from kernel.voice.tts_router import get_provider, is_loaded
 
         loaded = is_loaded()
         engine = get_provider()

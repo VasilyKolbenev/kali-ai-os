@@ -7,6 +7,7 @@ Def order preserves main.py registration order (sacred).
 """
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -69,7 +70,7 @@ async def _approve_agent(s: Any, name: str, *, explicit: bool = False) -> None:
     the user explicitly re-enables it — M2.2 semantics A. Consent is
     persisted so it (and a revoke) survives a restart.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     manifest = s.plugin_registry.get(name)
     if not (manifest and s.permission_enforcer):
@@ -78,7 +79,7 @@ async def _approve_agent(s: Any, name: str, *, explicit: bool = False) -> None:
     if not explicit and db is not None and await db.get_consent(name) == "revoked":
         return  # sticky revoke — wait for an explicit re-enable
     manifest.permissions.user_approved = True
-    manifest.permissions.approval_timestamp = datetime.now(timezone.utc)
+    manifest.permissions.approval_timestamp = datetime.now(UTC)
     s.permission_enforcer.register_agent(name, manifest)
     if db is not None:
         await db.set_consent(name, "approved")

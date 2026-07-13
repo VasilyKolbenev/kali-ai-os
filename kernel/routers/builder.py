@@ -13,11 +13,11 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from kernel.builder.intent_classifier import classify_intent
-from kernel.builder.skill_generator import generate_skill
 from kernel.builder.agent_generator import generate_agent
+from kernel.builder.deployer import deploy_agent, deploy_skill
+from kernel.builder.intent_classifier import classify_intent
 from kernel.builder.safety_gate import check_code
-from kernel.builder.deployer import deploy_skill, deploy_agent
+from kernel.builder.skill_generator import generate_skill
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,7 @@ async def builder_extract(request: Request) -> Any:
     LLM unavailable, silently falls back to `/builder/start` shape.
     """
     from fastapi.responses import JSONResponse
+
     from kernel.builder.extractor import extract_spec
 
     body = await request.json()
@@ -158,6 +159,7 @@ async def builder_answer(request: Request) -> Any:
     dict once all questions are answered.
     """
     from fastapi.responses import JSONResponse
+
     from kernel.builder.session_store import SessionNotFound
 
     body = await request.json()
@@ -184,6 +186,7 @@ async def builder_deploy(request: Request) -> Any:
     complete (all answers provided) before deploying.
     """
     from fastapi.responses import JSONResponse
+
     from kernel.builder.session_store import SessionNotFound
 
     body = await request.json()
