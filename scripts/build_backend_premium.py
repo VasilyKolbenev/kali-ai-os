@@ -7,6 +7,7 @@ Distribution: Google Drive / Yandex.Disk link (too big for Telegram).
 """
 
 import importlib.util as _ilu
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -165,32 +166,89 @@ COLLECT_ALL = [
     "av",
     "PIL",
     "qrcode",
+    # ctranslate2 (faster-whisper backend): its package dir vendors
+    # cudnn64_9.dll which plain collection missed — without it
+    # `ctranslate2._ext` dies with "DLL load failed" in the frozen bundle
+    # (second landmine behind the av one, 2026-07-13).
+    "ctranslate2",
 ]
 
 
-def prune_gpl_codecs(out_dir: Path) -> list[str]:
-    """Delete GPL-licensed libx264/libx265 DLLs PyAV bundles under av.libs.
+# FFmpeg sonames vendored by the PyAV 17 wheel (delvewheel-mangled in av.libs).
+# The wheel's builds are GPL (--enable-gpl, hard-linked to libx264) — merely
+# deleting libx264 breaks av._core AT IMPORT (root-caused 2026-07-13: the
+# frozen Whisper/reel silently died since the June prune; never live-booted).
+_FFMPEG_SONAMES = (
+    "avcodec-62",
+    "avdevice-62",
+    "avfilter-11",
+    "avformat-62",
+    "avutil-60",
+    "swresample-6",
+    "swscale-9",
+)
 
-    KALI's proprietary installer must not ship GPL (``--enable-gpl``) codecs.
-    The reel encoder uses libopenh264 (BSD); libx264/libx265 are never invoked,
-    so removing them keeps the bundle LGPL/BSD-clean without affecting encoding.
+
+def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
+    """Replace PyAV's vendored GPL FFmpeg in av.libs with the LGPL build.
+
+    KALI's proprietary installer must not ship GPL codecs, but PyAV wheels
+    hard-link libx264 — so the GPL DLLs are *replaced*, not just pruned:
+
+    1. delete the mangled GPL FFmpeg DLLs + libx264/libx265;
+    2. copy the BtbN LGPL set (models/ffmpeg, fetched by
+       ``scripts/fetch_lgpl_ffmpeg.py``, soname-matched n8.1) in under their
+       PLAIN names — FFmpeg's inter-DLL imports resolve there via the
+       ``os.add_dll_directory(av.libs)`` delvewheel patch;
+    3. ALSO copy each LGPL DLL under the exact delvewheel-mangled filename the
+       wheel used — ``av/_core.pyd``'s import table references those literal
+       names and cannot be re-pointed.
+
+    The reel encoder keeps libopenh264 (BSD, still vendored); decode paths
+    (faster-whisper, reel) run on the LGPL avcodec.
 
     Args:
         out_dir: The PyInstaller onedir output (contains ``_internal/av.libs``).
 
     Returns:
-        The names of the DLLs removed (empty if none were present).
+        Human-readable actions taken (empty if av.libs is absent).
     """
     av_libs = out_dir / "_internal" / "av.libs"
     if not av_libs.is_dir():
         return []
-    removed: list[str] = []
-    for dll in av_libs.iterdir():
+    lgpl_dir = ROOT / "models" / "ffmpeg"
+    missing = [s for s in _FFMPEG_SONAMES if not (lgpl_dir / f"{s}.dll").exists()]
+    if missing:
+        raise SystemExit(
+            f"LGPL FFmpeg set incomplete in {lgpl_dir} (missing {missing}) — "
+            "run scripts/fetch_lgpl_ffmpeg.py first; shipping the GPL av.libs "
+            "is not an option."
+        )
+
+    actions: list[str] = []
+    # Map soname -> mangled filename before deleting anything.
+    mangled: dict[str, str] = {}
+    for dll in list(av_libs.iterdir()):
         low = dll.name.lower()
         if "x264" in low or "x265" in low:
             dll.unlink()
-            removed.append(dll.name)
-    return removed
+            actions.append(f"deleted {dll.name}")
+            continue
+        for soname in _FFMPEG_SONAMES:
+            if low.startswith(f"{soname}-"):
+                mangled[soname] = dll.name
+                dll.unlink()
+                actions.append(f"deleted GPL {dll.name}")
+
+    for soname in _FFMPEG_SONAMES:
+        src = lgpl_dir / f"{soname}.dll"
+        shutil.copy2(src, av_libs / src.name)
+        actions.append(f"LGPL {src.name}")
+        if soname in mangled:
+            shutil.copy2(src, av_libs / mangled[soname])
+            actions.append(f"LGPL as {mangled[soname]}")
+    shutil.copy2(lgpl_dir / "LICENSE.txt", av_libs / "FFMPEG-LGPL-LICENSE.txt")
+    return actions
 
 
 def main() -> None:
@@ -209,6 +267,9 @@ def main() -> None:
         # Stub wandb at runtime (training-only dep pulled by f5_tts.model.trainer;
         # its vendored sub-deps wandb_gql/graphql/promise are un-bundleable).
         "--runtime-hook", str(ROOT / "scripts" / "pyinstaller_hooks" / "rthook_stub_wandb.py"),
+        # transformers 5.x lazy-module loses `pipeline` under PyInstaller —
+        # bind it eagerly before f5_tts imports (see the hook's docstring).
+        "--runtime-hook", str(ROOT / "scripts" / "pyinstaller_hooks" / "rthook_transformers_pipeline.py"),
         "--exclude-module", "wandb",
     ]
 
@@ -236,13 +297,10 @@ def main() -> None:
     if result.returncode == 0:
         out_dir = DIST / NAME
         if out_dir.exists():
-            # Strip GPL libx264/libx265 DLLs PyAV bundles — the proprietary
-            # installer must stay LGPL/BSD-clean (reel uses libopenh264).
-            pruned = prune_gpl_codecs(out_dir)
-            if pruned:
-                print(f"GPL codecs pruned from av.libs: {', '.join(pruned)}")
-            else:
-                print("av.libs already free of libx264/libx265 (LGPL-clean)")
+            # Swap PyAV's vendored GPL FFmpeg for the LGPL build (deleting
+            # alone breaks av._core — see swap_avlibs_to_lgpl docstring).
+            actions = swap_avlibs_to_lgpl(out_dir)
+            print(f"av.libs LGPL swap: {len(actions)} actions")
             total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
             print(f"\nSuccess! Built Premium backend at {out_dir}")
             print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
