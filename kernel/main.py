@@ -18,6 +18,14 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from kernel import __version__
+from kernel.routers._shared import (
+    _get_sandbox,
+    _get_skills_catalog,
+    _get_skills_registry,
+    _mask_key,
+    _play_audio,
+    _save_env,
+)
 from kernel.agent_builder import AgentBuilder
 from kernel.agent_runtime.dispatcher import ToolDispatcher
 from kernel.agent_runtime.runtime import AgentRuntime
@@ -66,13 +74,6 @@ _DEFAULT_CORS_ORIGINS = [
     "http://localhost:1420",
     "http://127.0.0.1:1420",
 ]
-
-
-def _mask_key(key: str) -> str:
-    """Mask API key for display: sk-abc...xyz"""
-    if not key or len(key) < 8:
-        return ""
-    return f"{key[:7]}***{key[-4:]}"
 
 
 def _cors_origins() -> list[str]:
@@ -207,48 +208,6 @@ async def _build_daily_briefing(s: Any, is_ru: bool) -> str:
         parts.append("How can I help you?")
 
     return " ".join(parts)
-
-
-def _save_env(updates: dict[str, str]) -> None:
-    """Save/update keys in .env file.
-
-    In frozen (PyInstaller) mode writes to %APPDATA%/KALI/.env,
-    otherwise to the project root .env.
-    """
-    if hasattr(sys, "_MEIPASS"):
-        env_path = Path(os.environ.get("APPDATA", "")) / "KALI" / ".env"
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        env_path = Path(".env")
-    # Guard the .env boundary: a newline or other control char in a value would
-    # inject a spurious KEY=VALUE line (e.g. token='x\nADMIN=1'). Reject rather
-    # than silently corrupt the environment file.
-    for k, v in updates.items():
-        if any(ord(c) < 0x20 for c in f"{k}{v}"):
-            raise ValueError(f"Control character not allowed in env entry: {k!r}")
-    existing: dict[str, str] = {}
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                existing[k.strip()] = v.strip()
-    existing.update(updates)
-    env_path.write_text(
-        "\n".join(f"{k}={v}" for k, v in existing.items()) + "\n", encoding="utf-8"
-    )
-
-
-def _play_audio(audio: Any, sr: int) -> None:
-    """Play audio through system speakers via sounddevice."""
-    import numpy as np
-    import sounddevice as sd
-    # Ensure float32 for sounddevice
-    if not isinstance(audio, np.ndarray):
-        audio = np.array(audio, dtype=np.float32)
-    if audio.dtype != np.float32:
-        audio = audio.astype(np.float32)
-    sd.play(audio, sr)
-    sd.wait()
 
 
 def create_app(
@@ -692,6 +651,10 @@ def create_app(
         logger.info("KALI kernel stopped")
 
     app = FastAPI(title="KALI Kernel", version=__version__, lifespan=lifespan)
+    # Resolved paths for routers/_shared helpers — computed pre-lifespan, needed
+    # by endpoints that previously closed over create_app() locals.
+    app.state.agents_dir = resolved_agents_dir
+    app.state.db_path = resolved_db_path
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
@@ -2090,7 +2053,7 @@ def create_app(
 
         # GitHub curated shelf — refresh the curated source so a cold start has
         # data; refresh_source returns cached/[] on a network failure (no raise).
-        catalog = _get_skills_catalog()
+        catalog = _get_skills_catalog(app)
         curated_dicts: list[dict[str, Any]] = []
         try:
             catalog.refresh_source("kali")
@@ -2358,51 +2321,10 @@ def create_app(
 
     # --- Agent Skills (SKILL.md spec) endpoints ---
 
-    def _get_skills_catalog():
-        """Lazy-init the remote SkillsCatalog singleton."""
-        from kernel.skills.catalog import SkillsCatalog
-        if not hasattr(app.state, "skills_catalog"):
-            app.state.skills_catalog = SkillsCatalog()
-        return app.state.skills_catalog
-
-    def _get_skills_registry():
-        """Lazy-init the local SkillsRegistry singleton (hybrid builtin + user)."""
-        from kernel.skills.registry import SkillsRegistry
-        if not hasattr(app.state, "skills_registry"):
-            reg = SkillsRegistry()
-            reg.discover()
-            app.state.skills_registry = reg
-        return app.state.skills_registry
-
-    def _get_sandbox(app_obj):
-        """Lazy-init the SandboxBackend singleton with enforcer + limiter + audit."""
-        if hasattr(app_obj.state, "sandbox"):
-            return app_obj.state.sandbox
-
-        from kernel.sandbox.backend import InProcessSandbox
-        from kernel.sandbox.audit import AuditLog
-        from kernel.sandbox.rate_limiter import RateLimiter
-
-        audit_db = resolved_db_path.parent / "sandbox_audit.db"
-        audit_log = AuditLog(audit_db, retention_days=30)
-        rate_limiter = RateLimiter(max_requests=120, window_seconds=60.0)
-
-        sandbox = InProcessSandbox(
-            agent_runtime=app_obj.state.agent_runtime,
-            enforcer=getattr(app_obj.state, "permission_enforcer", None),
-            rate_limiter=rate_limiter,
-            audit_sink=audit_log.write,
-        )
-
-        app_obj.state.sandbox = sandbox
-        app_obj.state.sandbox_audit = audit_log
-        app_obj.state.sandbox_rate_limiter = rate_limiter
-        return sandbox
-
     @app.get("/skills/catalog/sources")
     async def skills_catalog_sources() -> dict[str, Any]:
         """List configured remote skill sources (for UI tabs)."""
-        catalog = _get_skills_catalog()
+        catalog = _get_skills_catalog(app)
         return {
             "sources": [
                 {
@@ -2419,7 +2341,7 @@ def create_app(
         source: str = "", q: str = "",
     ) -> dict[str, Any]:
         """List remote skills, optionally filtered by source_id and/or search query."""
-        catalog = _get_skills_catalog()
+        catalog = _get_skills_catalog(app)
         if source:
             entries = catalog.list_by_source(source)
             if q:
@@ -2442,7 +2364,7 @@ def create_app(
         """Force-refresh the remote catalog index (fetches from GitHub)."""
         body = await request.json() if request.headers.get("content-type") == "application/json" else {}
         force = bool(body.get("force", True))
-        catalog = _get_skills_catalog()
+        catalog = _get_skills_catalog(app)
         total = catalog.refresh_all(force=force)
         return {"status": "ok", "total_entries": total}
 
@@ -2459,7 +2381,7 @@ def create_app(
         if not source_id or not name:
             return {"status": "error", "message": "source_id and name are required"}
 
-        catalog = _get_skills_catalog()
+        catalog = _get_skills_catalog(app)
         entry = catalog.get(source_id, name)
         if entry is None:
             return {
@@ -2476,7 +2398,7 @@ def create_app(
             return {"status": "error", "message": str(exc)}
 
         if result.ok:
-            _get_skills_registry().reload()
+            _get_skills_registry(app).reload()
             # Wire the installed skill into the live runtime, not just the catalog:
             # register it in the plugin registry (so it shows in /agents) and, if
             # template-backed (skill.yaml), load it into the executor so it can
@@ -2513,7 +2435,7 @@ def create_app(
             return {"status": "error", "message": "name is required"}
         ok = uninstall(name)
         if ok:
-            _get_skills_registry().reload()
+            _get_skills_registry(app).reload()
         return {"status": "ok" if ok else "error", "removed": ok}
 
     @app.post("/skills/install-bundle")
@@ -2541,7 +2463,7 @@ def create_app(
             return {"status": "error", "message": str(exc)}
 
         if result.ok:
-            _get_skills_registry().reload()
+            _get_skills_registry(app).reload()
             # Wire the installed skill into the live runtime, not just the catalog:
             # register it in the plugin registry (so it shows in /agents) and, if
             # template-backed (skill.yaml), load it into the executor so it can
@@ -2581,7 +2503,7 @@ def create_app(
         from kernel.skills.publisher import package_skill
         from kernel.skills.validator import validate_frontmatter
 
-        reg = _get_skills_registry()
+        reg = _get_skills_registry(app)
         skill = reg.get(name)
         if skill is not None:
             skill_dir = skill.skill_dir
@@ -2633,7 +2555,7 @@ def create_app(
         from kernel.share_links import build_import_link
         from kernel.skills.validator import validate_frontmatter
 
-        reg = _get_skills_registry()
+        reg = _get_skills_registry(app)
         skill = reg.get(name)
         if skill is not None:
             description = skill.description
@@ -2682,7 +2604,7 @@ def create_app(
     @app.get("/skills/installed")
     async def skills_installed() -> dict[str, Any]:
         """List all skills discovered locally (builtin + user)."""
-        reg = _get_skills_registry()
+        reg = _get_skills_registry(app)
         return {
             "results": [m.to_dict() for m in reg.list_all()],
             "count": len(reg.list_all()),
@@ -2701,7 +2623,7 @@ def create_app(
         if not name:
             return {"status": "error", "message": "name is required"}
 
-        reg = _get_skills_registry()
+        reg = _get_skills_registry(app)
         skill = reg.get(name)
         if skill is None:
             return {"status": "error", "message": f"Skill '{name}' not found locally"}
@@ -2765,7 +2687,7 @@ def create_app(
         if not name:
             return {"status": "error", "message": "name is required"}
 
-        reg = _get_skills_registry()
+        reg = _get_skills_registry(app)
         skill = reg.get(name)
         if skill is None:
             return {"status": "error", "message": f"Skill '{name}' not found locally"}
