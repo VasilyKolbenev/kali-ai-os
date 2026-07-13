@@ -16,6 +16,26 @@ and the traceback in the boot log is the diagnostic we need.
 import traceback
 
 try:
+    # 1. Neuter the frozen-path crash FIRST: auto_docstring.get_model_name
+    #    does `path.split(os.sep)[-3]` on module __file__ — frozen paths are
+    #    shorter → IndexError kills `import transformers.pipelines` (traced
+    #    2026-07-13, transformers 5.5.4 auto_docstring.py:2722). The function
+    #    already returns None for non-model paths; IndexError IS that case.
+    #    Docstring generation is cosmetic — degrading it is safe.
+    from transformers.utils import auto_docstring as _ad
+
+    _orig_get_model_name = _ad.get_model_name
+
+    def _frozen_safe_get_model_name(obj):
+        try:
+            return _orig_get_model_name(obj)
+        except IndexError:
+            return None
+
+    _ad.get_model_name = _frozen_safe_get_model_name
+
+    # 2. Eagerly bind the lazy `pipeline` attr (f5_tts does
+    #    `from transformers import pipeline` at module level).
     import transformers
 
     try:
