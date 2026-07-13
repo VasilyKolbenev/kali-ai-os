@@ -1,10 +1,10 @@
-; KALI Premium 0.2.0-beta — Inno Setup script
+; KALI Premium 1.0.0-rc1 — Inno Setup script
 ; Supports >4GB installers (unlike 32-bit 7z SFX).
 ; Compile: iscc scripts\installer_premium.iss
-; Output: dist_premium\KALI-Premium-Setup-0.2.0-beta.exe
+; Output: dist_premium\KALI-Premium-Setup-1.0.0-rc1.exe
 
 #define AppName "KALI Premium"
-#define AppVersion "0.2.0-beta"
+#define AppVersion "1.0.0-rc1"
 #define AppPublisher "Vasily Kolbenev"
 #define AppExe "kali-desktop.exe"
 
