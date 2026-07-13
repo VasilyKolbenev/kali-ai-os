@@ -22,7 +22,12 @@ try:
     #    2026-07-13, transformers 5.5.4 auto_docstring.py:2722). The function
     #    already returns None for non-model paths; IndexError IS that case.
     #    Docstring generation is cosmetic — degrading it is safe.
-    from transformers.utils import auto_docstring as _ad
+    #    NB: `from transformers.utils import auto_docstring` yields the
+    #    DECORATOR (the package attr shadows the submodule) — importlib gets
+    #    the module itself.
+    import importlib
+
+    _ad = importlib.import_module("transformers.utils.auto_docstring")
 
     _orig_get_model_name = _ad.get_model_name
 
