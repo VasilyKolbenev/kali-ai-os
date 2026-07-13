@@ -1,0 +1,75 @@
+# iOS build via cloud-CI (20-day plan B7) — no physical Mac needed.
+#
+# TODAY (no Apple Developer account yet — Armenia entity pending): builds an
+# UNSIGNED Runner.app on a GitHub macOS runner to prove the pipeline + catch
+# iOS-only compile breaks early. Manual trigger only: macOS runners bill 10x.
+#
+# WHEN the Apple Developer account exists: add the signing job below
+# (secrets APPLE_CERT_P12 / APPLE_CERT_PASSWORD / PROVISIONING_PROFILE /
+# APPLE_TEAM_ID), switch to `flutter build ipa --export-options-plist` and
+# upload to TestFlight via `xcrun altool`/App Store Connect API key.
+name: ios-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-unsigned:
+    runs-on: macos-14
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor (record toolchain versions in the log)
+        run: flutter doctor -v
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze (iOS-relevant static errors surface here)
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build iOS (unsigned)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package Runner.app
+        run: |
+          cd build/ios/iphoneos
+          zip -r KALI-ios-unsigned.zip Runner.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kali-ios-unsigned
+          path: mobile/build/ios/iphoneos/KALI-ios-unsigned.zip
+          retention-days: 14
+
+  # --- Signing job: UNCOMMENT + fill secrets once the Apple Developer
+  # --- account (gated on the Armenia legal entity) exists.
+  # build-signed:
+  #   runs-on: macos-14
+  #   needs: build-unsigned
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Import signing certificate
+  #       env:
+  #         APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+  #         APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+  #       run: |
+  #         echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
+  #         security create-keychain -p ci build.keychain
+  #         security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+  #     - name: Build signed ipa
+  #       run: flutter build ipa --export-options-plist=ios/ExportOptions.plist
+  #     - name: Upload to TestFlight
+  #       run: xcrun altool --upload-app ... # App Store Connect API key
