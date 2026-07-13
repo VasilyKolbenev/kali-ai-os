@@ -27,11 +27,13 @@ Compression=lzma2/ultra64
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
 
-; Single-file output. The legacy DiskSpanning split (.exe + .bin slices) was a
-; workaround for the retired 32-bit 7z SFX 4 GB limit; Inno Setup's 64-bit
-; compiler has no such limit, so we ship one self-contained .exe (no .bin
-; slices for a non-tech user to lose).
-DiskSpanning=no
+; DiskSpanning is MANDATORY: Inno hard-errors on any installation over
+; ~4.2 GB in a single Setup.exe (Windows loader limit — first compile of the
+; single-file variant failed exactly there, 2026-07-13; the premium bundle is
+; ~5.8 GB uncompressed). Ships Setup.exe + .bin slices; distribute as ONE zip
+; so a non-tech user cannot lose a slice (CDN A3 covers resumable download).
+DiskSpanning=yes
+DiskSliceSize=2000000000
 
 ; x64 only — we ship CUDA torch which needs 64-bit
 ArchitecturesAllowed=x64compatible
