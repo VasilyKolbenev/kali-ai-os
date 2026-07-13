@@ -130,9 +130,17 @@ class TestToolExposure:
         reg.discover()
 
         tools = reg.get_all_tools()
-        assert len(tools) == 1
-        assert tools[0]["function"]["name"] == "weather__get_current"
-        assert tools[0]["function"]["description"] == "Now"
+        # The registry always exposes builtin kali__* tools (list_my_agents,
+        # added in the 2026-06-25 core-loop sprint) alongside agent tools —
+        # assert on the agent's namespaced tool, not an exact count.
+        agent_tools = [
+            t for t in tools if t["function"]["name"] == "weather__get_current"
+        ]
+        assert len(agent_tools) == 1
+        assert agent_tools[0]["function"]["description"] == "Now"
+        assert any(
+            t["function"]["name"].startswith("kali__") for t in tools
+        ), "builtin kali__* tools must stay exposed"
 
     def test_find_agent_for_namespaced_tool(self, tmp_path):
         _make_legacy_manifest(
