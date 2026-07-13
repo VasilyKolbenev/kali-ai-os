@@ -26,6 +26,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))  # `import kernel` for the version cross-check
 BUNDLE = ROOT / "dist_premium" / "kali-backend"
 
 RESULTS: list[tuple[str, bool, str]] = []
