@@ -26,6 +26,13 @@ Future<void> initializeNotifications() async {
         requestBadgePermission: false,
         requestSoundPermission: false,
       ),
+      // macOS branch is code-complete ahead of the Mac/CI build path
+      // (20-day plan B8) so the darwin build compiles the day it exists.
+      macOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
     ),
   );
   // Android 8+ requires an explicit channel before posting to it.
@@ -95,6 +102,7 @@ class LocalNotificationGateway implements NotificationGateway {
       priority: Priority.high,
     ),
     iOS: DarwinNotificationDetails(),
+    macOS: DarwinNotificationDetails(),
   );
 
   @override
@@ -103,12 +111,18 @@ class LocalNotificationGateway implements NotificationGateway {
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
+    final bool? macos = await _plugin
+        .resolvePlatformSpecificImplementation<
+            MacOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
     final bool? android = await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
     return resolvePermissionGranted(
-      ios: ios,
+      // The darwin resolvers are mutually exclusive per platform — whichever
+      // answered carries the grant.
+      ios: ios ?? macos,
       android: android,
       isAndroid: Platform.isAndroid,
     );
