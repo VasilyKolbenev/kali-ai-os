@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-14-auto-update-design.md` — прочитать ПЕРЕД началом. Гейты: `cd src-tauri && cargo test --test <file>` · `cd ui && pnpm exec vitest run` · полный прогон перед пушем.
 
+> **ГОТЧА (Windows Installer Detection):** тест-бинарники `updater_*` содержат подстроку «update»/«install» → UAC-эвристика требует elevation и `cargo test` падает с `os error 740` ДО запуска тестов на обычном (не-админ) аккаунте. Обход — запускать под `RunAsInvoker` shim (env наследуется в дочерний тест-бинарь):
+> ```powershell
+> $env:__COMPAT_LAYER='RunAsInvoker'; cargo test --test updater_core
+> ```
+> Это же зашито в CI-шаг (Task 9). Имена тестов НЕ переименовываем (самодокументируемы); shim — легитимный штатный механизм Windows.
+
 ---
 
 ## Chunk 1: Rust core
@@ -1867,6 +1873,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
         working-directory: src-tauri
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
+          # updater_* бинарники триггерят Windows Installer Detection (error 740);
+          # RunAsInvoker shim обходит авто-elevation (защитно — на случай не-админ раннера).
+          __COMPAT_LAYER: RunAsInvoker
 ```
 
 (Полный `cargo test --tests` в CI НЕ включаем: voice/ML-тесты требуют аудио-устройств и тяжёлых артефактов раннера — это отдельное решение вне скоупа.)
