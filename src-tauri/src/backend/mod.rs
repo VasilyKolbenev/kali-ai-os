@@ -7,6 +7,7 @@ pub mod ingestion;
 pub mod models;
 pub mod proxy;
 pub mod skills;
+pub mod updater;
 pub mod voice;
 pub mod ws;
 

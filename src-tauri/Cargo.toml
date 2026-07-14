@@ -20,7 +20,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+# auto-update: SHA-256 верификация ассетов
+sha2 = "0.10"
+# auto-update: сравнение версий манифеста (rc-pre-release семантика из коробки)
+semver = "1"
+# auto-update: свободное место на диске перед скачиванием 4.2 GB
+fs4 = "0.13"
+hex = "0.4"
 futures-util = { version = "0.3", features = ["sink"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
