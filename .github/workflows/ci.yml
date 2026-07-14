@@ -1,0 +1,87 @@
+# CI v1 — the four test gates that were previously run only by hand.
+# GPU-dependent work (F5 synth, frozen smoke, quality gates) stays a local
+# release ritual — runners have no GPU; everything here is CPU-mockable.
+# Lint (ruff/mypy) intentionally NOT wired yet: kernel carries 146 pre-existing
+# ruff errors — cleanup rides along with the main.py split, then lint lands.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # torch+cu128 wheels are huge; stock runners run out of disk without this.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync deps (frozen lock)
+        run: uv sync --frozen
+
+      - name: Kernel test suite
+        run: uv run pytest tests/kernel tests/test_voice_tool_dispatch.py -q
+
+      - name: Core-loop marker (the release gate subset)
+        run: uv run pytest -m core_loop -q
+
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run
+
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter test
+
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Cargo check (lib)
+        run: cargo check --lib
+        working-directory: src-tauri
