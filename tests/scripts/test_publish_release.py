@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import scripts.publish_release as pr
 from scripts.publish_release import (
     build_manifest,
     collect_assets,
@@ -84,3 +86,42 @@ def test_build_manifest_has_correct_hashes_urls_sizes(tmp_path: Path) -> None:
     assert a0["sha256"] == hashlib.sha256(b"exe-bytes").hexdigest()
     assert a0["size"] == len(b"exe-bytes")
     assert len(m["assets"]) == 4
+
+
+def _fake_gh(view_stdout: str, calls: list[list[str]]):
+    """Canned subprocess.run: gh release view returns view_stdout; всё прочее — no-op.
+
+    Records every command into `calls`; никакого реального gh не запускается.
+    """
+    def fake_run(cmd, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "release", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=view_stdout)
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+    return fake_run
+
+
+def test_publish_recreates_stale_draft(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        pr.subprocess, "run",
+        _fake_gh('{"isDraft": true, "tagName": "v1.0.1"}', calls),
+    )
+    pr.publish("1.0.1", "notes", [])
+    # stale draft → delete (с --cleanup-tag) затем create
+    delete = [c for c in calls if c[:3] == ["gh", "release", "delete"]]
+    assert delete, "stale draft должен быть удалён"
+    assert "--cleanup-tag" in delete[0]
+    assert any(c[:3] == ["gh", "release", "create"] for c in calls)
+
+
+def test_publish_idempotent_when_already_published(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        pr.subprocess, "run",
+        _fake_gh('{"isDraft": false, "tagName": "v1.0.1"}', calls),
+    )
+    # Не-draft тот же тег → идемпотентный пропуск, без SystemExit
+    pr.publish("1.0.1", "notes", [])
+    assert all(c[:3] != ["gh", "release", "create"] for c in calls)
+    assert len(calls) == 1  # только зонд view, ни create/upload/edit

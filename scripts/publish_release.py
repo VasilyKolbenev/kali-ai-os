@@ -101,6 +101,8 @@ def collect_assets(dist: Path, version: str) -> list[AssetFile]:
     exe = dist / f"KALI-Premium-Setup-{version}.exe"
     if not exe.exists():
         _fail(f"Нет {exe}")
+    # Лексикографическая сортировка верна при <10 слайсах (наш случай: 5.8GB/2GB=3);
+    # при ≥10 понадобилась бы числовая сортировка суффикса.
     bins = sorted(dist.glob(f"KALI-Premium-Setup-{version}-*.bin"))
     if not bins:
         _fail("Не найдено ни одного .bin-слайса (DiskSpanning)")
@@ -163,21 +165,36 @@ def publish(version: str, notes: str, assets: list[AssetFile]) -> None:
         assets: Ассеты для загрузки.
 
     Raises:
-        SystemExit: Если релиз уже опубликован (не draft).
+        SystemExit: Если релиз на теге существует в неверном состоянии
+            (не draft и не совпадает с текущей версией), либо gh вернул
+            неразбираемый ответ.
     """
     tag = f"v{version}"
     prerelease = ["--prerelease"] if "-" in version else []
-    # Идемпотентность: битый draft с прошлого падения — пересоздать
+    # Идемпотентность: битый draft с прошлого падения — пересоздать; уже
+    # опубликованный этот же релиз (publish отработал, флип упал) — пропустить.
     view = subprocess.run(
-        ["gh", "release", "view", tag, "--json", "isDraft"],
+        ["gh", "release", "view", tag, "--json", "isDraft,tagName"],
         capture_output=True, text=True, cwd=REPO_ROOT,
     )
     if view.returncode == 0:
-        if json.loads(view.stdout).get("isDraft"):
+        # returncode==0 с пустым/битым stdout — неожиданное состояние, не глотаем.
+        try:
+            info = json.loads(view.stdout)
+        except json.JSONDecodeError:
+            _fail(f"gh release view {tag}: неразбираемый ответ: {view.stdout!r}")
+        if info.get("isDraft"):
             log.info("Найден draft %s с прошлого запуска — удаляю и пересоздаю", tag)
-            _run(["gh", "release", "delete", tag, "--yes"])
+            # --cleanup-tag: не оставлять осиротевший тег, пиннящий старый коммит.
+            _run(["gh", "release", "delete", tag, "--yes", "--cleanup-tag"])
+        elif info.get("tagName") == tag:
+            # Не-draft релиз на теге v{version} ЕСТЬ эта версия — publish уже
+            # отработал (флип упал в прошлый раз). Идемпотентно к флипу манифеста.
+            log.info("Релиз %s уже опубликован — перехожу к флипу манифеста", tag)
+            return
         else:
-            _fail(f"Релиз {tag} уже опубликован")
+            _fail(f"Релиз {tag} уже опубликован в неверном состоянии "
+                  f"(tagName={info.get('tagName')!r})")
     _run(["gh", "release", "create", tag, "--draft", "--title", f"KALI {version}",
           "--notes", notes, *prerelease])
     for a in assets:
@@ -211,7 +228,16 @@ def main() -> None:
     assets = collect_assets(DIST_DIR, version)
     manifest = build_manifest(version, args.notes, assets)
     publish(version, args.notes, assets)
-    flip_manifest(manifest)  # ПОСЛЕДНИМ — атомарный флип
+    try:
+        flip_manifest(manifest)  # ПОСЛЕДНИМ — атомарный флип
+    except Exception:
+        # Релиз уже публичен; манифест — единственный незавершённый шаг.
+        # Повторный запуск идемпотентен (publish пропустит уже-опубликованный).
+        log.error(
+            "Релиз опубликован, но манифест НЕ флипнут. "
+            "Выполни вручную: git push origin main"
+        )
+        raise
     log.info("Опубликовано: %s (%d ассетов)", version, len(assets))
 
 
