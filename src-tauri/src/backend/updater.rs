@@ -121,3 +121,64 @@ pub fn updates_dir() -> PathBuf {
         .join("KALI")
         .join("updates")
 }
+
+use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
+
+/// SHA-256 файла (потоково, файл может быть 2 GB).
+pub async fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Скачать ассет в `dir/<asset.name>` (save-by-name — контракт DiskSpanning).
+/// Резюм: len<size → Range; len==size → no-op (хэш проверяется отдельно);
+/// len>size → удалить и заново. Сервер, игнорирующий Range (200), → truncate.
+pub async fn download_asset(
+    client: &reqwest::Client,
+    asset: &Asset,
+    dir: &Path,
+    on_delta: &(dyn Fn(u64) + Send + Sync),
+) -> Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
+    let dest = dir.join(&asset.name);
+    let mut have = tokio::fs::metadata(&dest).await.map(|m| m.len()).unwrap_or(0);
+    if have > asset.size {
+        tokio::fs::remove_file(&dest).await?;
+        have = 0;
+    }
+    if have == asset.size {
+        return Ok(());
+    }
+    let mut req = client.get(&asset.url);
+    if have > 0 {
+        req = req.header(reqwest::header::RANGE, format!("bytes={have}-"));
+    }
+    let resp = req.send().await?.error_for_status()?;
+    let resumed = have > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(resumed)
+        .write(true)
+        .truncate(!resumed)
+        .open(&dest)
+        .await?;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?;
+        file.write_all(&bytes).await?;
+        on_delta(bytes.len() as u64);
+    }
+    file.flush().await?;
+    Ok(())
+}
