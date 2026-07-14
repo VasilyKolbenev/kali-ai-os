@@ -182,3 +182,223 @@ pub async fn download_asset(
     file.flush().await?;
     Ok(())
 }
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::{Mutex, Notify};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    Idle,
+    Available,
+    Downloading,
+    Ready,
+    Installing,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Snapshot {
+    pub phase: Phase,
+    pub current: String,
+    pub available: Option<Manifest>,
+    pub total: u64,
+    pub downloaded: u64,
+    pub error: Option<String>,
+}
+
+/// Мутабельное состояние под Mutex; прогресс — отдельным атомиком, потому что
+/// колбэк скачивания синхронный (Fn(u64), без await) и дёргается очень часто.
+struct Inner {
+    phase: Phase,
+    available: Option<Manifest>,
+    total: u64,
+    error: Option<String>,
+}
+
+pub struct Updater {
+    inner: Mutex<Inner>,
+    downloaded: AtomicU64,
+    current: String,
+    updates_root: PathBuf,
+    manifest_url: String,
+    client: reqwest::Client,
+    terminal: Notify,
+}
+
+impl Updater {
+    pub fn new(updates_root: PathBuf, current: &str) -> Arc<Self> {
+        Self::with_url(updates_root, current, manifest_url())
+    }
+
+    /// Тесты/E2E: тот же конструктор, только явный URL (loopback-http валиден).
+    pub fn new_for_tests(updates_root: PathBuf, current: &str, url: &str) -> Arc<Self> {
+        Self::with_url(updates_root, current, url.to_string())
+    }
+
+    fn with_url(updates_root: PathBuf, current: &str, manifest_url: String) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(Inner {
+                phase: Phase::Idle,
+                available: None,
+                total: 0,
+                error: None,
+            }),
+            downloaded: AtomicU64::new(0),
+            current: current.to_string(),
+            updates_root,
+            manifest_url,
+            client: reqwest::Client::new(),
+            terminal: Notify::new(),
+        })
+    }
+
+    pub async fn snapshot(&self) -> Snapshot {
+        let s = self.inner.lock().await;
+        Snapshot {
+            phase: s.phase,
+            current: self.current.clone(),
+            available: s.available.clone(),
+            total: s.total,
+            downloaded: self.downloaded.load(Ordering::Relaxed).min(s.total),
+            error: s.error.clone(),
+        }
+    }
+
+    /// Тест-хелпер: дождаться Ready|Error после start_download.
+    /// Notify-семантика: notify_waiters() будит только ENABLED-фьючи —
+    /// notified() надо запиннить и .enable() ДО проверки фазы, иначе
+    /// lost-wakeup (паттерн из доков tokio::sync::Notify).
+    pub async fn wait_terminal(&self) {
+        loop {
+            let notified = self.terminal.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let s = self.inner.lock().await;
+                if matches!(s.phase, Phase::Ready | Phase::Error) {
+                    return;
+                }
+            }
+            notified.await;
+        }
+    }
+
+    /// Проверка манифеста. Любая ошибка (сеть/JSON) = тихий Idle (лог, не error).
+    /// Фазы Downloading/Ready/Installing никогда не трогаются (N+2 в процессе
+    /// N+1 — игнор до завершения цикла, спека §Данные).
+    pub async fn check(&self) -> Snapshot {
+        let result: Result<Manifest> = async {
+            let raw = self
+                .client
+                .get(&self.manifest_url)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            parse_manifest(&raw)
+        }
+        .await;
+
+        {
+            let mut s = self.inner.lock().await;
+            match result {
+                Ok(m) if is_newer(&self.current, &m.version) => {
+                    if matches!(s.phase, Phase::Idle | Phase::Available) {
+                        s.total = m.total_size();
+                        s.available = Some(m);
+                        s.phase = Phase::Available;
+                    }
+                }
+                Ok(_) => {
+                    // манифест откатился/сравнялся — убрать устаревший баннер
+                    if s.phase == Phase::Available {
+                        s.phase = Phase::Idle;
+                        s.available = None;
+                    }
+                }
+                Err(e) => tracing::debug!("updater check skipped: {e:#}"),
+            }
+        }
+        self.snapshot().await
+    }
+
+    /// Свободное место: суммарный size × 2 (download + in-place overwrite, спека).
+    fn disk_ok(&self, needed: u64) -> bool {
+        fs4::available_space(&self.updates_root)
+            .or_else(|_| fs4::available_space(self.updates_root.parent().unwrap_or(Path::new("."))))
+            .map(|free| free >= needed.saturating_mul(2))
+            .unwrap_or(true) // не смогли измерить — не блокируем
+    }
+
+    pub async fn start_download(self: &Arc<Self>) {
+        let manifest = {
+            let mut s = self.inner.lock().await;
+            let Some(m) = s.available.clone() else { return };
+            if matches!(s.phase, Phase::Downloading | Phase::Ready | Phase::Installing) {
+                return;
+            }
+            if !self.disk_ok(m.total_size()) {
+                s.phase = Phase::Error;
+                s.error = Some(format!(
+                    "Недостаточно места: нужно ~{} ГБ свободного",
+                    m.total_size() * 2 / 1_000_000_000
+                ));
+                self.terminal.notify_waiters();
+                return;
+            }
+            s.phase = Phase::Downloading;
+            s.error = None;
+            self.downloaded.store(0, Ordering::Relaxed);
+            m
+        };
+        let this = Arc::clone(self);
+        tokio::spawn(async move { this.run_download(manifest).await });
+    }
+
+    async fn run_download(self: Arc<Self>, m: Manifest) {
+        let dir = self.updates_root.join(&m.version);
+        let result: Result<()> = async {
+            // учесть уже скачанное (резюм) в прогрессе
+            for a in &m.assets {
+                let pre = tokio::fs::metadata(dir.join(&a.name))
+                    .await
+                    .map(|md| md.len().min(a.size))
+                    .unwrap_or(0);
+                self.downloaded.fetch_add(pre, Ordering::Relaxed);
+            }
+            for a in &m.assets {
+                let counter = &self.downloaded;
+                download_asset(&self.client, a, &dir, &|d| {
+                    counter.fetch_add(d, Ordering::Relaxed);
+                })
+                .await?;
+            }
+            for a in &m.assets {
+                let path = dir.join(&a.name);
+                let got = sha256_file(&path).await?;
+                if !got.eq_ignore_ascii_case(&a.sha256) {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    bail!("SHA-256 не совпал для {}", a.name);
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        {
+            let mut s = self.inner.lock().await;
+            match result {
+                Ok(()) => s.phase = Phase::Ready,
+                Err(e) => {
+                    s.phase = Phase::Error;
+                    s.error = Some(format!("{e:#}"));
+                }
+            }
+        }
+        self.terminal.notify_waiters();
+    }
+}
