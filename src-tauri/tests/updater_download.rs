@@ -5,11 +5,13 @@ use axum::{
     routing::get,
     Router,
 };
-use kali_desktop::backend::updater::{download_asset, sha256_file, Asset};
+use futures_util::stream::{self, StreamExt};
+use kali_desktop::backend::updater::{download_asset, download_asset_with_idle, sha256_file, Asset};
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 const BODY: &[u8] = b"0123456789abcdef0123456789abcdef"; // 32 байта
 
@@ -135,6 +137,44 @@ async fn complete_file_is_not_refetched() {
         .await
         .unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 0); // ни одного запроса
+}
+
+/// Мок, который отдаёт несколько байт, затем висит бесконечно (тело не
+/// завершается) — эмуляция дросселированного/зависшего GitHub.
+async fn spawn_stall_srv() -> String {
+    async fn stall() -> axum::response::Response {
+        let s = stream::once(async { Ok::<Vec<u8>, std::io::Error>(b"partial".to_vec()) })
+            .chain(stream::pending::<Result<Vec<u8>, std::io::Error>>());
+        axum::response::Response::new(axum::body::Body::from_stream(s))
+    }
+    let app = Router::new().route("/a.bin", get(stall));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/a.bin")
+}
+
+#[tokio::test]
+async fn idle_stall_times_out_within_limit() {
+    let url = spawn_stall_srv().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let idle = Duration::from_millis(200);
+    let started = std::time::Instant::now();
+    let res = download_asset_with_idle(
+        &reqwest::Client::new(),
+        &asset(&url),
+        tmp.path(),
+        &|_| {},
+        idle,
+    )
+    .await;
+    assert!(res.is_err(), "stalled download must error");
+    // Watchdog сработал около idle-лимита, а не завис навсегда.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "elapsed {:?} — watchdog не сработал",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]

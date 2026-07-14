@@ -5,6 +5,13 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Idle-таймаут между чанками загрузки: сброс на КАЖДЫЙ чанк, не на весь запрос —
+/// многогигабайтная закачка не убивается за то, что идёт долго, только за молчание.
+/// Дросселирование raw.githubusercontent/GitHub (риск №1 спеки) = тихий TCP-стап,
+/// который иначе висит вечно (фаза залипает на Downloading до рестарта).
+pub const DEFAULT_DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Манифест живёт в репо (НЕ в release-ассетах): `releases/latest/` GitHub
 /// не отдаёт pre-release, а мы шипим rc-версии. Коммит манифеста = флип публикации.
@@ -72,6 +79,27 @@ pub fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
     }
     Ok(m)
+}
+
+/// Классифицировать ошибку загрузки в RU-строку для баннера. Три класса:
+/// SHA-256 (уже RU, сохраняем) → сеть/стап/таймаут → generic-fallback.
+fn ru_download_error(e: &anyhow::Error) -> String {
+    let chain = format!("{e:#}");
+    // Ре-верификация не совпала — сообщение уже RU, отдаём как есть.
+    if chain.contains("SHA-256") {
+        return chain;
+    }
+    // Сеть/стап/таймаут: reqwest-ошибка либо наш watchdog-стап.
+    let low = chain.to_lowercase();
+    if e.downcast_ref::<reqwest::Error>().is_some()
+        || low.contains("stalled")
+        || low.contains("timeout")
+        || low.contains("timed out")
+        || low.contains("connect")
+    {
+        return "Соединение прервано во время загрузки — можно продолжить".to_string();
+    }
+    "Ошибка загрузки — можно продолжить".to_string()
 }
 
 /// Кандидат новее текущей? Непарсящееся никогда не новее (тихий отказ).
@@ -144,11 +172,24 @@ pub async fn sha256_file(path: &Path) -> Result<String> {
 /// Скачать ассет в `dir/<asset.name>` (save-by-name — контракт DiskSpanning).
 /// Резюм: len<size → Range; len==size → no-op (хэш проверяется отдельно);
 /// len>size → удалить и заново. Сервер, игнорирующий Range (200), → truncate.
+/// Idle-таймаут между чанками — [`DEFAULT_DOWNLOAD_IDLE_TIMEOUT`].
 pub async fn download_asset(
     client: &reqwest::Client,
     asset: &Asset,
     dir: &Path,
     on_delta: &(dyn Fn(u64) + Send + Sync),
+) -> Result<()> {
+    download_asset_with_idle(client, asset, dir, on_delta, DEFAULT_DOWNLOAD_IDLE_TIMEOUT).await
+}
+
+/// Ядро загрузки с инъектируемым idle-таймаутом (тест передаёт короткий, чтобы
+/// не ждать реальные 60с при проверке стап-watchdog).
+pub async fn download_asset_with_idle(
+    client: &reqwest::Client,
+    asset: &Asset,
+    dir: &Path,
+    on_delta: &(dyn Fn(u64) + Send + Sync),
+    idle_timeout: Duration,
 ) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
     let dest = dir.join(&asset.name);
@@ -174,10 +215,21 @@ pub async fn download_asset(
         .open(&dest)
         .await?;
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk?;
-        file.write_all(&bytes).await?;
-        on_delta(bytes.len() as u64);
+    loop {
+        // Watchdog: тихий стап (нет чанка за idle_timeout) → Err, а не вечное
+        // ожидание. Таймер сбрасывается на каждый успешный чанк.
+        match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Err(_elapsed) => bail!(
+                "download stalled: no data for {}s",
+                idle_timeout.as_secs()
+            ),
+            Ok(None) => break,
+            Ok(Some(chunk)) => {
+                let bytes = chunk?;
+                file.write_all(&bytes).await?;
+                on_delta(bytes.len() as u64);
+            }
+        }
     }
     file.flush().await?;
     Ok(())
@@ -249,7 +301,12 @@ impl Updater {
             current: current.to_string(),
             updates_root,
             manifest_url,
-            client: reqwest::Client::new(),
+            // connect_timeout ловит мёртвый хост на этапе установки соединения
+            // (idle-watchdog в download_asset покрывает стап уже в теле ответа).
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             terminal: Notify::new(),
         })
     }
@@ -394,8 +451,11 @@ impl Updater {
             match result {
                 Ok(()) => s.phase = Phase::Ready,
                 Err(e) => {
+                    // Тех-детали (EN reqwest/anyhow-цепочка) — в лог; в баннер
+                    // (snapshot.error) — только RU-строка (RU-user-facing конвенция).
+                    tracing::warn!("updater download failed: {e:#}");
                     s.phase = Phase::Error;
-                    s.error = Some(format!("{e:#}"));
+                    s.error = Some(ru_download_error(&e));
                 }
             }
         }
