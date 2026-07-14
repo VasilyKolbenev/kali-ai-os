@@ -401,4 +401,81 @@ impl Updater {
         }
         self.terminal.notify_waiters();
     }
+
+    /// Прод-путь: setup из скачанной директории, install_dir = родитель текущего exe,
+    /// затем выход процесса (инсталятор перезапустит апп — .iss silent-ветка).
+    pub async fn install(self: &Arc<Self>) -> Result<()> {
+        let setup = {
+            let s = self.inner.lock().await;
+            let m = s.available.clone().context("нет скачанного обновления")?;
+            self.updates_root
+                .join(&m.version)
+                .join(&m.assets.first().context("пустой манифест")?.name)
+        };
+        let exe = std::env::current_exe().context("current_exe")?;
+        let install_dir = exe.parent().context("exe без родителя")?.to_path_buf();
+        self.install_with(&setup, &install_dir, true).await
+    }
+
+    /// Тестируемое ядро: ре-верификация → spawn detached → (опц.) выход.
+    pub async fn install_with(
+        self: &Arc<Self>,
+        setup_exe: &Path,
+        install_dir: &Path,
+        exit_process: bool,
+    ) -> Result<()> {
+        let m = {
+            let mut s = self.inner.lock().await;
+            let m = s.available.clone().context("нет доступного обновления")?;
+            if s.phase != Phase::Ready {
+                bail!("обновление не готово (phase={:?})", s.phase);
+            }
+            s.phase = Phase::Installing;
+            m
+        };
+        let dir = self.updates_root.join(&m.version);
+        // Пред-инсталльная ре-верификация (спека: между ready и кликом — часы)
+        for a in &m.assets {
+            let p = dir.join(&a.name);
+            let ok = sha256_file(&p).await.map(|h| h.eq_ignore_ascii_case(&a.sha256));
+            if !matches!(ok, Ok(true)) {
+                let _ = tokio::fs::remove_file(&p).await;
+                let mut s = self.inner.lock().await;
+                s.phase = Phase::Error;
+                s.error = Some(format!("SHA-256 не совпал перед установкой: {}", a.name));
+                bail!("SHA-256 не совпал перед установкой: {}", a.name);
+            }
+        }
+        let log = dir.join("install.log");
+        let args = build_install_args(setup_exe, install_dir, &log);
+        // .cmd/.bat нельзя спавнить напрямую (CreateProcess ждёт PE-бинарь) —
+        // оборачиваем в `cmd /c`. Прод всегда .exe; ветка нужна тест-стабам.
+        let is_batch = setup_exe
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+            .unwrap_or(false);
+        let mut cmd = if is_batch {
+            let mut c = std::process::Command::new("cmd.exe");
+            c.arg("/c").arg(setup_exe);
+            c
+        } else {
+            std::process::Command::new(setup_exe)
+        };
+        cmd.args(&args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        cmd.spawn().context("не удалось запустить инсталятор")?;
+        if exit_process {
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                std::process::exit(0);
+            });
+        }
+        Ok(())
+    }
 }

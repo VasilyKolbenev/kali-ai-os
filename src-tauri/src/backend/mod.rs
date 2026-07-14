@@ -63,6 +63,13 @@ fn resolve_bind_addr() -> String {
 pub async fn serve() -> anyhow::Result<()> {
     let bus = Arc::new(event_bus::EventBus::new());
 
+    // Auto-update: удалить каталоги старых/непарсящихся загрузок при старте
+    // (stateless-правило спеки; залоченное пропускается молча).
+    crate::backend::updater::cleanup_updates_dir(
+        &crate::backend::updater::updates_dir(),
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // Engine selector: read config to decide whether to spin up the
     // Rust-native voice pipeline. Failure to load config falls back to
     // `engine=python` with a warning — keeps the backend bootable in

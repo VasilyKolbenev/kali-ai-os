@@ -17,6 +17,7 @@ use crate::backend::ingestion;
 use crate::backend::proxy;
 use crate::backend::skills::catalog::CatalogClient;
 use crate::backend::skills::registry::SkillsRegistry;
+use crate::backend::updater;
 use crate::backend::voice::pipeline::Pipeline;
 use crate::backend::ws;
 
@@ -607,6 +608,34 @@ pub async fn chat(ExtractJson(body): ExtractJson<serde_json::Value>) -> Response
     proxy_post_with_body("/chat", &body).await
 }
 
+// ── /updater/* (auto-update, native Rust control-plane) ───────────
+//
+// Полностью нативные: манифест-чек, резюмируемое скачивание, SHA-256,
+// тихий InnoSetup. Стейт живёт в `Arc<Updater>`, инжектится Extension-слоем
+// в `router_full` (как pipeline/skills/catalog). См. updater.rs.
+
+async fn updater_status(Extension(u): Extension<Arc<updater::Updater>>) -> Json<updater::Snapshot> {
+    Json(u.snapshot().await)
+}
+async fn updater_check(Extension(u): Extension<Arc<updater::Updater>>) -> Json<updater::Snapshot> {
+    Json(u.check().await)
+}
+async fn updater_download(Extension(u): Extension<Arc<updater::Updater>>) -> Json<updater::Snapshot> {
+    u.start_download().await;
+    Json(u.snapshot().await)
+}
+async fn updater_install(
+    Extension(u): Extension<Arc<updater::Updater>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match u.install().await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "installing"}))),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"status": "error", "message": e.to_string()})),
+        ),
+    }
+}
+
 /// Full constructor — every backend handle in one call. Tests + serve()
 /// converge on this; the older constructors below are thin wrappers
 /// that pass `None` for the handles they don't care about.
@@ -643,6 +672,10 @@ pub fn router_full(
         .route("/agents/:name/load", post(agent_load))
         .route("/agents/:name/unload", post(agent_unload))
         .route("/chat", post(chat))
+        .route("/updater/status", get(updater_status))
+        .route("/updater/check", post(updater_check))
+        .route("/updater/download", post(updater_download))
+        .route("/updater/install", post(updater_install))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",
@@ -651,6 +684,10 @@ pub fn router_full(
         .layer(Extension(pipeline))
         .layer(Extension(skills))
         .layer(Extension(catalog))
+        .layer(Extension(updater::Updater::new(
+            updater::updates_dir(),
+            env!("CARGO_PKG_VERSION"),
+        )))
         .with_state(bus)
 }
 
