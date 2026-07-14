@@ -47,6 +47,11 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   // control plane (:3006): the token and the desktop LAN IPv4 + bind state.
   { method: "GET", path: "/pairing/token" },
   { method: "GET", path: "/pairing/lan-ip" },
+  // Auto-update — живёт целиком на Rust control-plane (:3006)
+  { method: "GET", path: "/updater/status" },
+  { method: "POST", path: "/updater/check" },
+  { method: "POST", path: "/updater/download" },
+  { method: "POST", path: "/updater/install" },
 ] as const;
 
 function pathOf(input: string): string {
