@@ -32,7 +32,9 @@ jobs:
           enable-cache: true
 
       - name: Sync deps (frozen lock)
-        run: uv sync --frozen
+        # pytest lives in the `dev` extra (optional-dependencies), which
+        # uv sync does not install by default.
+        run: uv sync --frozen --extra dev
 
       - name: Kernel test suite
         run: uv run pytest tests/kernel tests/test_voice_tool_dispatch.py -q
@@ -79,6 +81,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # windows-2025 images ship a partial MSVC install; rustc's auto-detected
+      # link.exe path doesn't exist. This action initializes the MSVC env.
+      - uses: ilammy/msvc-dev-cmd@v1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
