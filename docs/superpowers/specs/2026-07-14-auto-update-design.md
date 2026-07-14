@@ -23,8 +23,8 @@
 
 | Компонент | Файл | Ответственность |
 |---|---|---|
-| Updater-модуль (Rust) | `src-tauri/src/updater.rs` | Команды `updater_check`, `updater_download`, `updater_install`; событие `updater://progress`; вся сетевая/файловая логика |
-| Регистрация | `src-tauri/src/lib.rs` | invoke_handler + state; manifest-URL — const с override через env `KALI_UPDATE_URL` (тесты/будущий CDN) |
+| Updater-модуль (Rust) | `src-tauri/src/backend/updater.rs` | Вся сетевая/файловая логика + state-machine; **транспорт = HTTP-роуты на существующем axum control-plane :3006** (`GET /updater/status`, `POST /updater/check|download|install`) — UI общается с Rust только по HTTP/WS (заземлено 2026-07-14: `@tauri-apps/api` в ui/ не используется), прогресс UI забирает поллингом status |
+| Регистрация | `src-tauri/src/backend/http.rs` | Роуты в Router + `Arc<Updater>` в AppState; manifest-URL — const с override через env `KALI_UPDATE_URL` (тесты/будущий CDN); cleanup при старте serve |
 | UI-баннер | `ui/src/components/UpdateBanner.tsx` + слайс в Zustand | Состояния: `idle → available → downloading(%) → ready → installing → error` |
 | Публикация | `scripts/publish_release.py` | Валидация версий → draft-релиз → ассеты → publish → коммит манифеста (порядок = защита от гонки, см. «Публикация») |
 | Инсталятор | `scripts/installer_premium.iss` | +1 `[Run]`-строка перезапуска для silent-ветки + retry-ожидание завершения процессов в `[Code]` |
@@ -63,7 +63,7 @@
 ## Публикация (`scripts/publish_release.py`)
 
 Порядок обязателен (иначе окно битых апдейтов, пока 4,2 GB грузятся):
-1. **Валидация единства версии**: tauri.conf.json (источник истины) == `#define AppVersion` в .iss == имена файлов в `dist_premium\installer\` == версия для манифеста; расхождение = hard-fail (иначе update-петля: апп обновился, считает себя старым, предлагает то же обновление).
+1. **Валидация единства версии**: tauri.conf.json (источник истины) == `src-tauri/Cargo.toml` (Rust читает свою версию из `CARGO_PKG_VERSION`) == `#define AppVersion` в .iss == имена файлов в `dist_premium\installer\` == версия для манифеста; расхождение = hard-fail (иначе update-петля: апп обновился, считает себя старым, предлагает то же обновление).
 2. `gh release create v<ver> --draft --prerelease` (флаг по наличию suffix) → upload 4 ассетов → `gh release edit --draft=false`.
 3. Сгенерировать `releases/latest.json` (SHA-256 + size локальных файлов) → commit + push в main. **Коммит манифеста — последний шаг = атомарный флип**: клиенты не видят новую версию, пока все ассеты не опубликованы (raw-кэш ~5 мин задерживает только появление нового — безопасное направление).
 4. **Идемпотентность:** при повторном запуске после падения — существующий draft той же версии переиспользовать/пересоздать (не плодить), уже загруженные ассеты перезалить.
