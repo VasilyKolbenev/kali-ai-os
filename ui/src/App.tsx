@@ -13,6 +13,8 @@ import { OnboardingRoot } from "./components/Onboarding/OnboardingRoot";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { useUpdaterStore } from "./stores/updaterStore";
 import { AnimatePresence, motion } from "framer-motion";
 
 /** Kernel connectivity stage:
@@ -44,6 +46,12 @@ export default function App() {
   useWebSocket();
   const { loading: onboardingLoading, gated: onboardingGated, slow } = useOnboardingGate();
   const kernelStage = useKernelStage();
+  const updaterCheck = useUpdaterStore((s) => s.check);
+  useEffect(() => {
+    void updaterCheck(); // на старте
+    const id = setInterval(() => void updaterCheck(), 24 * 3600 * 1000); // раз в сутки
+    return () => clearInterval(id);
+  }, [updaterCheck]);
 
   if (onboardingLoading) {
     return (
@@ -152,6 +160,8 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      <UpdateBanner />
     </div>
   );
 }
