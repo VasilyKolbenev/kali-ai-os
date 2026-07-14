@@ -55,3 +55,28 @@ async fn install_fails_if_file_corrupted_after_ready() {
     assert!(err.to_string().contains("SHA-256"));
     assert_eq!(u.snapshot().await.phase, Phase::Error);
 }
+
+#[tokio::test]
+async fn install_spawn_failure_rolls_back_to_error_and_is_recoverable() {
+    let base = common::spawn_release_srv(false).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let u = Updater::new_for_tests(tmp.path().into(), "1.0.0", &format!("{base}/latest.json"));
+    u.check().await;
+    u.start_download().await;
+    u.wait_terminal().await;
+    assert_eq!(u.snapshot().await.phase, Phase::Ready);
+
+    // Ассеты в updates_root/9.9.9/ валидны → reverify проходит; но setup_exe
+    // указывает на несуществующий файл → CreateProcess падает при spawn.
+    let bogus = tmp.path().join("does-not-exist.exe");
+    let err = u
+        .install_with(&bogus, tmp.path(), false)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("инсталятор"), "err={err}");
+
+    // Залипания в Installing нет — фаза Error, а обновление ещё доступно (retry жив).
+    let snap = u.snapshot().await;
+    assert_eq!(snap.phase, Phase::Error);
+    assert!(snap.available.is_some());
+}

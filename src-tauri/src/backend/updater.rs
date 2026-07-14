@@ -408,9 +408,13 @@ impl Updater {
         let setup = {
             let s = self.inner.lock().await;
             let m = s.available.clone().context("нет скачанного обновления")?;
-            self.updates_root
-                .join(&m.version)
-                .join(&m.assets.first().context("пустой манифест")?.name)
+            let first = &m.assets.first().context("пустой манифест")?.name;
+            // Прод-инвариант: первый ассет DiskSpanning — всегда setup.exe.
+            // Голая .exe идёт в прямой spawn (cmd /c — только для тест-стабов).
+            if !first.to_ascii_lowercase().ends_with(".exe") {
+                bail!("первый ассет не .exe: {first}");
+            }
+            self.updates_root.join(&m.version).join(first)
         };
         let exe = std::env::current_exe().context("current_exe")?;
         let install_dir = exe.parent().context("exe без родителя")?.to_path_buf();
@@ -440,9 +444,12 @@ impl Updater {
             let ok = sha256_file(&p).await.map(|h| h.eq_ignore_ascii_case(&a.sha256));
             if !matches!(ok, Ok(true)) {
                 let _ = tokio::fs::remove_file(&p).await;
-                let mut s = self.inner.lock().await;
-                s.phase = Phase::Error;
-                s.error = Some(format!("SHA-256 не совпал перед установкой: {}", a.name));
+                {
+                    let mut s = self.inner.lock().await;
+                    s.phase = Phase::Error;
+                    s.error = Some(format!("SHA-256 не совпал перед установкой: {}", a.name));
+                }
+                self.terminal.notify_waiters();
                 bail!("SHA-256 не совпал перед установкой: {}", a.name);
             }
         }
@@ -469,7 +476,19 @@ impl Updater {
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
         }
-        cmd.spawn().context("не удалось запустить инсталятор")?;
+        // Spawn может упасть (AV-лок на свежем setup.exe, отказ прав) — откатить
+        // в Error, иначе фаза Installing залипнет навсегда (recovery-веток из неё
+        // нет: check трогает только Idle|Available, start_download блокирует
+        // Installing). available остаётся Some → повторное скачивание/retry живо.
+        if let Err(e) = cmd.spawn().context("не удалось запустить инсталятор") {
+            {
+                let mut s = self.inner.lock().await;
+                s.phase = Phase::Error;
+                s.error = Some(format!("{e:#}"));
+            }
+            self.terminal.notify_waiters();
+            return Err(e);
+        }
         if exit_process {
             tokio::spawn(async {
                 tokio::time::sleep(std::time::Duration::from_millis(700)).await;
