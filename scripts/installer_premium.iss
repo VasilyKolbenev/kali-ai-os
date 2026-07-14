@@ -86,17 +86,40 @@ Filename: "powershell.exe"; \
 ; Launch KALI after install
 Filename: "{app}\{#AppExe}"; Description: "Запустить KALI"; Flags: postinstall nowait skipifsilent
 
+; Auto-update: тихая установка перезапускает апп сама (обычная установка
+; использует postinstall-строку выше; skipifnotsilent исключает двойной запуск).
+Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Flags: nowait skipifnotsilent
+
 [UninstallDelete]
 ; Optional: clean app data on uninstall (commented out by default — preserve user agents/config)
 ; Type: filesandordirs; Name: "{userappdata}\KALI"
 
 [Code]
-function InitializeSetup(): Boolean;
+function ProcessRunning(const ExeName: string): Boolean;
 var
   ResultCode: Integer;
 begin
-  // Ensure no running KALI instance blocks file overwrite
+  // tasklist + find: find выходит с 0, если имя найдено (процесс жив)
+  Exec('cmd.exe', '/c tasklist /FI "IMAGENAME eq ' + ExeName + '" | find /I "' + ExeName + '" > nul',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := (ResultCode = 0);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+  Waited: Integer;
+begin
   Exec('taskkill.exe', '/IM kali-backend.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill.exe', '/IM kali-desktop.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Ждём реального исчезновения процессов (до ~10 с) — иначе file-in-use при копировании.
+  Waited := 0;
+  while (Waited < 10000) and (ProcessRunning('kali-backend.exe') or ProcessRunning('kali-desktop.exe')) do
+  begin
+    Sleep(500);
+    Waited := Waited + 500;
+  end;
+  // Если процесс жив после таймаута — продолжаем; /SUPPRESSMSGBOXES авто-абортит
+  // на file-in-use (принятый v1 fail-режим, спека «Инсталятор §2»).
   Result := True;
 end;
