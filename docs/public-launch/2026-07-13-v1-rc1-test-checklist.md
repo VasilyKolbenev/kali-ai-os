@@ -27,6 +27,11 @@
 ## D. 30 секунд для git
 - [ ] `gh auth refresh -h github.com -s workflow` (браузер, один клик) → скажи мне, допушу iOS-workflow (последний локальный коммит)
 
+## Auto-update (с v1.0.0-rc2+)
+- [ ] `python scripts/publish_release.py --notes "..."` (после build → frozen_smoke)
+- [ ] Живой прогон: предыдущая установленная версия → баннер → скачивание → тихая установка → перезапуск новой (обязательный релиз-гейт, аналог frozen_smoke)
+- [ ] Прогон на потребительской RU-сети (raw.githubusercontent временами троттлится у RU-провайдеров)
+
 ## Если что-то падает
 - Логи backend: консольное окно kali-backend + `%APPDATA%/KALI` данные
 - Все ускорения откатываются env-переменными: `KALI_F5_NFE=32`, `KALI_SILENCE_MS=2500`, `KALI_STT_BEAM=5`, `KALI_TTS_FIRST_CLAUSE=0`

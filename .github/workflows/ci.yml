@@ -110,3 +110,11 @@ jobs:
           # link.exe path; env beats config in cargo, so resolve the linker
           # from the msvc-dev-cmd PATH instead.
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
+      - name: Updater tests (network-free, no audio deps)
+        run: cargo test --test updater_core --test updater_download --test updater_flow --test updater_install --test updater_routes
+        working-directory: src-tauri
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
+          # updater_* бинарники триггерят Windows Installer Detection (error 740);
+          # RunAsInvoker shim обходит авто-elevation (защитно — на случай не-админ раннера).
+          __COMPAT_LAYER: RunAsInvoker
