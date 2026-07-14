@@ -52,6 +52,52 @@ describe("updaterStore", () => {
     vi.useRealTimers();
   });
 
+  it("download POST failure surfaces error (direct user action, not silent)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    await useUpdaterStore.getState().download();
+    const s = useUpdaterStore.getState();
+    expect(s.phase).toBe("error");
+    expect(s.error).toBeTruthy();
+  });
+
+  it("poll self-heals on a transient single failure", async () => {
+    vi.useFakeTimers();
+    // 1: download POST → downloading; 2: GET fails; 3: GET downloading; 4: GET ready
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      call += 1;
+      if (call === 1) return new Response(JSON.stringify(snap({ phase: "downloading", total: 100, downloaded: 10 })));
+      if (call === 2) throw new Error("blip");
+      if (call === 3) return new Response(JSON.stringify(snap({ phase: "downloading", total: 100, downloaded: 60 })));
+      return new Response(JSON.stringify(snap({ phase: "ready", total: 100, downloaded: 100 })));
+    }));
+    await useUpdaterStore.getState().download();
+    await vi.advanceTimersByTimeAsync(800); // poll #1 fails → held snapshot
+    expect(useUpdaterStore.getState().phase).toBe("downloading");
+    await vi.advanceTimersByTimeAsync(800); // poll #2 downloading (self-healed)
+    expect(useUpdaterStore.getState().phase).toBe("downloading");
+    await vi.advanceTimersByTimeAsync(800); // poll #3 ready → stops
+    expect(useUpdaterStore.getState().phase).toBe("ready");
+    vi.useRealTimers();
+  });
+
+  it("poll gives up after MAX consecutive failures and stops", async () => {
+    vi.useFakeTimers();
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      call += 1;
+      if (call === 1) return new Response(JSON.stringify(snap({ phase: "downloading", total: 100, downloaded: 10 })));
+      throw new Error("backend crashed");
+    }));
+    await useUpdaterStore.getState().download();
+    await vi.advanceTimersByTimeAsync(700 * 5 + 100); // 5 failing polls
+    expect(useUpdaterStore.getState().phase).toBe("error");
+    const callsAtCap = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000); // poll stopped — no more fetches
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAtCap);
+    vi.useRealTimers();
+  });
+
   it("dismiss hides banner until next available version", () => {
     useUpdaterStore.setState({ phase: "available" });
     useUpdaterStore.getState().dismiss();

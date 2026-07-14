@@ -29,6 +29,9 @@ interface UpdaterState extends UpdaterSnapshot {
 }
 
 const POLL_MS = 700;
+// Число подряд-провалов status-поллинга, после которого признаём потерю связи.
+// Блип на 1-2 запроса на фоне 4.2 ГБ скачивания переживаем (держим снапшот).
+const MAX_POLL_FAILS = 5;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 async function callUpdater(path: string, method: "GET" | "POST"): Promise<UpdaterSnapshot> {
@@ -69,14 +72,31 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       const snap = await callUpdater("/updater/download", "POST");
       set(snap);
       stopPoll();
+      // Транзиентный обрыв во время 4.2 ГБ скачивания не должен ронять поллинг —
+      // держим последний снапшот и само-восстанавливаемся; но после
+      // MAX_POLL_FAILS подряд признаём потерю связи (можно продолжить via Range).
+      let fails = 0;
       pollTimer = setInterval(async () => {
         try {
           const s = await callUpdater("/updater/status", "GET");
+          fails = 0;
           set(s);
           if (s.phase !== "downloading") stopPoll();
-        } catch { /* держим последний снапшот */ }
+        } catch {
+          fails += 1;
+          if (fails >= MAX_POLL_FAILS) {
+            stopPoll();
+            set({ phase: "error", error: "Потеряна связь во время загрузки — можно продолжить" });
+          }
+          // иначе держим последний снапшот (само-восстановление на блипе)
+        }
       }, POLL_MS);
-    } catch { /* silent */ }
+    } catch {
+      // Прямое действие пользователя (клик «Скачать») — молчать нельзя, в
+      // отличие от фоновой check(). Даём обратную связь и не оставляем поллинг.
+      stopPoll();
+      set({ phase: "error", error: "Не удалось начать загрузку — проверь, что KALI запущена" });
+    }
   },
 
   install: async () => {
