@@ -7,6 +7,7 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -201,4 +202,56 @@ pub fn build_report(logs_dir: &Path, reports_dir: &Path, meta: &CrashMeta) -> Re
     let path = reports_dir.join(format!("crash-{stamp}.txt"));
     std::fs::write(&path, &report).with_context(|| format!("записать {}", path.display()))?;
     Ok(CrashReport { path, text: report })
+}
+
+/// Таймаут проба Python-liveness. **Обязателен:** `proxy::proxy_get_json`
+/// использует `Client::new()` БЕЗ таймаута — на зависшем Python (принял TCP,
+/// не отвечает) хендлер повис бы, а 5-сек поллинг UI копил бы запросы.
+pub const CRASH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Жив ли Python-backend (адрес берётся у `proxy::python_backend_url()` —
+/// env-переопределяемый, без хардкода).
+pub async fn probe_backend_alive() -> bool {
+    probe_backend_alive_with(&crate::backend::proxy::python_backend_url(), CRASH_PROBE_TIMEOUT)
+        .await
+}
+
+/// Тестируемое ядро: явные base_url и таймаут.
+pub async fn probe_backend_alive_with(base_url: &str, timeout: Duration) -> bool {
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("crash probe: не удалось собрать client: {e}");
+            return false;
+        }
+    };
+    match client.get(&url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(e) => {
+            tracing::debug!("crash probe: {url} недоступен: {e}");
+            false
+        }
+    }
+}
+
+/// Открыть папку с отчётами в проводнике.
+///
+/// Клиент НЕ передаёт путь (иначе — произвольный reveal + инъекция в
+/// командную строку explorer). Открываем папку целиком, не `/select,<file>`.
+pub fn reveal_reports_dir(reports_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(reports_dir)
+        .with_context(|| format!("создать {}", reports_dir.display()))?;
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(reports_dir)
+            .spawn()
+            .context("не удалось открыть проводник")?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        anyhow::bail!("reveal поддерживается только на Windows")
+    }
 }
