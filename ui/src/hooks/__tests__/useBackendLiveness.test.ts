@@ -51,6 +51,22 @@ describe("useBackendLiveness", () => {
     vi.useRealTimers();
   });
 
+  it("unmount останавливает поллинг — интервал не течёт", async () => {
+    const fetchMock = vi.fn(async () => reply(true));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    const { unmount } = renderHook(() => useBackendLiveness());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CRASH_POLL_MS * 2 + 10);
+    });
+    const callsAtUnmount = fetchMock.mock.calls.length;
+    expect(callsAtUnmount).toBeGreaterThan(1); // поллинг реально шёл до unmount
+    unmount();
+    await vi.advanceTimersByTimeAsync(CRASH_POLL_MS * 5 + 10);
+    expect(fetchMock.mock.calls.length).toBe(callsAtUnmount);
+    vi.useRealTimers();
+  });
+
   it("недоступный :3006 (reject) НЕ показывает down — Rust мёртв, вне скоупа", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("refused"); }));
     vi.useFakeTimers();
