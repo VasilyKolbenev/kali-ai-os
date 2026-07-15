@@ -4,8 +4,11 @@
 //! Сток ЛОКАЛЬНЫЙ — отчёт пишется в файл, пользователь передаёт его сам.
 //! Ничего не собирается и не отправляется без явного клика.
 
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use anyhow::{Context, Result};
 use regex::Regex;
 
 /// Плейсхолдер вместо секрета. Не матчится ни одним паттерном ниже —
@@ -81,4 +84,121 @@ pub fn redact(input: &str) -> String {
     let s = RE_EMAIL.replace_all(&s, "***@***");
     let s = RE_WIN_USER_PATH.replace_all(&s, "${1}<user>");
     s.into_owned()
+}
+
+/// Сколько последних строк каждого лога берём.
+pub const CRASH_LOG_TAIL_LINES: usize = 400;
+/// Жёсткий предел итогового отчёта.
+pub const CRASH_REPORT_MAX_BYTES: usize = 256 * 1024;
+/// Сколько байт с конца файла сканируем ради хвоста (лог может быть огромным —
+/// целиком в память не читаем).
+const CRASH_TAIL_SCAN_BYTES: u64 = 1024 * 1024;
+const CRASH_TRUNCATED_MARKER: &str = "…(обрезано)";
+/// **err первым** — там трейсбеки/паники (главная диагностика);
+/// out засоряется /health-поллингом (см. спеку §Шум поллинга).
+pub const CRASH_LOG_FILES: [&str; 2] = ["kali-backend.err.log", "kali-backend.out.log"];
+
+/// Мета отчёта. `version`/`os`/`arch` — `'static` из compile-time констант.
+pub struct CrashMeta {
+    pub version: &'static str,
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub ts: String,
+    pub reason: Option<String>,
+}
+
+pub struct CrashReport {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// `(logs_dir, reports_dir)`.
+///
+/// `runtime_data_dir()` из lib.rs (бинарь-крейт) отсюда не видна, поэтому
+/// резолвим сами. **`data_dir()` = `%APPDATA%` (roaming)** — туда пишет логи
+/// lib.rs. НЕ `data_local_dir()`: это `%LOCALAPPDATA%`, куда смотрит
+/// `updater::updates_dir()` — скопировать его сюда = читать не ту папку.
+pub fn crash_paths() -> Result<(PathBuf, PathBuf)> {
+    let base = dirs::data_dir()
+        .context("не удалось определить папку данных пользователя")?
+        .join("KALI");
+    Ok((base.join("logs"), base.join("crash-reports")))
+}
+
+/// Последние `n` строк файла, читая максимум `CRASH_TAIL_SCAN_BYTES` с конца.
+/// `None` — файла нет/не читается.
+fn tail_lines(path: &Path, n: usize) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(CRASH_TAIL_SCAN_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().collect();
+    let from = lines.len().saturating_sub(n);
+    Some(lines[from..].join("\n"))
+}
+
+/// Обрезать секцию до `budget` байт, СОХРАНЯЯ свежий хвост (режем старший край).
+fn clamp_tail(section: &str, budget: usize) -> String {
+    if section.len() <= budget {
+        return section.to_string();
+    }
+    let cut = section.len() - budget.saturating_sub(CRASH_TRUNCATED_MARKER.len() + 1);
+    // не рвём UTF-8: сдвигаемся вперёд до границы символа
+    let mut idx = cut.min(section.len());
+    while idx < section.len() && !section.is_char_boundary(idx) {
+        idx += 1;
+    }
+    format!("{CRASH_TRUNCATED_MARKER}\n{}", &section[idx..])
+}
+
+/// Собрать отчёт: мета + отредактированные хвосты логов → файл в `reports_dir`.
+///
+/// Бюджет байт делится ПОРОВНУ между логами, а не режется общим краем:
+/// иначе шумный `out` мог бы вытеснить `err` с трейсбеком.
+pub fn build_report(logs_dir: &Path, reports_dir: &Path, meta: &CrashMeta) -> Result<CrashReport> {
+    let mut report = format!(
+        "KALI crash report\nversion: {}\nos: {} / {}\ntime: {}\nreason: {}\n",
+        meta.version,
+        meta.os,
+        meta.arch,
+        meta.ts,
+        meta.reason.as_deref().unwrap_or("-"),
+    );
+
+    // Считается ДО дописывания секций (по длине одной шапки) — не двигать вниз.
+    let per_file_budget = CRASH_REPORT_MAX_BYTES
+        .saturating_sub(report.len())
+        .saturating_sub(512) // запас под заголовки секций
+        / CRASH_LOG_FILES.len();
+
+    let mut any_log = false;
+    for name in CRASH_LOG_FILES {
+        match tail_lines(&logs_dir.join(name), CRASH_LOG_TAIL_LINES) {
+            Some(tail) => {
+                any_log = true;
+                let redacted = redact(&tail);
+                report.push_str(&format!(
+                    "\n--- {name} (последние {CRASH_LOG_TAIL_LINES} строк, отредактировано) ---\n{}\n",
+                    clamp_tail(&redacted, per_file_budget)
+                ));
+            }
+            None => report.push_str(&format!("\n--- {name}: логи не найдены ---\n")),
+        }
+    }
+    if !any_log {
+        report.push_str("\n(логи не найдены — отчёт содержит только мету)\n");
+    }
+
+    std::fs::create_dir_all(reports_dir)
+        .with_context(|| format!("создать {}", reports_dir.display()))?;
+    // Имя файла — только цифры из ts (YYYYMMDDhhmmss): двоеточие Windows не
+    // примет, а rfc3339 тащит дробные секунды и смещение. Два краша в одну
+    // секунду перезапишут друг друга — приемлемо (юзер шлёт отчёт сразу).
+    let stamp: String = meta.ts.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
+    let path = reports_dir.join(format!("crash-{stamp}.txt"));
+    std::fs::write(&path, &report).with_context(|| format!("записать {}", path.display()))?;
+    Ok(CrashReport { path, text: report })
 }
