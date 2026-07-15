@@ -20,12 +20,12 @@ fn builds_report_with_meta_and_redacted_tails() {
     let reports = tmp.path().join("crash-reports");
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(
-        logs.join(CRASH_LOG_FILES[0]), // err
+        logs.join(CRASH_LOG_FILES[0]), // err — сырой stderr
         "Traceback (most recent call last)\nRuntimeError: boom\n",
     )
     .unwrap();
     std::fs::write(
-        logs.join(CRASH_LOG_FILES[1]), // out
+        logs.join(CRASH_LOG_FILES[1]), // kali-backend.log — собственный лог Python
         "loading C:\\Users\\Vasily\\models\napi_key=hunter2secret\n",
     )
     .unwrap();
@@ -41,10 +41,21 @@ fn builds_report_with_meta_and_redacted_tails() {
     // редакция применена к телу
     assert!(!rep.text.contains("Vasily"), "username утёк в отчёт");
     assert!(!rep.text.contains("hunter2secret"), "ключ утёк в отчёт");
-    // err-секция идёт ПЕРЕД out-секцией (там трейсбеки — главная диагностика)
-    let i_err = rep.text.find(CRASH_LOG_FILES[0]).unwrap();
-    let i_out = rep.text.find(CRASH_LOG_FILES[1]).unwrap();
-    assert!(i_err < i_out, "err-секция должна быть первой");
+    // Порядок секций: err → app-log → out (убывание диагностической ценности).
+    // Якорь — ЗАГОЛОВОК секции (`--- <имя>`), а не голое имя файла: реальные логи
+    // содержат строку «Logging initialized at …\logs\kali-backend.log», и поиск
+    // по голому имени нашёл бы её ВНУТРИ err-секции, тихо сломав проверку.
+    // Префикс `--- ` есть и у секции с телом, и у пометки «логи не найдены»,
+    // поэтому проверка не зависит от наличия файлов.
+    let pos = |name: &str| rep.text.find(&format!("--- {name}")).unwrap_or_else(|| panic!("нет секции {name}:\n{}", rep.text));
+    assert!(
+        pos(CRASH_LOG_FILES[0]) < pos(CRASH_LOG_FILES[1]),
+        "err-секция должна идти первой (ловит то, что мимо логгера)"
+    );
+    assert!(
+        pos(CRASH_LOG_FILES[1]) < pos(CRASH_LOG_FILES[2]),
+        "app-log должен идти перед обычно пустым out"
+    );
     // файл записан, содержимое совпадает с возвращённым текстом
     assert!(rep.path.exists());
     assert_eq!(std::fs::read_to_string(&rep.path).unwrap(), rep.text);
@@ -95,9 +106,15 @@ fn keeps_only_recent_lines_via_tail() {
     assert!(!rep.text.contains("line-0\n"), "старая строка не отброшена");
 }
 
-/// Байтовый бюджет: 400 ДЛИННЫХ строк (~160 KB) переживают line-tail
-/// (их ровно CRASH_LOG_TAIL_LINES), но превышают per-file бюджет (~127 KB) —
-/// значит режет именно `clamp_tail`. Без этого теста clamp не исполняется НИ РАЗУ.
+/// Байтовый бюджет: 400 ДЛИННЫХ строк (~156 KB) переживают line-tail
+/// (их ровно CRASH_LOG_TAIL_LINES), но превышают per-file бюджет — значит
+/// режет именно `clamp_tail`. Без этого теста clamp не исполняется НИ РАЗУ.
+///
+/// Бюджет = (MAX − шапка − 512) / CRASH_LOG_FILES.len(). С третьим источником
+/// (`kali-backend.log`) делитель стал 3 → ~87 KB вместо ~127 KB при двух.
+/// Запас у фикстуры вырос (156 KB против 87 KB), так что clamp срабатывает
+/// увереннее прежнего. Маркер «обрезано» ниже — и есть доказательство, что
+/// clamp реально исполнился: без него ассерт станет красным.
 #[test]
 fn byte_budget_truncates_older_edge_and_marks_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -153,16 +170,63 @@ fn empty_log_file_is_handled() {
         "пустой лог помечен как отсутствующий: {}",
         rep.text
     );
-    assert!(
-        rep.text.contains(&format!("--- {}: логи не найдены ---", CRASH_LOG_FILES[1])),
-        "отсутствующий out должен быть помечен: {}",
-        rep.text
-    );
+    // Оба ОСТАЛЬНЫХ источника (app-log и out) отсутствуют → помечены как таковые.
+    for name in &CRASH_LOG_FILES[1..] {
+        assert!(
+            rep.text.contains(&format!("--- {name}: логи не найдены ---")),
+            "отсутствующий {name} должен быть помечен: {}",
+            rep.text
+        );
+    }
     assert!(
         !rep.text.contains("отчёт содержит только мету"),
         "сводки meta-only быть не должно — err прочитан: {}",
         rep.text
     );
+}
+
+/// Все три источника присутствуют → все три хвоста попадают в отчёт, каждый
+/// отредактирован. Регрессия на находку живого прогона: `kali-backend.log` —
+/// собственный лог Python (у Vasily 967 KB реальной диагностики) — раньше НЕ
+/// собирался вовсе, и отчёт мог приехать с пустым out и 70 строками stale err.
+#[test]
+fn collects_all_three_sources_each_redacted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let logs = tmp.path().join("logs");
+    let reports = tmp.path().join("crash-reports");
+    std::fs::create_dir_all(&logs).unwrap();
+
+    // у каждого источника свой маркер + свой секрет
+    std::fs::write(
+        logs.join(CRASH_LOG_FILES[0]),
+        "ERR-MARKER panic at C:\\Users\\ErrUser\\x\n",
+    )
+    .unwrap();
+    std::fs::write(
+        logs.join(CRASH_LOG_FILES[1]),
+        "APP-MARKER RuntimeError: boom\nxi-api-key: elevenlabssecret\n",
+    )
+    .unwrap();
+    std::fs::write(
+        logs.join(CRASH_LOG_FILES[2]),
+        "OUT-MARKER print debug\napi_key=stdoutsecret\n",
+    )
+    .unwrap();
+
+    let rep = build_report(&logs, &reports, &meta()).unwrap();
+
+    // тела всех трёх на месте
+    for marker in ["ERR-MARKER", "APP-MARKER", "OUT-MARKER"] {
+        assert!(rep.text.contains(marker), "потеряно тело {marker}:\n{}", rep.text);
+    }
+    // диагностика выживает
+    assert!(rep.text.contains("RuntimeError: boom"), "съело причину краша");
+    // редакция применена К КАЖДОМУ источнику
+    for secret in ["ErrUser", "elevenlabssecret", "stdoutsecret"] {
+        assert!(!rep.text.contains(secret), "утекло {secret:?}:\n{}", rep.text);
+    }
+    // ни одна секция не помечена отсутствующей
+    assert!(!rep.text.contains("логи не найдены"), "источник потерян:\n{}", rep.text);
 }
 
 /// Minor-3 (ревью): в Chunk 2 `reason` приходит ИЗ ТЕЛА ЗАПРОСА =
