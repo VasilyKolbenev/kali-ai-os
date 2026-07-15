@@ -52,6 +52,10 @@ export const RUST_ENDPOINTS: readonly RustRoute[] = [
   { method: "POST", path: "/updater/check" },
   { method: "POST", path: "/updater/download" },
   { method: "POST", path: "/updater/install" },
+  // Crash opt-in — целиком на Rust control-plane (:3006)
+  { method: "GET", path: "/crash/status" },
+  { method: "POST", path: "/crash/report" },
+  { method: "POST", path: "/crash/reveal" },
 ] as const;
 
 function pathOf(input: string): string {
