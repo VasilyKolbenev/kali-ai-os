@@ -143,6 +143,75 @@ fn byte_budget_truncates_older_edge_and_marks_it() {
     );
 }
 
+/// ХУДШИЙ СЛУЧАЙ: переполнены ВСЕ ТРИ источника. Байтовый тест выше пишет
+/// только `[0]`, а `collects_all_three_sources_each_redacted` — крошечные файлы,
+/// поэтому суммарный потолок не пинился ничем. Замерено: 261925 из 262144 —
+/// **запас всего 219 байт**, и держит его только 512-байтовый резерв под
+/// заголовки секций. Четвёртый источник или более длинное имя файла пробили бы
+/// потолок молча; этот тест сделает это красным.
+#[test]
+fn all_three_sources_oversized_still_fit_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let logs = tmp.path().join("logs");
+    let reports = tmp.path().join("crash-reports");
+    std::fs::create_dir_all(&logs).unwrap();
+
+    let pad = "xxxx ".repeat(76); // redact-нейтрально, см. тест бюджета выше
+    let body: String = (0..kali_desktop::backend::crash::CRASH_LOG_TAIL_LINES)
+        .map(|i| format!("line-{i}-{pad}\n"))
+        .collect();
+    for name in CRASH_LOG_FILES {
+        std::fs::write(logs.join(name), &body).unwrap();
+    }
+
+    let rep = build_report(&logs, &reports, &meta()).unwrap();
+
+    assert!(
+        rep.text.len() <= CRASH_REPORT_MAX_BYTES,
+        "суммарный отчёт {} > предела {CRASH_REPORT_MAX_BYTES}",
+        rep.text.len()
+    );
+    // clamp сработал в КАЖДОЙ секции, и в каждой уцелел свежий край
+    assert_eq!(
+        rep.text.matches("обрезано").count(),
+        CRASH_LOG_FILES.len(),
+        "clamp сработал не во всех секциях:\n{}",
+        &rep.text[..200]
+    );
+    assert_eq!(
+        rep.text.matches("line-399-").count(),
+        CRASH_LOG_FILES.len(),
+        "свежий край потерян не во всех секциях"
+    );
+    assert!(!rep.text.contains("line-0-"), "старый край не обрезан");
+}
+
+/// Регрессия: лог >1 MB БЕЗ единого перевода строки (один гигантский дамп).
+/// Отбрасывание частичной первой строки не должно отдавать ПУСТУЮ секцию —
+/// в окне ровно одна строка, и она единственное, что у нас есть.
+#[test]
+fn single_line_window_keeps_its_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let logs = tmp.path().join("logs");
+    let reports = tmp.path().join("crash-reports");
+    std::fs::create_dir_all(&logs).unwrap();
+    // 2 MB одной строкой → окно сканирования (1 MB) не содержит '\n'.
+    // Пад С ПРОБЕЛАМИ (та же причина, что в тесте бюджета): "Z".repeat(2MB) —
+    // сплошная alnum-руна, её схлопнул бы RE_B64_RUN в 14 байт, и тест проверял
+    // бы не то. Руны по 4 символа редактор не трогает. Не «упрощать» обратно.
+    let giant = "zzzz ".repeat(400_000); // 2 MB, ни одного '\n', redact-нейтрально
+    assert!(!giant.contains('\n') && giant.len() > 1024 * 1024, "фикстура не та");
+    std::fs::write(logs.join(CRASH_LOG_FILES[0]), &giant).unwrap();
+
+    let rep = build_report(&logs, &reports, &meta()).unwrap();
+    assert!(
+        rep.text.contains("zzzz zzzz"),
+        "секция пуста — фрагмент выброшен вместе с диагностикой:\n{}",
+        &rep.text[..300]
+    );
+    assert!(rep.text.len() <= CRASH_REPORT_MAX_BYTES, "отчёт {} > предела", rep.text.len());
+}
+
 #[test]
 fn empty_log_file_is_handled() {
     let tmp = tempfile::tempdir().unwrap();
