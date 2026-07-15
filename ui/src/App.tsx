@@ -14,6 +14,7 @@ import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { CrashReportPrompt } from "./components/CrashReportPrompt";
 import { useUpdaterStore } from "./stores/updaterStore";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -123,6 +124,10 @@ export default function App() {
           Джарвис просыпается — восстанавливаю связь… Если это надолго, перезапусти приложение.
         </div>
       ) : null}
+
+      {/* Crash opt-in: сам решает, показываться ли (поллит /crash/status).
+          Живёт рядом с kernelStage-баннером, но независимо от него. */}
+      <CrashReportPrompt />
 
       <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         {/* mode="wait" deadlocks if a mode view contains a shared `layoutId`
