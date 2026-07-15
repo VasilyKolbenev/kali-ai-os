@@ -68,6 +68,8 @@ getrandom = "0.2"
 # scans. Pure-Rust, reads the OS interface table (GetAdaptersAddresses on
 # Windows, getifaddrs on Unix); no network traffic.
 local-ip-address = "0.6"
+# crash-репорт: редакция секретов в логах перед показом/передачей.
+regex = "1"
 
 [features]
 ml-tests = []

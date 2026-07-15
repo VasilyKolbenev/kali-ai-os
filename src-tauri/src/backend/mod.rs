@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod config;
+pub mod crash;
 pub mod error;
 pub mod event_bus;
 pub mod http;

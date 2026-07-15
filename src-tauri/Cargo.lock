@@ -2136,6 +2136,7 @@ dependencies = [
  "local-ip-address",
  "ndarray",
  "ort",
+ "regex",
  "reqwest 0.12.28",
  "rodio",
  "rubato",
