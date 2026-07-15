@@ -1,5 +1,7 @@
 //! Сборка отчёта: хвост логов, фолбэк без логов, бюджет байтов, редакция.
-use kali_desktop::backend::crash::{build_report, CrashMeta, CRASH_LOG_FILES};
+use kali_desktop::backend::crash::{
+    build_report, CrashMeta, CRASH_LOG_FILES, CRASH_REASON_MAX_CHARS, CRASH_REPORT_MAX_BYTES,
+};
 
 fn meta() -> CrashMeta {
     CrashMeta {
@@ -59,7 +61,22 @@ fn missing_logs_produce_meta_only_report_not_an_error() {
     let reports = tmp.path().join("crash-reports");
     let rep = build_report(&logs, &reports, &meta()).unwrap();
     assert!(rep.text.contains("1.0.0-rc1"), "мета должна быть");
-    assert!(rep.text.contains("логи не найдены"), "нет честной пометки: {}", rep.text);
+    // Пер-файловая пометка ДЛЯ КАЖДОГО лога...
+    for name in CRASH_LOG_FILES {
+        assert!(
+            rep.text.contains(&format!("--- {name}: логи не найдены ---")),
+            "нет пер-файловой пометки для {name}: {}",
+            rep.text
+        );
+    }
+    // ...И отдельная сводка «вообще ничего не нашли». Раньше тест проходил на
+    // одной лишь пер-файловой строке, поэтому ветка `if !any_log` была
+    // неотличима от своего отсутствия.
+    assert!(
+        rep.text.contains("(логи не найдены — отчёт содержит только мету)"),
+        "нет сводки meta-only: {}",
+        rep.text
+    );
     assert!(rep.path.exists());
 }
 
@@ -119,4 +136,80 @@ fn empty_log_file_is_handled() {
     let rep = build_report(&logs, &reports, &meta()).unwrap();
     assert!(rep.path.exists());
     assert!(rep.text.contains("1.0.0-rc1"));
+
+    // Пустой ≠ отсутствующий: пустой err РЕНДЕРИТСЯ секцией (пустое тело), а не
+    // пометкой «не найдены»; отсутствующий out — наоборот. И раз хоть один лог
+    // прочитан, сводки meta-only быть НЕ должно. Раньше не проверялось ничего.
+    assert!(
+        rep.text.contains(&format!(
+            "--- {} (последние 400 строк, отредактировано) ---",
+            CRASH_LOG_FILES[0]
+        )),
+        "пустой лог должен рендериться секцией: {}",
+        rep.text
+    );
+    assert!(
+        !rep.text.contains(&format!("--- {}: логи не найдены ---", CRASH_LOG_FILES[0])),
+        "пустой лог помечен как отсутствующий: {}",
+        rep.text
+    );
+    assert!(
+        rep.text.contains(&format!("--- {}: логи не найдены ---", CRASH_LOG_FILES[1])),
+        "отсутствующий out должен быть помечен: {}",
+        rep.text
+    );
+    assert!(
+        !rep.text.contains("отчёт содержит только мету"),
+        "сводки meta-only быть не должно — err прочитан: {}",
+        rep.text
+    );
+}
+
+/// Minor-3 (ревью): в Chunk 2 `reason` приходит ИЗ ТЕЛА ЗАПРОСА =
+/// клиент-контролируем. Бюджет логов считается ПОСЛЕ шапки и её саму не
+/// ограничивает, поэтому без клампа большой `reason` уносил отчёт за
+/// `CRASH_REPORT_MAX_BYTES` (замерено ревьюером: 524563 > 262144) — и
+/// «жёсткий предел» переставал быть жёстким.
+#[test]
+fn oversized_client_supplied_reason_is_clamped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let logs = tmp.path().join("logs");
+    let reports = tmp.path().join("crash-reports");
+    std::fs::create_dir_all(&logs).unwrap();
+
+    let mut m = meta();
+    m.reason = Some("R".repeat(600_000));
+    let rep = build_report(&logs, &reports, &m).unwrap();
+
+    assert!(
+        rep.text.len() <= CRASH_REPORT_MAX_BYTES,
+        "отчёт {} > предела — reason не заклампан",
+        rep.text.len()
+    );
+    assert!(rep.text.contains("обрезано"), "нет маркера обрезки reason");
+    assert!(
+        !rep.text.contains(&"R".repeat(CRASH_REASON_MAX_CHARS + 1)),
+        "reason длиннее предела попал в отчёт"
+    );
+}
+
+/// Многобайтный `reason` не должен рваться посередине символа (кламп по
+/// СИМВОЛАМ, не байтам) — иначе отчёт был бы невалидным UTF-8/с U+FFFD.
+#[test]
+fn multibyte_reason_clamp_does_not_split_chars() {
+    let tmp = tempfile::tempdir().unwrap();
+    let logs = tmp.path().join("logs");
+    let reports = tmp.path().join("crash-reports");
+    std::fs::create_dir_all(&logs).unwrap();
+
+    let mut m = meta();
+    m.reason = Some("я".repeat(CRASH_REASON_MAX_CHARS * 3));
+    let rep = build_report(&logs, &reports, &m).unwrap();
+
+    assert!(!rep.text.contains('\u{FFFD}'), "reason разрублен посередине символа");
+    assert_eq!(
+        rep.text.matches('я').count(),
+        CRASH_REASON_MAX_CHARS,
+        "должно остаться ровно CRASH_REASON_MAX_CHARS символов"
+    );
 }
