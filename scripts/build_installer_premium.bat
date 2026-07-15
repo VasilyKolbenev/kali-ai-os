@@ -165,18 +165,24 @@ REM No-ops cleanly (returns 0) when KALI_SIGN_CERT is unset or signtool is
 REM missing, so today's unsigned build still succeeds. Signs automatically
 REM once Vasily provides the EV cert via KALI_SIGN_CERT (+ optional PASS).
 REM ===========================================================================
+REM Every exit path returns an EXPLICIT code. `goto :eof` would leak the
+REM caller's errorlevel: robocopy above returns 1 on SUCCESS ("files copied"),
+REM so a skip-path `goto :eof` left errorlevel=1 and the caller's
+REM `if errorlevel 1 exit /b 1` aborted a perfectly good build. That only
+REM surfaced once the backend was actually rebuilt (identical files -> robocopy
+REM returns 0 -> no leak), which is why rc1 built and rc2 did not.
 :sign
 if not defined KALI_SIGN_CERT (
     echo [sign] skipped — no cert configured ^(set KALI_SIGN_CERT to enable^)
-    goto :eof
+    exit /b 0
 )
 if not defined SIGNTOOL (
     echo [sign] skipped — signtool.exe not found ^(KALI_SIGN_CERT is set^)
-    goto :eof
+    exit /b 0
 )
 if not exist %1 (
     echo [sign] skipped — file not found: %1
-    goto :eof
+    exit /b 0
 )
 echo [sign] signing %1
 if defined KALI_SIGN_PASS (
@@ -188,4 +194,4 @@ if errorlevel 1 (
     echo ERROR: signing failed for %1
     exit /b 1
 )
-goto :eof
+exit /b 0
