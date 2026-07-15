@@ -147,7 +147,7 @@ pub fn load_or_create() -> Result<ControlPlaneToken> {
 
 /// True if the peer IP is loopback (`127.0.0.0/8` or `::1`), including
 /// IPv4-mapped IPv6 loopback (`::ffff:127.0.0.1`).
-fn is_loopback(ip: IpAddr) -> bool {
+pub(crate) fn is_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback(),
         IpAddr::V6(v6) => {

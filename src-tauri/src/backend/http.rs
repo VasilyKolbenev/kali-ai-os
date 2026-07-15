@@ -1,7 +1,8 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Json as ExtractJson, State},
+    extract::{ConnectInfo, Extension, Json as ExtractJson, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -10,7 +11,9 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 
+use crate::backend::auth;
 use crate::backend::config;
+use crate::backend::crash;
 use crate::backend::error::AppResult;
 use crate::backend::event_bus::EventBus;
 use crate::backend::ingestion;
@@ -636,6 +639,74 @@ async fn updater_install(
     }
 }
 
+// ── /crash/* (crash opt-in, нативный Rust) ────────────────────────
+//
+// Stateless: путей/стейта в Extension нет — всё резолвится в crash.rs.
+// `/crash/status` = «жив ли Python» (сам факт ответа доказывает, что Rust
+// :3006 жив, а значит /crash/report достижим). См. crash.rs + спеку.
+
+async fn crash_status() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "backend_alive": crash::probe_backend_alive().await }))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct CrashReportReq {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn crash_report(body: Option<ExtractJson<CrashReportReq>>) -> Response {
+    let reason = body.and_then(|ExtractJson(b)| b.reason);
+    let build = || -> anyhow::Result<crash::CrashReport> {
+        let (logs_dir, reports_dir) = crash::crash_paths()?;
+        let meta = crash::CrashMeta {
+            version: env!("CARGO_PKG_VERSION"),
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            ts: chrono::Utc::now().to_rfc3339(),
+            reason,
+        };
+        crash::build_report(&logs_dir, &reports_dir, &meta)
+    };
+    match build() {
+        Ok(rep) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "path": rep.path.display().to_string(),
+                "text": rep.text,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Loopback-only: спаренный LAN-телефон с валидным токеном не должен
+/// удалённо открывать проводник на десктопе. Клиентский путь НЕ принимаем.
+async fn crash_reveal(connect_info: Option<ConnectInfo<SocketAddr>>) -> Response {
+    let is_local = matches!(connect_info, Some(ConnectInfo(peer)) if auth::is_loopback(peer.ip()));
+    if !is_local {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "reveal доступен только локально" })),
+        )
+            .into_response();
+    }
+    let done = crash::crash_paths().and_then(|(_, reports_dir)| crash::reveal_reports_dir(&reports_dir));
+    match done {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Full constructor — every backend handle in one call. Tests + serve()
 /// converge on this; the older constructors below are thin wrappers
 /// that pass `None` for the handles they don't care about.
@@ -676,6 +747,9 @@ pub fn router_full(
         .route("/updater/check", post(updater_check))
         .route("/updater/download", post(updater_download))
         .route("/updater/install", post(updater_install))
+        .route("/crash/status", get(crash_status))
+        .route("/crash/report", post(crash_report))
+        .route("/crash/reveal", post(crash_reveal))
         .route("/ws", get(ws::handler))
         .route(
             "/_internal/events",
