@@ -265,16 +265,54 @@ def _get_ref() -> tuple[Any, int, str]:
     return _ref_cache
 
 
+def _max_chars_for_ref(ref_text: str, ref_seconds: float, speed: float) -> int:
+    """Byte budget for ONE F5 call — the formula `infer_process` uses itself.
+
+    F5 generates at most 22 s TOTAL (reference + speech), so the text that fits
+    shrinks as the reference grows: our 9.62 s reference leaves ~12.4 s ≈ 287
+    bytes. Budget is in BYTES (``chunk_text`` measures ``len(s.encode())``), and
+    Cyrillic costs 2 bytes per character — Russian gets ~143 characters where
+    Latin would get ~287.
+
+    Mirrors f5_tts/infer/utils_infer.py::infer_process. Kept a pure function so
+    the arithmetic is testable without a GPU or the model.
+    """
+    return int(len(ref_text.encode("utf-8")) / ref_seconds * (22 - ref_seconds) * speed)
+
+
+def _chunks_for_budget(
+    sentence: str, ref_text: str, ref_seconds: float, speed: float
+) -> list[str]:
+    """Split a sentence into batches F5 can actually finish speaking.
+
+    THE FAST PATH MUST NOT SKIP THIS. `infer_process` chunks before inferring;
+    when the fast path handed F5 an over-budget sentence whole, the model simply
+    stopped at the duration limit and the tail was never synthesized — heard as
+    "Jarvis doesn't finish his sentences" (root-caused 2026-07-15; regression
+    from the latency sprint that introduced this fast path).
+    """
+    from f5_tts.infer.utils_infer import chunk_text
+
+    budget = _max_chars_for_ref(ref_text, ref_seconds, speed)
+    return chunk_text(sentence, max_chars=budget) or [sentence]
+
+
 def _infer_sentence(f5: Any, sentence: str) -> np.ndarray:
     """One sentence through cached-ref infer_batch_process (fast path)."""
     from f5_tts.infer.utils_infer import infer_batch_process
 
     audio, sr, ref_text = _get_ref()
+    # Chunk to the duration budget first: F5 stops at 22 s total and silently
+    # drops whatever did not fit. infer_batch_process cross-fades the batches
+    # back together (cross_fade_duration), so this stays one call and one
+    # waveform — the fast path keeps its cached-ref win.
+    ref_seconds = audio.shape[-1] / sr
+    batches = _chunks_for_budget(sentence, ref_text, ref_seconds, SPEED)
     wav, _out_sr, _spec = next(
         infer_batch_process(
             (audio, sr),
             ref_text,
-            [sentence],
+            batches,
             f5.ema_model,
             f5.vocoder,
             mel_spec_type=f5.mel_spec_type,
