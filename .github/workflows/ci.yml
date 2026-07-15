@@ -110,8 +110,8 @@ jobs:
           # link.exe path; env beats config in cargo, so resolve the linker
           # from the msvc-dev-cmd PATH instead.
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
-      - name: Updater tests (network-free, no audio deps)
-        run: cargo test --test updater_core --test updater_download --test updater_flow --test updater_install --test updater_routes
+      - name: Rust native suites (loopback-only, no audio deps)
+        run: cargo test --test updater_core --test updater_download --test updater_flow --test updater_install --test updater_routes --test crash_redact --test crash_report --test crash_probe --test crash_routes
         working-directory: src-tauri
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
