@@ -18,6 +18,20 @@ REM   KALI_SIGN_TR_URL  RFC-3161 timestamp URL (default below)
 setlocal enableextensions
 cd /d "%~dp0\.."
 
+REM ---- Version comes from the .iss (single source of truth) ----------------
+REM NEVER hardcode it here: a stale literal made :sign target a non-existent
+REM file, and :sign no-ops (exit 0) on a missing file — so once KALI_SIGN_CERT
+REM is set the final installer would ship UNSIGNED while the build reported
+REM success. Parse `#define AppVersion "X"` instead.
+set "APPVER="
+for /f tokens^=2^ delims^=^" %%V in ('findstr /b /c:"#define AppVersion" scripts\installer_premium.iss') do set "APPVER=%%V"
+if not defined APPVER (
+    echo ERROR: could not read AppVersion from scripts\installer_premium.iss
+    exit /b 1
+)
+set "SETUP_EXE=dist_premium\installer\KALI-Premium-Setup-%APPVER%.exe"
+echo Building version %APPVER%
+
 REM ---- Resolve signtool.exe (optional; signing is skipped if absent) --------
 set "SIGNTOOL="
 for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
@@ -89,7 +103,7 @@ echo ============================================
 echo   Building KALI Premium installer via InnoSetup
 echo ============================================
 echo Source:  dist_premium\premium_stage\
-echo Output:  dist_premium\installer\KALI-Premium-Setup-0.2.0-beta.exe
+echo Output:  %SETUP_EXE% ^(+ .bin slices — DiskSpanning^)
 echo Compression: lzma2/ultra64 (slow but small)
 echo.
 echo This takes ~15-30 minutes for ~9 GB content. Be patient.
@@ -118,7 +132,14 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 REM Sign the final installer (5.2; no-op cleanly without a cert).
-call :sign "dist_premium\installer\KALI-Premium-Setup-0.2.0-beta.exe"
+REM Fail loudly if the artifact is missing: :sign silently skips absent files,
+REM so a wrong path here would ship an unsigned installer as a "successful" build.
+if not exist "%SETUP_EXE%" (
+    echo ERROR: expected installer not found: %SETUP_EXE%
+    echo ^(ISCC reported success — version mismatch between .iss and this script?^)
+    exit /b 1
+)
+call :sign "%SETUP_EXE%"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -126,12 +147,14 @@ echo ============================================
 echo   Build complete!
 echo ============================================
 echo.
-echo InnoSetup produced a single self-contained installer:
-echo   .exe   - one file, wizard UI + all content (no .bin slices)
+echo InnoSetup produced a DiskSpanning set — the bundle exceeds Inno's
+echo ~4.2 GB single-file limit, so slices are MANDATORY, not optional:
+echo   .exe   - wizard UI + first slice
+echo   .bin   - remaining slices, must sit NEXT TO the .exe
 echo.
-dir dist_premium\installer\KALI-Premium-Setup-0.2.0-beta*
+dir dist_premium\installer\KALI-Premium-Setup-%APPVER%*
 echo.
-echo Share the single .exe — the friend just downloads and runs it.
+echo Ship ALL of these together (zip them) — a missing .bin breaks the install.
 
 endlocal
 exit /b 0
