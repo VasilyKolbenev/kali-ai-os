@@ -2,10 +2,20 @@
 dist_premium/kali-backend actually work (headless tests cannot see
 DLL/lazy-import breakage — three such mines were live 2026-07-13).
 
-Boot the bundle first (KALI_PORT=3007 dist_premium\\kali-backend\\kali-backend.exe),
-then:
+Boot the bundle first, then:
 
     .venv\\Scripts\\python.exe scripts\\frozen_smoke.py --port 3007
+
+BOOT IT OFFLINE — this is load-bearing, not a nicety:
+
+    $env:KALI_PORT="3007"; $env:HF_HUB_OFFLINE="1"
+    dist_premium\\kali-backend\\kali-backend.exe
+
+Why: `whisper` passed on 1.0.0-rc1 while the bundled model was NEVER used — the
+dev machine's GLOBAL cache (~/.cache/huggingface) happened to hold the same
+model, so the check validated the machine, not the bundle. It only surfaced
+(2026-07-15) once that global cache was gone. With HF_HUB_OFFLINE=1 a bundle
+that has drifted back to the network/global cache FAILS here instead of lying.
 
 Checks (each PASS/FAIL, exit 1 on any FAIL):
   health    — /health answers, version matches kernel.__init__

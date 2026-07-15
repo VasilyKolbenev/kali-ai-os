@@ -270,6 +270,12 @@ def main() -> None:
         # transformers 5.x lazy-module loses `pipeline` under PyInstaller —
         # bind it eagerly before f5_tts imports (see the hook's docstring).
         "--runtime-hook", str(ROOT / "scripts" / "pyinstaller_hooks" / "rthook_transformers_pipeline.py"),
+        # HF_HOME must point at the bundled .hf_cache BEFORE anything imports
+        # huggingface_hub (it freezes the cache path at import time). Without
+        # this the 461 MB bundled Whisper model is ignored and STT dies offline
+        # / silently re-downloads — see the hook's docstring (rc1 hid this bug
+        # because the dev machine's global cache happened to hold the model).
+        "--runtime-hook", str(ROOT / "scripts" / "pyinstaller_hooks" / "rthook_hf_home.py"),
         "--exclude-module", "wandb",
     ]
 
