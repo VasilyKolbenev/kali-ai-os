@@ -1,7 +1,7 @@
 """Единый version source-of-truth для KALI (OPUS-002).
 
 Канонический источник — файл ``VERSION`` в корне репозитория (одна строка,
-semver с опциональным pre-release). Шесть desktop-источников обязаны совпадать
+semver с опциональным pre-release). Семь desktop-источников обязаны совпадать
 с ``VERSION``; mobile (``pubspec.yaml``) валидируется как ``X.Y.Z+N``, но не
 обязан равняться desktop-версии.
 
@@ -31,7 +31,7 @@ log = logging.getLogger("release.version")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DESKTOP_KEYS = ("pyproject", "kernel", "cargo_toml", "cargo_lock", "tauri", "iss")
+DESKTOP_KEYS = ("pyproject", "kernel", "cargo_toml", "cargo_lock", "tauri", "iss", "ui")
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?$")
 _MOBILE_RE = re.compile(r"^\d+\.\d+\.\d+\+\d+$")
@@ -127,6 +127,14 @@ def _read_iss(repo: Path) -> str:
     return m.group(1)
 
 
+def _read_ui(repo: Path) -> str:
+    data = json.loads((repo / "ui" / "package.json").read_text(encoding="utf-8"))
+    version = data.get("version")
+    if not isinstance(version, str):
+        _fail("VERSION_INVALID ui: top-level .version отсутствует или не строка")
+    return version
+
+
 def read_desktop_versions(repo: Path) -> dict[str, str]:
     """Собрать версии всех шести desktop-источников.
 
@@ -146,6 +154,7 @@ def read_desktop_versions(repo: Path) -> dict[str, str]:
         "cargo_lock": _read_cargo_lock(repo),
         "tauri": _read_tauri(repo),
         "iss": _read_iss(repo),
+        "ui": _read_ui(repo),
     }
 
 
@@ -272,6 +281,27 @@ def _sync_iss(repo: Path, new: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _sync_ui(repo: Path, new: str) -> None:
+    """Заменить только top-level ``version`` в ui/package.json без переформата.
+
+    Anchor валидируется через JSON-парс (top-level version — строка), затем
+    правится ровно первое текстовое вхождение ``"version": "…"`` (top-level идёт
+    первым): остальной JSON и вложенные ключи остаются байт-в-байт.
+
+    Raises:
+        SystemExit: 'VERSION_SYNC_FAILED', если top-level version отсутствует,
+            не строка, либо текстовый anchor не найден.
+    """
+    path = repo / "ui" / "package.json"
+    text = path.read_text(encoding="utf-8")
+    if not isinstance(json.loads(text).get("version"), str):
+        _fail("VERSION_SYNC_FAILED: ui/package.json: top-level .version отсутствует")
+    text, n = re.subn(r'("version"\s*:\s*")[^"]*(")', rf"\g<1>{new}\g<2>", text, count=1)
+    if n != 1:
+        _fail("VERSION_SYNC_FAILED: ui/package.json: .version не найдена")
+    path.write_text(text, encoding="utf-8")
+
+
 def sync(repo: Path) -> None:
     """Записать ``VERSION`` во все шесть desktop-источников идемпотентно.
 
@@ -293,6 +323,7 @@ def sync(repo: Path) -> None:
     _sync_cargo_lock(repo, new)
     _sync_tauri(repo, new)
     _sync_iss(repo, new)
+    _sync_ui(repo, new)
     check(repo)  # обязательная пост-сверка: convergence или VERSION_SKEW
 
 

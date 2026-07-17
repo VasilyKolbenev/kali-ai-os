@@ -22,7 +22,7 @@ BURNED_VERSIONS = ["1.0.0-rc1", "1.0.0-rc2"]
 # Реальный frozen rc2 (release-status.json) — не совпадёт с крошечными тест-байтами.
 FROZEN_RC2_SHA = "E0A0B2A395DD5C1D6A42ED82E235AD6A7CB9768409D71F70ED0CC91E5C5B5C1A"
 
-DESKTOP_KEYS = ("pyproject", "kernel", "cargo_toml", "cargo_lock", "tauri", "iss")
+DESKTOP_KEYS = ("pyproject", "kernel", "cargo_toml", "cargo_lock", "tauri", "iss", "ui")
 
 
 # ── хеши ──────────────────────────────────────────────────────────────────
@@ -164,6 +164,27 @@ def write_iss(repo: Path, version: str) -> None:
     (repo / "scripts" / "installer_premium.iss").write_text(text, encoding="utf-8")
 
 
+def write_ui(repo: Path, version: str, decoy: bool = False) -> None:
+    """ui/package.json: top-level version первым; decoy — вложенный "version" ПОСЛЕ.
+
+    Явный текст (не json.dumps): фиксирует порядок ключей и позволяет тесту
+    доказать, что sync не переформатирует остальной JSON.
+    """
+    (repo / "ui").mkdir(exist_ok=True)
+    lines = [
+        "{",
+        '  "name": "kali-ui",',
+        '  "private": true,',
+        f'  "version": "{version}",',
+        '  "type": "module",',
+    ]
+    if decoy:
+        lines.append('  "engines": { "version": "9.9.9" },')  # вложенный decoy ПОСЛЕ top-level
+    lines.append('  "dependencies": {}')
+    lines.append("}")
+    (repo / "ui" / "package.json").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_pubspec(repo: Path, mobile_version: str = "0.1.0+1",
                   decoy: bool = False) -> None:
     (repo / "mobile").mkdir(exist_ok=True)
@@ -188,6 +209,7 @@ def write_all_desktop(repo: Path, version: str, mobile_version: str = "0.1.0+1")
     write_cargo_lock(repo, version)
     write_tauri(repo, version)
     write_iss(repo, version)
+    write_ui(repo, version)
     write_pubspec(repo, mobile_version)
 
 
@@ -253,7 +275,7 @@ def write_manifest(dist: Path, version: str, git_sha: str, dirty: bool,
         "components": {
             "pyproject": version, "kernel": version, "cargo_toml": version,
             "cargo_lock": version, "tauri": version, "iss": version,
-            "mobile": mobile_version,
+            "ui": version, "mobile": mobile_version,
         },
         "generated_at": "2026-07-17T00:00:00+00:00",
         "assets": [

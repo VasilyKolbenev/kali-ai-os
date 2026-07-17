@@ -112,16 +112,19 @@ def _diverge(repo: Path, source: str, wrong: str) -> None:
         fx.write_tauri(repo, wrong)
     elif source == "iss":
         fx.write_iss(repo, wrong)
+    elif source == "ui":
+        fx.write_ui(repo, wrong)
 
 
-# ── 6. sync стягивает 6 разных неверных значений к VERSION ──────────────────
-def test_sync_writes_all_six_distinct_wrong_values(ver, tmp_path: Path) -> None:
+# ── 6. sync стягивает 7 разных неверных значений к VERSION ──────────────────
+def test_sync_writes_all_seven_distinct_wrong_values(ver, tmp_path: Path) -> None:
     fx.write_pyproject(tmp_path, "0.1.0")
     fx.write_kernel(tmp_path, "0.2.0")
     fx.write_cargo_toml(tmp_path, "0.3.0")
     fx.write_cargo_lock(tmp_path, "0.4.0")
     fx.write_tauri(tmp_path, "0.5.0")
     fx.write_iss(tmp_path, "0.6.0")
+    fx.write_ui(tmp_path, "0.7.0")
     fx.write_pubspec(tmp_path)                  # sync завершает check() → нужен pubspec
     fx.write_version_file(tmp_path, b"1.0.0-rc3\n")
 
@@ -153,6 +156,10 @@ def _break_anchor(repo: Path, source: str) -> None:
         (repo / "scripts").mkdir(exist_ok=True)
         (repo / "scripts" / "installer_premium.iss").write_text(
             "[Setup]\nAppName=KALI\n", encoding="utf-8")            # нет #define AppVersion
+    elif source == "ui":
+        (repo / "ui").mkdir(exist_ok=True)
+        (repo / "ui" / "package.json").write_text(
+            '{\n  "name": "kali-ui"\n}\n', encoding="utf-8")        # нет top-level version
 
 
 @pytest.mark.parametrize("source", list(fx.DESKTOP_KEYS))
@@ -223,6 +230,47 @@ def test_pubspec_invalid_format_rejected(ver, tmp_path: Path, bad: str) -> None:
     with pytest.raises(SystemExit) as exc:
         ver.read_mobile_version(tmp_path)
     assert "MOBILE_VERSION_INVALID" in str(exc.value)
+
+
+# ── 10b. ui/package.json: только top-level version; sync без переформатирования ─
+def test_ui_reads_top_level_version(ver, tmp_path: Path) -> None:
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    fx.write_ui(tmp_path, fx.VERSION, decoy=True)   # вложенный "engines".version 9.9.9
+    assert ver.read_desktop_versions(tmp_path)["ui"] == fx.VERSION
+
+
+@pytest.mark.parametrize("body", [
+    '{\n  "name": "kali-ui"\n}\n',                  # top-level version отсутствует
+    '{\n  "name": "kali-ui",\n  "version": 123\n}\n',  # version не строка
+])
+def test_ui_missing_or_nonstring_version_hard_fails(ver, tmp_path: Path, body: str) -> None:
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    (tmp_path / "ui" / "package.json").write_text(body, encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        ver.read_desktop_versions(tmp_path)
+    assert "ui" in str(exc.value)
+
+
+def test_sync_ui_updates_only_top_level_and_preserves_formatting(ver, tmp_path: Path) -> None:
+    """sync правит только top-level version; вложенный decoy и остальной JSON целы."""
+    fx.write_all_desktop(tmp_path, "1.0.0-rc2")
+    fx.write_ui(tmp_path, "1.0.0-rc2", decoy=True)   # вложенный "engines".version 9.9.9
+    fx.write_version_file(tmp_path, b"1.0.0-rc3\n")
+    before = (tmp_path / "ui" / "package.json").read_text(encoding="utf-8")
+
+    ver.sync(tmp_path)
+    after = (tmp_path / "ui" / "package.json").read_text(encoding="utf-8")
+
+    assert ver.read_desktop_versions(tmp_path)["ui"] == fx.VERSION  # top-level → rc3
+    assert '"version": "9.9.9"' in after                # вложенный decoy НЕ тронут
+    assert '"1.0.0-rc2"' not in after                   # stale top-level убран
+    # структурно: изменилась ровно одна строка (top-level version), формат сохранён
+    diff = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
+    assert diff == [('  "version": "1.0.0-rc2",', '  "version": "1.0.0-rc3",')]
+
+    after_first = (tmp_path / "ui" / "package.json").read_bytes()
+    ver.sync(tmp_path)                                   # идемпотентность
+    assert (tmp_path / "ui" / "package.json").read_bytes() == after_first
 
 
 # ── 11. manifest: реальный git SHA + dirty + component-map ──────────────────
