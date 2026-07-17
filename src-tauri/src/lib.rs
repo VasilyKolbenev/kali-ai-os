@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod startup;
 
 use std::fs::{self, File, OpenOptions};
 #[cfg(target_os = "windows")]
