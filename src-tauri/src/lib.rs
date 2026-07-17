@@ -472,6 +472,15 @@ pub fn run() {
     let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
 
     tauri::Builder::default()
+        // Single-instance ПЕРВЫМ плагином: второй запуск перехватывается до
+        // инициализации остального рантайма и лишь фокусирует существующее окно.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(StartupCell {
