@@ -4,10 +4,10 @@ mod startup;
 use std::fs::{self, File, OpenOptions};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,8 +27,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const STARTUP_EVENT: &str = "startup://state";
 /// Период тика supervisor (пробуждается раньше по shutdown через Condvar).
 const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
-/// Ограниченное ожидание ack при shutdown (bounded join).
+/// Ограниченное ожидание ack при shutdown (bounded).
 const SHUTDOWN_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+/// Предел тела /health (защита от зависшего/огромного ответа).
+const HEALTH_BODY_LIMIT: u64 = 64 * 1024;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -42,15 +44,9 @@ struct StartupCell {
     t_paint: Mutex<Option<Instant>>,
 }
 
-/// Идемпотентный shutdown desktop-shell: флаг + Condvar-будильник + ack.
-struct ShutdownControl {
-    flag: Arc<AtomicBool>,
-    waker: Arc<Waker>,
-    ack: Mutex<Option<Receiver<()>>>,
-    done: AtomicBool,
-}
-
 /// Condvar-будильник: supervisor спит на нём (без busy-wait), shutdown будит.
+/// `wait` использует predicate — wake-before-wait возвращается сразу, а после
+/// consume флаг сбрасывается (устойчиво к lost-wake).
 struct Waker {
     m: Mutex<bool>,
     cv: Condvar,
@@ -63,15 +59,66 @@ impl Waker {
             cv: Condvar::new(),
         }
     }
-    /// Ждать до `dur` либо до пробуждения (shutdown).
     fn wait(&self, dur: Duration) {
         let guard = self.m.lock().unwrap();
-        let _ = self.cv.wait_timeout(guard, dur);
+        let (mut guard, _) = self
+            .cv
+            .wait_timeout_while(guard, dur, |woken| !*woken)
+            .unwrap();
+        *guard = false; // consume: сброс флага
     }
     fn wake(&self) {
         *self.m.lock().unwrap() = true;
         self.cv.notify_all();
     }
+}
+
+/// Результат попытки graceful shutdown.
+#[derive(Debug, PartialEq, Eq)]
+enum ShutdownResult {
+    Completed,
+    Timeout,
+    Disconnected,
+}
+
+/// Идемпотентный shutdown: флаг + будильник + ack. `done` ставится ТОЛЬКО после
+/// подтверждённого ack; при timeout receiver сохраняется (cleanup retryable).
+struct ShutdownControl {
+    flag: Arc<AtomicBool>,
+    waker: Arc<Waker>,
+    ack: Mutex<Option<Receiver<()>>>,
+    done: AtomicBool,
+}
+
+/// Попытка graceful shutdown с ограниченным ожиданием ack.
+fn attempt_shutdown(ctl: &ShutdownControl, timeout: Duration) -> ShutdownResult {
+    if ctl.done.load(Ordering::SeqCst) {
+        return ShutdownResult::Completed;
+    }
+    ctl.flag.store(true, Ordering::SeqCst);
+    ctl.waker.wake();
+    let mut guard = ctl.ack.lock().unwrap();
+    let recv = match guard.take() {
+        Some(r) => r,
+        None => return ShutdownResult::Completed,
+    };
+    match recv.recv_timeout(timeout) {
+        Ok(()) => {
+            ctl.done.store(true, Ordering::SeqCst);
+            ShutdownResult::Completed
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            *guard = Some(recv); // не терять receiver → cleanup retryable
+            ShutdownResult::Timeout
+        }
+        Err(RecvTimeoutError::Disconnected) => ShutdownResult::Disconnected,
+    }
+}
+
+/// Только выставить флаг+wake (Destroyed): не потребляет ack.
+fn signal_shutdown_only(ctl: &ShutdownControl) {
+    ctl.flag.store(true, Ordering::SeqCst);
+    ctl.waker.wake();
 }
 
 /// Машинный label состояния (фронт мапит 1:1); pure-enum остаётся Tauri-free.
@@ -112,14 +159,6 @@ fn get_startup_state(app: AppHandle) -> String {
     label
 }
 
-fn backend_http_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(1)))
-        .timeout_send_request(Some(Duration::from_secs(1)))
-        .build()
-        .new_agent()
-}
-
 fn runtime_data_dir() -> PathBuf {
     match std::env::var_os("APPDATA") {
         Some(path) => PathBuf::from(path).join("KALI"),
@@ -131,20 +170,17 @@ fn runtime_data_dir() -> PathBuf {
     }
 }
 
-fn backend_log_files() -> std::io::Result<(File, File)> {
-    let logs_dir = runtime_data_dir().join("logs");
-    fs::create_dir_all(&logs_dir)?;
-    let stdout = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(logs_dir.join("kali-backend.out.log"))?;
-    let stderr = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(logs_dir.join("kali-backend.err.log"))?;
-    Ok((stdout, stderr))
+/// Открыть backend-логи в APPEND-режиме (respawn НЕ truncate: crash-маркер из
+/// spawn #1 переживает spawn #2).
+fn open_backend_logs(logs_dir: &Path) -> std::io::Result<(File, File)> {
+    fs::create_dir_all(logs_dir)?;
+    let open = |name: &str| {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logs_dir.join(name))
+    };
+    Ok((open("kali-backend.out.log")?, open("kali-backend.err.log")?))
 }
 
 /// Путь backend через pure `resolve_backend_path` (реальная FS-проба).
@@ -157,25 +193,52 @@ fn find_backend() -> Option<PathBuf> {
 
 // ── реальные адаптеры pure-трейтов ───────────────────────────────────────────
 
-/// Обёртка над `std::process::Child`, реализующая `ChildHandle`.
-struct RealChild(Child);
+/// Минимальные ops над дочерним процессом (seam для тестирования terminate-гонки).
+trait RawProc {
+    /// `true` = процесс завершён (reaped).
+    fn poll_exited(&mut self) -> std::io::Result<bool>;
+    fn kill(&mut self) -> std::io::Result<()>;
+    fn wait(&mut self) -> std::io::Result<()>;
+}
 
-impl ChildHandle for RealChild {
+impl RawProc for Child {
+    fn poll_exited(&mut self) -> std::io::Result<bool> {
+        Ok(self.try_wait()?.is_some())
+    }
+    fn kill(&mut self) -> std::io::Result<()> {
+        Child::kill(self)
+    }
+    fn wait(&mut self) -> std::io::Result<()> {
+        Child::wait(self).map(|_| ())
+    }
+}
+
+/// Обёртка над процессом, реализующая `ChildHandle` (обобщена по `RawProc`).
+struct RealChild<P: RawProc>(P);
+
+impl<P: RawProc> ChildHandle for RealChild<P> {
     fn try_alive(&mut self) -> std::io::Result<bool> {
-        // Some(status) = завершён (reaped); None = ещё жив.
-        Ok(self.0.try_wait()?.is_none())
+        Ok(!self.0.poll_exited()?)
     }
     fn terminate_and_wait(&mut self) -> std::io::Result<()> {
-        // Идемпотентно: kill уже завершённого возвращает Err — игнорируем;
-        // wait реапит (в т.ч. уже завершённого возвращает кэш-статус).
-        let _ = self.0.kill();
-        self.0.wait()?; // wait — часть успешной termination
-        Ok(())
+        if self.0.poll_exited()? {
+            return Ok(()); // уже завершён → без blocking wait
+        }
+        match self.0.kill() {
+            Ok(()) => self.0.wait(), // жив → kill затем wait (wait — часть успеха)
+            Err(kill_err) => {
+                // race: процесс мог выйти между poll и kill. Проверяем НЕблокирующе;
+                // exit → success, иначе исходная kill-ошибка (без blocking wait).
+                match self.0.poll_exited() {
+                    Ok(true) => Ok(()),
+                    _ => Err(kill_err),
+                }
+            }
+        }
     }
 }
 
 /// Отобразить HTTP-ответ :3005/health в `ProbeStatus` (ownership по instance-ID).
-/// Чистая — юнит-тестируемая без сети.
 fn classify_health(status: u16, body: &str, expected: Option<&str>) -> ProbeStatus {
     if status != 200 {
         return ProbeStatus::Unhealthy;
@@ -193,15 +256,50 @@ fn classify_health(status: u16, body: &str, expected: Option<&str>) -> ProbeStat
     }
 }
 
-/// Реальный HealthProbe: GET :3005/health, сверка `desktop_instance_id`.
-struct RealProbe;
+/// Reusable ureq-agent с bounded-таймаутами (зависший listener не блокирует).
+fn probe_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .timeout_connect(Some(Duration::from_secs(1)))
+        .timeout_recv_response(Some(Duration::from_secs(2)))
+        .timeout_recv_body(Some(Duration::from_secs(2)))
+        .build()
+        .new_agent()
+}
+
+/// Реальный HealthProbe: один reusable agent; GET /health, сверка instance-ID.
+struct RealProbe {
+    agent: ureq::Agent,
+    url: String,
+}
+
+impl RealProbe {
+    fn new() -> Self {
+        RealProbe {
+            agent: probe_agent(),
+            url: BACKEND_HEALTH_URL.to_string(),
+        }
+    }
+    #[cfg(test)]
+    fn with_url(url: String) -> Self {
+        RealProbe {
+            agent: probe_agent(),
+            url,
+        }
+    }
+}
 
 impl HealthProbe for RealProbe {
     fn status(&self, expected: Option<&str>) -> ProbeStatus {
-        match backend_http_agent().get(BACKEND_HEALTH_URL).call() {
+        match self.agent.get(&self.url).call() {
             Ok(mut resp) => {
                 let code = resp.status().as_u16();
-                let body = resp.body_mut().read_to_string().unwrap_or_default();
+                let body = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(HEALTH_BODY_LIMIT)
+                    .read_to_string()
+                    .unwrap_or_default();
                 classify_health(code, &body, expected)
             }
             // connection failure / timeout → бэкенд не отвечает.
@@ -214,8 +312,8 @@ impl HealthProbe for RealProbe {
 struct RealSpawner;
 
 impl startup::BackendSpawner for RealSpawner {
-    type Handle = RealChild;
-    fn spawn(&mut self) -> std::io::Result<Spawned<RealChild>> {
+    type Handle = RealChild<Child>;
+    fn spawn(&mut self) -> std::io::Result<Spawned<RealChild<Child>>> {
         let backend_exe = find_backend().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "kali-backend.exe not found")
         })?;
@@ -235,10 +333,13 @@ impl startup::BackendSpawner for RealSpawner {
         }
         #[cfg(target_os = "windows")]
         command.creation_flags(CREATE_NO_WINDOW);
-        if let Ok((stdout, stderr)) = backend_log_files() {
-            command
-                .stdout(Stdio::from(stdout))
-                .stderr(Stdio::from(stderr));
+        match open_backend_logs(&runtime_data_dir().join("logs")) {
+            Ok((stdout, stderr)) => {
+                command
+                    .stdout(Stdio::from(stdout))
+                    .stderr(Stdio::from(stderr));
+            }
+            Err(err) => eprintln!("backend log open failed (non-fatal): {err}"),
         }
         let child = command.spawn()?;
         eprintln!(
@@ -282,8 +383,8 @@ fn run_supervisor(
     ack_tx: Sender<()>,
 ) {
     let exe_present = find_backend().is_some();
-    let mut ctx: SuperviseCtx<RealChild> = SuperviseCtx::new(exe_present);
-    let probe = RealProbe;
+    let mut ctx: SuperviseCtx<RealChild<Child>> = SuperviseCtx::new(exe_present);
+    let probe = RealProbe::new();
     let mut spawner = RealSpawner;
     let clock = RealClock;
     loop {
@@ -313,18 +414,22 @@ fn run_supervisor(
     let _ = ack_tx.send(()); // ack: backend остановлен
 }
 
-/// Идемпотентный graceful shutdown: флаг + будильник + ограниченный ack.
-fn trigger_shutdown(app: &AppHandle) {
-    let ctl = app.state::<ShutdownControl>();
-    if ctl.done.swap(true, Ordering::SeqCst) {
-        return; // уже выполнено (ExitRequested → Exit → Destroyed идемпотентны)
-    }
-    ctl.flag.store(true, Ordering::SeqCst);
-    ctl.waker.wake();
-    let taken = ctl.ack.lock().unwrap().take();
-    if let Some(ack) = taken {
-        let _ = ack.recv_timeout(SHUTDOWN_ACK_TIMEOUT); // bounded join
-    }
+/// Зарегистрировать глобальный шорткат (возвращает Result — вызывать fail-soft).
+fn register_global_shortcut(app: &AppHandle) -> Result<(), tauri_plugin_global_shortcut::Error> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    app.global_shortcut()
+        .on_shortcut("CmdOrCtrl+Space", |handle: &AppHandle, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                if let Some(window) = handle.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        })
 }
 
 pub fn run() {
@@ -355,123 +460,50 @@ pub fn run() {
             done: AtomicBool::new(false),
         })
         .setup(move |app| {
-            // 1) axum-поток ПЕРВЫМ; шлёт authoritative bind-результат.
+            // Шорткат ПЕРВЫМ и fail-soft: сбой хоткея не должен абортить boot
+            // (иначе после spawn потоков setup вернул бы Err и утёк бы поток).
+            if let Err(e) = register_global_shortcut(app.handle()) {
+                eprintln!("global shortcut registration failed (non-fatal): {e}");
+            }
+            // axum-поток ПЕРВЫМ; шлёт authoritative bind-результат.
             let (bind_tx, bind_rx) = std::sync::mpsc::channel::<BindOutcome>();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
                     .expect("build tokio runtime");
-                if let Err(err) = rt.block_on(backend::serve(bind_tx)) {
+                if let Err(err) = rt.block_on(backend::serve_with_bind_signal(bind_tx)) {
                     eprintln!("Rust backend exited: {:#}", err);
                 }
             });
-
-            // 2) supervisor-поток: единственный owner Python (spawn/health/backoff).
+            // supervisor-поток: единственный owner Python (spawn/health/backoff).
             let sup_app = app.handle().clone();
             std::thread::spawn(move || {
                 run_supervisor(sup_app, bind_rx, shutdown, waker, ack_tx);
             });
-
-            // 3) shortcut и НЕМЕДЛЕННЫЙ возврат — event loop сразу рисует webview.
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-            app.global_shortcut().on_shortcut(
-                "CmdOrCtrl+Space",
-                |handle: &AppHandle, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                    }
-                },
-            )?;
-            Ok(())
+            Ok(()) // после spawn — гарантированный Ok (нет fallible-хвоста)
         })
         .invoke_handler(tauri::generate_handler![greet, get_startup_state])
         .build(tauri::generate_context!())
         .expect("error while building KALI")
         .run(|app, event| match event {
-            // ExitRequested/Exit идемпотентны; Destroyed — дополнительный сигнал.
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                trigger_shutdown(app);
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                // Не выходить, пока cleanup не подтверждён реальным ack.
+                match attempt_shutdown(&app.state::<ShutdownControl>(), SHUTDOWN_ACK_TIMEOUT) {
+                    ShutdownResult::Completed => {}
+                    ShutdownResult::Timeout | ShutdownResult::Disconnected => api.prevent_exit(),
+                }
+            }
+            tauri::RunEvent::Exit => {
+                let _ = attempt_shutdown(&app.state::<ShutdownControl>(), SHUTDOWN_ACK_TIMEOUT);
             }
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::Destroyed,
                 ..
-            } => trigger_shutdown(app),
+            } => signal_shutdown_only(&app.state::<ShutdownControl>()),
             _ => {}
         });
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_health_matching_id_owned() {
-        let body = r#"{"status":"ok","desktop_instance_id":"id-1"}"#;
-        assert_eq!(
-            classify_health(200, body, Some("id-1")),
-            ProbeStatus::OwnedHealthy
-        );
-    }
-
-    #[test]
-    fn classify_health_wrong_id_foreign() {
-        let body = r#"{"desktop_instance_id":"other"}"#;
-        assert_eq!(
-            classify_health(200, body, Some("id-1")),
-            ProbeStatus::ForeignHealthy
-        );
-    }
-
-    #[test]
-    fn classify_health_missing_id_foreign() {
-        let body = r#"{"status":"ok"}"#; // ручной запуск: id == null/absent
-        assert_eq!(
-            classify_health(200, body, Some("id-1")),
-            ProbeStatus::ForeignHealthy
-        );
-    }
-
-    #[test]
-    fn classify_health_non_200_unhealthy() {
-        assert_eq!(
-            classify_health(503, "{}", Some("id-1")),
-            ProbeStatus::Unhealthy
-        );
-    }
-
-    #[test]
-    fn classify_health_bad_json_foreign_not_panic() {
-        assert_eq!(
-            classify_health(200, "not-json", Some("id-1")),
-            ProbeStatus::ForeignHealthy
-        );
-    }
-
-    #[test]
-    fn real_child_lifecycle_try_alive_and_terminate() {
-        // Живой процесс: ping loopback ~5с (кросс-платформенно завершится сам).
-        #[cfg(target_os = "windows")]
-        let mut c = Command::new("cmd");
-        #[cfg(target_os = "windows")]
-        c.args(["/c", "ping", "127.0.0.1", "-n", "10"]);
-        #[cfg(not(target_os = "windows"))]
-        let mut c = Command::new("sleep");
-        #[cfg(not(target_os = "windows"))]
-        c.arg("10");
-        let child = c.spawn().expect("spawn test child");
-        let mut rc = RealChild(child);
-        assert!(rc.try_alive().unwrap(), "только что запущен → alive");
-        rc.terminate_and_wait().expect("terminate живого");
-        assert!(!rc.try_alive().unwrap(), "после terminate → not alive");
-        // идемпотентность: повтор terminate уже завершённого — Ok, handle цел.
-        rc.terminate_and_wait().expect("terminate идемпотентен");
-    }
-}
+mod tests;

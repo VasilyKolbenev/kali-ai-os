@@ -61,11 +61,17 @@ fn resolve_bind_addr() -> String {
     }
 }
 
+/// Standalone-старт axum (:3006) — для `backend_dev` bin; bind-сигнал не нужен.
+pub async fn serve() -> anyhow::Result<()> {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    serve_with_bind_signal(tx).await
+}
+
 /// Стартовать Rust axum (:3006), отправив authoritative bind-результат в
 /// `bind_tx`. `AddrInUse` → `PortOccupied`; любая другая pre-bind/bind ошибка
 /// возвращается как `Err` БЕЗ отправки — вызывающий трактует dropped-sender
 /// (channel disconnect) как `RustStartupFailed`, не «порт занят».
-pub async fn serve(
+pub async fn serve_with_bind_signal(
     bind_tx: std::sync::mpsc::Sender<crate::startup::BindOutcome>,
 ) -> anyhow::Result<()> {
     let bus = Arc::new(event_bus::EventBus::new());
