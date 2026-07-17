@@ -2,11 +2,11 @@
 //!
 //! Нет `std::process::Child`/`ureq`/`AppHandle` — supervision выражен над
 //! инъектируемыми трейтами (`ChildHandle`/`HealthProbe`/`BackendSpawner`/`Clock`/
-//! `ShutdownSignal`), поэтому A3-инварианты (ownership по instance-ID, spawn-once,
-//! PORT_OCCUPIED, FOREIGN_BACKEND, bounded restart, Crashed/SpawnFailed,
-//! no-kill-while-alive, reap-fail-closed, shutdown-kill) тестируются БЕЗ реальных
-//! OS-процессов. `lib.rs` — тонкий адаптер. Несёт только process-liveness, НЕ
-//! прогресс загрузки моделей (OPUS-102 = отдельный трек).
+//! `ShutdownSignal`), поэтому A3-инварианты (ownership по instance-ID, typed
+//! liveness, PORT_OCCUPIED, FOREIGN_BACKEND, bounded restart, Crashed/SpawnFailed,
+//! terminate-retry, reap-fail-closed) тестируются БЕЗ реальных OS-процессов.
+//! `lib.rs` — тонкий адаптер. Несёт только process-liveness, НЕ прогресс загрузки
+//! моделей (OPUS-102 = отдельный трек).
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +25,8 @@ pub enum DegradedReason {
     Crashed,
     /// `spawn()` не удался (отдельная причина, не маскируется загрузкой).
     SpawnFailed,
+    /// Статус процесса неизвестен (`try_alive` вернул io-ошибку) — восстановимо.
+    ProcessStatusUnknown,
     /// Исчерпан лимит респавнов (терминально).
     GaveUp,
 }
@@ -40,6 +42,17 @@ pub enum StartupState {
     Failed(String),
 }
 
+/// Типизированная живость tracked-процесса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// Нет tracked child.
+    Absent,
+    /// Tracked child жив.
+    Alive,
+    /// `try_alive` вернул io-ошибку — статус неизвестен, handle сохранён.
+    Unknown,
+}
+
 /// Типизированный вердикт health-probe (:3005) с проверкой ownership по ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeStatus {
@@ -51,7 +64,7 @@ pub enum ProbeStatus {
     ForeignHealthy,
 }
 
-/// Решение supervisor над (tracked_alive, ProbeStatus).
+/// Решение supervisor над (Liveness, ProbeStatus).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Порт свободен, нашего child нет — запускаем.
@@ -62,6 +75,8 @@ pub enum Action {
     Ready,
     /// Порт держит чужой/orphan процесс — ни spawn, ни Ready.
     Foreign,
+    /// Статус процесса неизвестен — ни spawn, ни Ready (fail-closed).
+    Unknown,
 }
 
 /// Входные события `next_state`.
@@ -79,11 +94,13 @@ pub enum HealthEvent {
     PythonUnhealthyAlive,
     /// :3005 healthy, но не наш (foreign ID) либо без tracked child.
     ForeignHealthy,
+    /// `try_alive` вернул io-ошибку (liveness Unknown).
+    ProcessUnknown,
     /// Наш backend упал во время работы/backoff.
     Crashed,
     /// `spawn()` вернул io-ошибку.
     SpawnFailed,
-    /// `kill()` вернул io-ошибку (отражаем в состоянии).
+    /// `terminate_and_wait()` вернул io-ошибку (отражаем в состоянии).
     KillFailed,
     /// Backoff исчерпан — терминально.
     GaveUp,
@@ -99,21 +116,29 @@ pub enum LoopControl {
 /// Абстракция над дочерним процессом; io-ошибки видимы (fail-closed).
 pub trait ChildHandle {
     /// Жив ли процесс (реализация делает reap через `try_wait`).
-    /// `Err` ⇒ вызывающий сохраняет handle и трактует как alive (fail-closed).
+    /// `Err` ⇒ вызывающий сохраняет handle и трактует как `Unknown`.
     fn try_alive(&mut self) -> io::Result<bool>;
-    /// Завершить процесс; `Err` отражается состоянием.
-    fn kill(&mut self) -> io::Result<()>;
+    /// Убить процесс И дождаться его (`wait` — часть успешной termination).
+    /// `Err` ⇒ handle НЕ теряется, termination повторяется на следующем шаге.
+    fn terminate_and_wait(&mut self) -> io::Result<()>;
 }
 
-/// HTTP-health probe Python-backend (:3005) с проверкой ownership по instance-ID.
+/// Порождённый backend вместе с его per-spawn instance-ID (ownership-контракт).
+pub struct Spawned<H> {
+    pub handle: H,
+    pub instance_id: String,
+}
+
+/// HTTP-health probe Python-backend (:3005). Сравнивает `desktop_instance_id`
+/// из `/health` с ожидаемым ID нашего tracked child (ownership по ID).
 pub trait HealthProbe {
-    fn status(&self) -> ProbeStatus;
+    fn status(&self, expected_instance_id: Option<&str>) -> ProbeStatus;
 }
 
-/// Порождение Python-backend; возвращает `ChildHandle`, не хранит `Child` в pure-коде.
+/// Порождение Python-backend; возвращает `Spawned` (handle + свежий instance-ID).
 pub trait BackendSpawner {
     type Handle: ChildHandle;
-    fn spawn(&mut self) -> io::Result<Self::Handle>;
+    fn spawn(&mut self) -> io::Result<Spawned<Self::Handle>>;
 }
 
 /// Источник времени (инъекция для виртуального времени в тестах).
@@ -134,8 +159,8 @@ impl ShutdownSignal for AtomicBool {
 }
 
 /// Порядковый ранг для инварианта «RustReady предшествует Python*».
-/// Soft-degraded (Foreign/NotFound/Crashed/SpawnFailed) = 1: Rust уже забиндил,
-/// проблема Python-слоя, из неё допустимо восстановление вперёд.
+/// Soft-degraded (Foreign/NotFound/Crashed/SpawnFailed/ProcessStatusUnknown) = 1:
+/// Rust уже забиндил, проблема Python-слоя, восстановление вперёд допустимо.
 fn rank(s: &StartupState) -> u8 {
     match s {
         StartupState::ShellReady => 0,
@@ -159,8 +184,17 @@ fn is_hard_terminal(s: &StartupState) -> bool {
     )
 }
 
-/// Чистая transition-функция. Терминал поглощает stale; Python*-события не
-/// действуют до `RustReady`; `RustBindErr`/`GaveUp`/`KillFailed` — терминальны.
+/// Переход разрешён только после `RustReady` (Rust-gate). До него — no-op.
+fn guard_after_rust(cur: StartupState, target: StartupState) -> StartupState {
+    if rank(&cur) >= rank(&StartupState::RustReady) {
+        target
+    } else {
+        cur
+    }
+}
+
+/// Чистая transition-функция. Терминал поглощает stale; Python/Degraded-события
+/// не действуют до `RustReady`; `RustBindErr`/`GaveUp`/`KillFailed` — терминальны.
 pub fn next_state(cur: StartupState, ev: HealthEvent) -> StartupState {
     use DegradedReason::*;
     use HealthEvent as E;
@@ -174,34 +208,29 @@ pub fn next_state(cur: StartupState, ev: HealthEvent) -> StartupState {
         E::KillFailed => S::Failed("kill failed".into()),
         E::RustBindOk if rank(&cur) < rank(&S::RustReady) => S::RustReady,
         E::RustBindOk => cur,
-        E::ExeMissing => S::Degraded(NotFound),
-        E::ForeignHealthy => S::Degraded(ForeignBackend),
-        E::PythonHealthyOwned => guard_python(cur, S::PythonReady),
-        E::PythonUnhealthyAlive => guard_python(cur, S::PythonStarting),
-        E::Crashed => guard_python(cur, S::Degraded(Crashed)),
-        E::SpawnFailed => guard_python(cur, S::Degraded(SpawnFailed)),
+        E::ExeMissing => guard_after_rust(cur, S::Degraded(NotFound)),
+        E::ForeignHealthy => guard_after_rust(cur, S::Degraded(ForeignBackend)),
+        E::ProcessUnknown => guard_after_rust(cur, S::Degraded(ProcessStatusUnknown)),
+        E::PythonHealthyOwned => guard_after_rust(cur, S::PythonReady),
+        E::PythonUnhealthyAlive => guard_after_rust(cur, S::PythonStarting),
+        E::Crashed => guard_after_rust(cur, S::Degraded(Crashed)),
+        E::SpawnFailed => guard_after_rust(cur, S::Degraded(SpawnFailed)),
     }
 }
 
-/// Python*-переход разрешён только если Rust уже забиндил (rank >= RustReady).
-fn guard_python(cur: StartupState, target: StartupState) -> StartupState {
-    if rank(&cur) >= rank(&StartupState::RustReady) {
-        target
-    } else {
-        cur
-    }
-}
-
-/// Truth-table решения над (tracked_alive, ProbeStatus). `Ready` только при
-/// живом tracked child + `OwnedHealthy` (ID совпал). Занятый порт без нашего
-/// живого child (в т.ч. чужой ID) → `Foreign` (ни spawn, ни Ready).
-pub fn classify(tracked_alive: bool, probe: ProbeStatus) -> Action {
-    match (tracked_alive, probe) {
-        (true, ProbeStatus::OwnedHealthy) => Action::Ready,
-        (true, ProbeStatus::Unhealthy) => Action::Starting,
-        (true, ProbeStatus::ForeignHealthy) => Action::Foreign,
-        (false, ProbeStatus::Unhealthy) => Action::Spawn,
-        (false, _) => Action::Foreign,
+/// Truth-table над (Liveness, ProbeStatus). `Ready` только при `Alive` +
+/// `OwnedHealthy` (ID совпал). `Unknown` liveness → `Unknown` (ни Ready, ни Spawn).
+/// Занятый порт без нашего живого child (в т.ч. чужой ID) → `Foreign`.
+pub fn classify(liveness: Liveness, probe: ProbeStatus) -> Action {
+    use Liveness as L;
+    use ProbeStatus as P;
+    match (liveness, probe) {
+        (L::Unknown, _) => Action::Unknown,
+        (L::Alive, P::OwnedHealthy) => Action::Ready,
+        (L::Alive, P::Unhealthy) => Action::Starting,
+        (L::Alive, P::ForeignHealthy) => Action::Foreign,
+        (L::Absent, P::Unhealthy) => Action::Spawn,
+        (L::Absent, _) => Action::Foreign,
     }
 }
 
@@ -245,19 +274,18 @@ pub fn resolve_backend_path(
     candidates.into_iter().find(|p| exists(p))
 }
 
-/// Reap: `try_alive()` → «tracked==alive»; чистит слот ДО решения. **Fail-closed:**
-/// io-ошибка `try_alive` ⇒ handle сохраняется и трактуется как alive (никогда не
-/// приведёт к spawn второго backend).
-pub fn reap_tracked<H: ChildHandle>(slot: &mut Option<H>) -> bool {
+/// Reap tracked-процесса → `Liveness`. Подтверждённый exit (`Ok(false)`) чистит
+/// слот (handle+ID). `Err` → `Unknown`, слот СОХРАНЯЕТСЯ (fail-closed).
+pub fn reap_tracked<H: ChildHandle>(slot: &mut Option<Spawned<H>>) -> Liveness {
     match slot.as_mut() {
-        None => false,
-        Some(c) => match c.try_alive() {
-            Ok(true) => true,
+        None => Liveness::Absent,
+        Some(sp) => match sp.handle.try_alive() {
+            Ok(true) => Liveness::Alive,
             Ok(false) => {
                 *slot = None;
-                false
+                Liveness::Absent
             }
-            Err(_) => true,
+            Err(_) => Liveness::Unknown,
         },
     }
 }
@@ -265,7 +293,7 @@ pub fn reap_tracked<H: ChildHandle>(slot: &mut Option<H>) -> bool {
 /// Состояние supervision-цикла (единственный поток → без reservation слота).
 pub struct SuperviseCtx<H: ChildHandle> {
     pub state: StartupState,
-    pub child: Option<H>,
+    pub tracked: Option<Spawned<H>>,
     pub failures: Vec<Instant>,
     pub backoff_until: Option<Instant>,
     /// None=bind ещё не резолвлен, Some(true)=ok, Some(false)=порт занят.
@@ -282,7 +310,7 @@ impl<H: ChildHandle> SuperviseCtx<H> {
     pub fn new(exe_present: bool) -> Self {
         SuperviseCtx {
             state: StartupState::ShellReady,
-            child: None,
+            tracked: None,
             failures: Vec::new(),
             backoff_until: None,
             rust_bound: None,
@@ -292,6 +320,10 @@ impl<H: ChildHandle> SuperviseCtx<H> {
             cap: 5,
             window: Duration::from_secs(60),
         }
+    }
+
+    fn expected_id(&self) -> Option<&str> {
+        self.tracked.as_ref().map(|s| s.instance_id.as_str())
     }
 }
 
@@ -308,17 +340,25 @@ fn apply<H: ChildHandle>(
     }
 }
 
-/// Убить tracked child (при shutdown); io-ошибку kill отразить как `Failed`. Stop.
-fn stop_kill<H: ChildHandle>(
+/// Terminate tracked child (при shutdown). Успех (kill+wait) чистит слот и Stop;
+/// ошибка сохраняет handle+ID, отражает `KillFailed` и Continue (retry на след. шаге).
+fn stop_terminate<H: ChildHandle>(
     ctx: &mut SuperviseCtx<H>,
     emit: &mut dyn FnMut(StartupState),
 ) -> LoopControl {
-    if let Some(mut c) = ctx.child.take() {
-        if c.kill().is_err() {
-            apply(ctx, HealthEvent::KillFailed, emit);
-        }
+    match ctx.tracked.as_mut() {
+        None => LoopControl::Stop,
+        Some(sp) => match sp.handle.terminate_and_wait() {
+            Ok(()) => {
+                ctx.tracked = None;
+                LoopControl::Stop
+            }
+            Err(_) => {
+                apply(ctx, HealthEvent::KillFailed, emit);
+                LoopControl::Continue
+            }
+        },
     }
-    LoopControl::Stop
 }
 
 /// Зарегистрировать падение (crash/spawn-fail) в окне и решить backoff/give-up.
@@ -346,7 +386,8 @@ fn register_failure<H: ChildHandle>(
 }
 
 /// Один цикл supervision-петли. Инварианты: единственный spawner, reap-до-решения
-/// (fail-closed), никакого kill живого child, shutdown вокруг probe/spawn.
+/// (fail-closed + typed liveness), ownership по instance-ID, shutdown вокруг
+/// probe/spawn с terminate-retry.
 pub fn supervise_step<P, S, C>(
     ctx: &mut SuperviseCtx<S::Handle>,
     probe: &P,
@@ -361,7 +402,7 @@ where
     C: Clock,
 {
     if shutdown.is_set() {
-        return stop_kill(ctx, emit);
+        return stop_terminate(ctx, emit);
     }
     if is_hard_terminal(&ctx.state) {
         return LoopControl::Stop;
@@ -386,27 +427,28 @@ where
         return LoopControl::Continue;
     }
 
-    let had = ctx.child.is_some();
-    let alive = reap_tracked(&mut ctx.child);
-    if had && !alive {
+    let had = ctx.tracked.is_some();
+    let liveness = reap_tracked(&mut ctx.tracked);
+    if had && liveness == Liveness::Absent {
         return register_failure(ctx, clock.now(), HealthEvent::Crashed, emit);
     }
 
-    let status = probe.status();
+    let status = probe.status(ctx.expected_id());
     if shutdown.is_set() {
-        return stop_kill(ctx, emit);
+        return stop_terminate(ctx, emit);
     }
-    match classify(alive, status) {
+    match classify(liveness, status) {
         Action::Ready => apply(ctx, HealthEvent::PythonHealthyOwned, emit),
         Action::Starting => apply(ctx, HealthEvent::PythonUnhealthyAlive, emit),
         Action::Foreign => apply(ctx, HealthEvent::ForeignHealthy, emit),
+        Action::Unknown => apply(ctx, HealthEvent::ProcessUnknown, emit),
         Action::Spawn => return spawn_now(ctx, spawner, clock, shutdown, emit),
     }
     LoopControl::Continue
 }
 
-/// Ветка Spawn: backoff-окно, shutdown до и после spawn (kill in-flight → no orphan),
-/// io-ошибка spawn → distinct `SpawnFailed`.
+/// Ветка Spawn: backoff-окно, shutdown до и после spawn. При shutdown после spawn
+/// — terminate; ошибка termination сохраняет child (store) для retry, не orphan.
 fn spawn_now<S, C>(
     ctx: &mut SuperviseCtx<S::Handle>,
     spawner: &mut S,
@@ -428,14 +470,18 @@ where
         return LoopControl::Stop;
     }
     match spawner.spawn() {
-        Ok(mut child) => {
+        Ok(mut spawned) => {
             if shutdown.is_set() {
-                if child.kill().is_err() {
-                    apply(ctx, HealthEvent::KillFailed, emit);
-                }
-                return LoopControl::Stop;
+                return match spawned.handle.terminate_and_wait() {
+                    Ok(()) => LoopControl::Stop,
+                    Err(_) => {
+                        apply(ctx, HealthEvent::KillFailed, emit);
+                        ctx.tracked = Some(spawned); // сохранить для retry (no orphan)
+                        LoopControl::Continue
+                    }
+                };
             }
-            ctx.child = Some(child);
+            ctx.tracked = Some(spawned);
             apply(ctx, HealthEvent::PythonUnhealthyAlive, emit);
             LoopControl::Continue
         }

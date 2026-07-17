@@ -137,19 +137,14 @@ fn start_backend(app: &AppHandle) {
     }
 
     if backend_is_running() {
-        eprintln!(
-            "Backend already running on {}:{}",
-            BACKEND_HOST, BACKEND_PORT
-        );
+        eprintln!("Backend already running on {}:{}", BACKEND_HOST, BACKEND_PORT);
         return;
     }
 
     let backend_exe = match find_backend() {
         Some(path) => path,
         None => {
-            eprintln!(
-                "kali-backend.exe not found. Start kernel manually: uv run python -m kernel.main"
-            );
+            eprintln!("kali-backend.exe not found. Start kernel manually: uv run python -m kernel.main");
             let _ = app.emit(
                 "backend://failed",
                 serde_json::json!({
@@ -186,9 +181,7 @@ fn start_backend(app: &AppHandle) {
         Ok((stdout, stderr, stdout_path, stderr_path)) => {
             eprintln!("Backend stdout log: {:?}", stdout_path);
             eprintln!("Backend stderr log: {:?}", stderr_path);
-            command
-                .stdout(Stdio::from(stdout))
-                .stderr(Stdio::from(stderr));
+            command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
         }
         Err(err) => eprintln!("Failed to prepare backend log files: {}", err),
     }
