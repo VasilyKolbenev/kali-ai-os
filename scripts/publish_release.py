@@ -228,18 +228,6 @@ def flip_manifest(manifest: dict) -> None:
     _run(["git", "push", "origin", "main"])
 
 
-RELEASE_TRACKED_PATHS = frozenset({
-    "pyproject.toml",
-    "kernel/__init__.py",
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
-    "src-tauri/tauri.conf.json",
-    "scripts/installer_premium.iss",
-    "VERSION",
-    "release-status.json",
-})
-
-
 def _refuse(token: str, detail: str) -> NoReturn:
     """Отказать в публикации с reason-token в сообщении ``SystemExit``.
 
@@ -265,6 +253,26 @@ def _load_status(repo: Path) -> dict:
     if not isinstance(data, dict):
         _refuse("STATUS_MALFORMED", "release-status.json не является объектом")
     return data
+
+
+def _validate_status_schema(status: dict) -> None:
+    """Структурная fail-closed схема release-status (до чтения VERSION/assets).
+
+    Args:
+        status: Разобранный release-status.json.
+
+    Raises:
+        SystemExit: 'STATUS_SCHEMA', если burned_versions не list[str] или
+            frozen_artifacts (если задан) не list[dict].
+    """
+    burned = status.get("burned_versions", [])
+    if not isinstance(burned, list) or not all(isinstance(x, str) for x in burned):
+        _refuse("STATUS_SCHEMA", "burned_versions должен быть list[str]")
+    frozen = status.get("frozen_artifacts")
+    if frozen is not None and (
+        not isinstance(frozen, list) or not all(isinstance(e, dict) for e in frozen)
+    ):
+        _refuse("STATUS_SCHEMA", "frozen_artifacts должен быть list[dict]")
 
 
 def _hash_assets(dist: Path, assets: list[AssetFile]) -> dict[str, str]:
@@ -296,6 +304,9 @@ def _check_burned(status: dict, version: str) -> None:
 
 
 def _check_dirty(repo: Path, dist: Path, allowed_asset_names: set[str]) -> None:
+    # Release обязан собираться из ПОЛНОСТЬЮ чистого worktree: любое tracked/
+    # untracked изменение (backend/UI/mobile/build scripts/version-файлы) валит
+    # publish. Реальный релиз собирается из clean isolated worktree/stage.
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -303,13 +314,11 @@ def _check_dirty(repo: Path, dist: Path, allowed_asset_names: set[str]) -> None:
         )
     except (subprocess.SubprocessError, OSError) as exc:
         _refuse("DIRTY_TREE", f"git status упал (fail-closed): {exc}")
-    for line in proc.stdout.splitlines():
-        path = line[3:].strip().strip('"')
-        if "->" in path:
-            path = path.split("->", 1)[1].strip().strip('"')
-        path = path.replace("\\", "/")
-        if path in RELEASE_TRACKED_PATHS or path.startswith("releases/"):
-            _refuse("DIRTY_TREE", f"release-путь изменён: {path}")
+    changes = proc.stdout.strip()
+    if changes:
+        first = changes.splitlines()[0].strip()
+        _refuse("DIRTY_TREE", f"worktree не чист ({first} …) — нужен clean stage")
+    # gitignored installer-артефакты невидимы git → прямой stat на посторонние файлы.
     for item in dist.iterdir():
         if item.is_file() and item.name != "release-manifest.json" \
                 and item.name not in allowed_asset_names:
@@ -379,11 +388,11 @@ def enforce_release_guard(repo: Path, dist: Path) -> None:
     Raises:
         SystemExit: При провале любой проверки (см. reason-tokens).
     """
+    # 1) Freeze-first: дёшево и ДО чтения VERSION / collect_assets / hashing
+    #    гигабайтных .bin. Компрометированный/frozen workspace не должен даже
+    #    стартовать тяжёлые операции.
     status = _load_status(repo)
-    version = relver.read_version_file(repo)
-    assets = collect_assets(dist, version)
-    asset_hashes = _hash_assets(dist, assets)
-
+    _validate_status_schema(status)
     distributable = status.get("distributable", _STATUS_ABSENT)
     if distributable is not True:
         frozen = status.get("frozen_artifacts")
@@ -391,6 +400,14 @@ def enforce_release_guard(repo: Path, dist: Path) -> None:
             _refuse("FROZEN_LIST_EMPTY",
                     "frozen_artifacts должен быть non-empty при блокировке")
         _refuse("NOT_DISTRIBUTABLE", f"distributable={distributable!r} (нужен bool true)")
+
+    # 2) distributable=true: только теперь читаем VERSION, ассеты и хеши.
+    version = relver.read_version_file(repo)
+    if status.get("canonical_version") != version:
+        _refuse("CANONICAL_MISMATCH",
+                f"canonical_version {status.get('canonical_version')!r} != VERSION {version!r}")
+    assets = collect_assets(dist, version)
+    asset_hashes = _hash_assets(dist, assets)
 
     _check_frozen(status, asset_hashes)
     _check_burned(status, version)

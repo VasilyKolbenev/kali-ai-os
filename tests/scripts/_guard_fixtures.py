@@ -193,14 +193,14 @@ def write_all_desktop(repo: Path, version: str, mobile_version: str = "0.1.0+1")
 
 # ── release-status / dist / manifest ───────────────────────────────────────
 def write_status(repo: Path, *, distributable=True, frozen=None,
-                 burned=None, drop_frozen: bool = False,
-                 raw: str | None = None) -> None:
+                 burned=None, canonical: str | None = None,
+                 drop_frozen: bool = False, raw: str | None = None) -> None:
     if raw is not None:
         (repo / "release-status.json").write_text(raw, encoding="utf-8")
         return
     data: dict = {
         "as_of": "2026-07-17",
-        "canonical_version": VERSION,
+        "canonical_version": VERSION if canonical is None else canonical,
         "burned_versions": BURNED_VERSIONS if burned is None else burned,
     }
     if distributable is not _ABSENT:

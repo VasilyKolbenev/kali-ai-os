@@ -22,21 +22,25 @@ def ver():
     return importlib.import_module("scripts.release.version")
 
 
-# ── 1. интеграция: реальный репо уже skewed (документируем факт) ────────────
-def test_check_detects_real_repo_skew(ver) -> None:
-    """На реальном REPO_ROOT check() падает; per-source карта = известный skew."""
-    repo = pr.REPO_ROOT
+# ── 1. clean-checkout regression: check() работает на fixture, не на workspace ─
+# Codex review: НЕ фиксируем временный skew реального репо вечным тестом (он
+# исчезнет после sync и зависит от локального dirty Cargo.lock). Все version-
+# тесты — на tmp fixture, независимы от рабочего дерева.
+def test_check_passes_on_synced_fixture(ver, tmp_path: Path) -> None:
+    """Полностью synced fixture → check() возвращает канонический VERSION."""
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    fx.write_version_file(tmp_path, (fx.VERSION + "\n").encode("utf-8"))
+    assert ver.check(tmp_path) == fx.VERSION
+
+
+def test_check_detects_skew_on_fixture(ver, tmp_path: Path) -> None:
+    """Skewed fixture → check() падает VERSION_SKEW (без чтения реального репо)."""
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    fx.write_version_file(tmp_path, (fx.VERSION + "\n").encode("utf-8"))
+    fx.write_pyproject(tmp_path, "1.0.0-rc1")   # уводим один источник
     with pytest.raises(SystemExit) as exc:
-        ver.check(repo)
+        ver.check(tmp_path)
     assert "VERSION_SKEW" in str(exc.value)
-    assert ver.read_desktop_versions(repo) == {
-        "pyproject": "1.0.0-rc1",
-        "kernel": "1.0.0-rc1",
-        "cargo_toml": "1.0.0-rc2",
-        "cargo_lock": "1.0.0-rc2",
-        "tauri": "1.0.0-rc2",
-        "iss": "1.0.0-rc2",
-    }
 
 
 # ── 2. Cargo.lock: только блок kali-desktop, не формат и не dep ─────────────
@@ -118,11 +122,47 @@ def test_sync_writes_all_six_distinct_wrong_values(ver, tmp_path: Path) -> None:
     fx.write_cargo_lock(tmp_path, "0.4.0")
     fx.write_tauri(tmp_path, "0.5.0")
     fx.write_iss(tmp_path, "0.6.0")
+    fx.write_pubspec(tmp_path)                  # sync завершает check() → нужен pubspec
     fx.write_version_file(tmp_path, b"1.0.0-rc3\n")
 
     ver.sync(tmp_path)
     got = ver.read_desktop_versions(tmp_path)   # per-file, не через check
     assert got == {k: fx.VERSION for k in fx.DESKTOP_KEYS}
+
+
+# ── 6b. sync: отсутствующий anchor → VERSION_SYNC_FAILED, не ложный success ──
+def _break_anchor(repo: Path, source: str) -> None:
+    if source == "pyproject":
+        fx.write_pyproject(repo, fx.VERSION, dynamic=True)          # нет [project].version
+    elif source == "cargo_toml":
+        (repo / "src-tauri").mkdir(exist_ok=True)
+        (repo / "src-tauri" / "Cargo.toml").write_text(
+            '[package]\nname = "kali-desktop"\n', encoding="utf-8")  # нет version
+    elif source == "cargo_lock":
+        (repo / "src-tauri").mkdir(exist_ok=True)
+        (repo / "src-tauri" / "Cargo.lock").write_text(
+            'version = 4\n\n[[package]]\nname = "foo"\nversion = "1.0"\n',
+            encoding="utf-8")                                        # нет kali-desktop
+    elif source == "tauri":
+        (repo / "src-tauri").mkdir(exist_ok=True)
+        (repo / "src-tauri" / "tauri.conf.json").write_text(
+            '{"productName": "KALI"}', encoding="utf-8")            # нет version
+    elif source == "kernel":
+        fx.write_kernel(repo, None, style="missing")               # нет __version__
+    elif source == "iss":
+        (repo / "scripts").mkdir(exist_ok=True)
+        (repo / "scripts" / "installer_premium.iss").write_text(
+            "[Setup]\nAppName=KALI\n", encoding="utf-8")            # нет #define AppVersion
+
+
+@pytest.mark.parametrize("source", list(fx.DESKTOP_KEYS))
+def test_sync_fails_loud_on_missing_anchor(ver, tmp_path: Path, source: str) -> None:
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    fx.write_version_file(tmp_path, (fx.VERSION + "\n").encode("utf-8"))
+    _break_anchor(tmp_path, source)
+    with pytest.raises(SystemExit) as exc:
+        ver.sync(tmp_path)
+    assert "VERSION_SYNC_FAILED" in str(exc.value)
 
 
 # ── 7. sync обновляет ВСЕ вхождения версии в .iss (не только #define) ────────
@@ -229,3 +269,41 @@ def test_check_burned_ranks_rc_numerically() -> None:
         with pytest.raises(SystemExit) as exc:
             pr._check_burned(status, burned_or_below)
         assert "BURNED_VERSION" in str(exc.value)
+
+
+# ── 14. release-manifest (strict) отказывает при skew/dirty; diagnose — нет ──
+def _synced_git_repo(ver, tmp_path: Path) -> None:
+    fx.write_all_desktop(tmp_path, fx.VERSION)
+    fx.write_version_file(tmp_path, (fx.VERSION + "\n").encode("utf-8"))
+    fx.init_git(tmp_path)
+    fx.commit_all(tmp_path, "init")
+
+
+def test_build_manifest_strict_refuses_on_skew(ver, tmp_path: Path) -> None:
+    _synced_git_repo(ver, tmp_path)
+    fx.write_cargo_toml(tmp_path, "1.0.0-rc4")   # skew (валидная, но иная)
+    fx.commit_all(tmp_path, "skew")              # закоммичено → не dirty, только skew
+    with pytest.raises(SystemExit) as exc:
+        ver.build_manifest(tmp_path, strict=True)
+    assert "VERSION_SKEW" in str(exc.value)
+
+
+def test_build_manifest_strict_refuses_on_dirty(ver, tmp_path: Path) -> None:
+    _synced_git_repo(ver, tmp_path)
+    # значение версии НЕ меняем (skew нет), но дерево грязное
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "kali"\nversion = "{fx.VERSION}"\n# touched\n',
+        encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        ver.build_manifest(tmp_path, strict=True)
+    assert "RELEASE_MANIFEST_DIRTY" in str(exc.value)
+
+
+def test_build_manifest_nonstrict_still_reports_dirty(ver, tmp_path: Path) -> None:
+    # диагностический (нестрогий) build_manifest НЕ отказывает — показывает dirty=True
+    _synced_git_repo(ver, tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "kali"\nversion = "{fx.VERSION}"\n# touched\n',
+        encoding="utf-8")
+    m = ver.build_manifest(tmp_path)   # strict=False по умолчанию
+    assert m["dirty"] is True

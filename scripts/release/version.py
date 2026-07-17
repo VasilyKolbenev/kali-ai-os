@@ -203,6 +203,11 @@ def check(repo: Path) -> str:
 
 # ── sync (writers) ──────────────────────────────────────────────────────────
 def _rewrite_toml_version(path: Path, new: str, table: str) -> None:
+    """Заменить ровно одну ``version =`` в таблице ``[table]``.
+
+    Raises:
+        SystemExit: 'VERSION_SYNC_FAILED', если version-запись в таблице не найдена.
+    """
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     out: list[str] = []
     current = None
@@ -217,16 +222,20 @@ def _rewrite_toml_version(path: Path, new: str, table: str) -> None:
             done = True
             continue
         out.append(line)
+    if not done:
+        _fail(f"VERSION_SYNC_FAILED: {path.name}: version в [{table}] не найдена")
     path.write_text("".join(out), encoding="utf-8")
 
 
 def _sync_kernel(repo: Path, new: str) -> None:
     path = repo / "kernel" / "__init__.py"
     text = path.read_text(encoding="utf-8")
-    text = re.sub(
+    text, n = re.subn(
         r"""(__version__\s*(?::\s*str)?\s*=\s*['"])[^'"]*(['"])""",
         rf"\g<1>{new}\g<2>", text, count=1,
     )
+    if n != 1:
+        _fail("VERSION_SYNC_FAILED: kernel/__init__.py: __version__ не найден")
     path.write_text(text, encoding="utf-8")
 
 
@@ -236,14 +245,18 @@ def _sync_cargo_lock(repo: Path, new: str) -> None:
     pattern = re.compile(
         r'(\[\[package\]\]\nname = "kali-desktop"\nversion = ")[^"\n]*(")'
     )
-    text = pattern.sub(rf"\g<1>{new}\g<2>", text, count=1)
+    text, n = pattern.subn(rf"\g<1>{new}\g<2>", text, count=1)
+    if n != 1:
+        _fail("VERSION_SYNC_FAILED: Cargo.lock: блок kali-desktop не найден")
     path.write_text(text, encoding="utf-8")
 
 
 def _sync_tauri(repo: Path, new: str) -> None:
     path = repo / "src-tauri" / "tauri.conf.json"
     text = path.read_text(encoding="utf-8")
-    text = re.sub(r'("version"\s*:\s*")[^"]*(")', rf"\g<1>{new}\g<2>", text, count=1)
+    text, n = re.subn(r'("version"\s*:\s*")[^"]*(")', rf"\g<1>{new}\g<2>", text, count=1)
+    if n != 1:
+        _fail("VERSION_SYNC_FAILED: tauri.conf.json: .version не найдена")
     path.write_text(text, encoding="utf-8")
 
 
@@ -251,8 +264,10 @@ def _sync_iss(repo: Path, new: str) -> None:
     path = repo / "scripts" / "installer_premium.iss"
     text = path.read_text(encoding="utf-8")
     m = _ISS_RE.search(text)
-    old = m.group(1) if m else None
-    if old and old != new:
+    if not m:
+        _fail("VERSION_SYNC_FAILED: installer_premium.iss: #define AppVersion не найден")
+    old = m.group(1)
+    if old != new:
         text = text.replace(old, new)
     path.write_text(text, encoding="utf-8")
 
@@ -260,11 +275,16 @@ def _sync_iss(repo: Path, new: str) -> None:
 def sync(repo: Path) -> None:
     """Записать ``VERSION`` во все шесть desktop-источников идемпотентно.
 
+    Каждый writer доказывает, что нашёл и заменил ровно ожидаемую запись; при
+    отсутствующем anchor — ``VERSION_SYNC_FAILED`` (не ложный success). После
+    всех записей — обязательная сверка ``check(repo)``: любой оставшийся skew
+    завершится ``VERSION_SKEW``.
+
     Args:
         repo: Корень репозитория.
 
     Raises:
-        SystemExit: Если ``VERSION`` невалиден.
+        SystemExit: 'VERSION_INVALID' / 'VERSION_SYNC_FAILED' / 'VERSION_SKEW'.
     """
     new = read_version_file(repo)
     _rewrite_toml_version(repo / "pyproject.toml", new, "project")
@@ -273,6 +293,7 @@ def sync(repo: Path) -> None:
     _sync_cargo_lock(repo, new)
     _sync_tauri(repo, new)
     _sync_iss(repo, new)
+    check(repo)  # обязательная пост-сверка: convergence или VERSION_SKEW
 
 
 # ── manifest ────────────────────────────────────────────────────────────────
@@ -283,19 +304,28 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout
 
 
-def build_manifest(repo: Path, assets: list | None = None) -> dict:
-    """Собрать release-manifest (версия, git SHA, dirty, компоненты, timestamp).
+def build_manifest(repo: Path, assets: list | None = None, *,
+                   strict: bool = False) -> dict:
+    """Собрать snapshot (версия, git SHA, dirty, компоненты, timestamp).
+
+    ``strict=False`` — диагностический snapshot: показывает dirty/skew как есть,
+    не отказывает (для аудита). ``strict=True`` — release-manifest: отказывает
+    при VERSION_SKEW или dirty-дереве, поэтому файл с противоречивыми
+    component-версиями не может называться валидным release-manifest.
 
     Args:
         repo: Корень репозитория.
         assets: Опциональный список ассетов (пробрасывается в манифест как есть).
+        strict: Режим release-manifest (fail-closed на skew/dirty).
 
     Returns:
         Словарь манифеста для сериализации.
 
     Raises:
-        SystemExit: Если версии не разбираются.
+        SystemExit: 'VERSION_SKEW' или 'RELEASE_MANIFEST_DIRTY' при ``strict``.
     """
+    if strict:
+        check(repo)  # skew → VERSION_SKEW ещё до сборки манифеста
     git_sha = _git(repo, "rev-parse", "HEAD").strip()
     dirty = bool(_git(repo, "status", "--porcelain").strip())
     manifest = {
@@ -311,6 +341,8 @@ def build_manifest(repo: Path, assets: list | None = None) -> dict:
     }
     if assets is not None:
         manifest["assets"] = assets
+    if strict and manifest["dirty"]:
+        _fail("RELEASE_MANIFEST_DIRTY: dirty-дерево — release-manifest не создаётся")
     return manifest
 
 
@@ -388,7 +420,7 @@ def main(argv: list[str] | None = None) -> None:
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["check", "sync", "manifest"])
+    parser.add_argument("command", choices=["check", "sync", "manifest", "diagnose"])
     args = parser.parse_args(argv)
     if args.command == "check":
         version = check(REPO_ROOT)
@@ -398,10 +430,23 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  mobile       {read_mobile_version(REPO_ROOT)}")
         print(f"OK: {version}")
     elif args.command == "sync":
-        sync(REPO_ROOT)
+        sync(REPO_ROOT)  # включает check(); при skew падает до печати ниже
         print(f"synced -> {read_version_file(REPO_ROOT)}")
-    else:
-        print(json.dumps(build_manifest(REPO_ROOT), ensure_ascii=False, indent=2))
+    elif args.command == "diagnose":
+        # Диагностический snapshot: показывает skew/dirty для аудита, НЕ отказывает.
+        canonical = read_version_file(REPO_ROOT)
+        table = read_desktop_versions(REPO_ROOT)
+        skewed = [k for k in DESKTOP_KEYS if table[k] != canonical]
+        dirty = bool(_git(REPO_ROOT, "status", "--porcelain").strip())
+        print(json.dumps(
+            {"canonical": canonical, "components": table,
+             "skewed": skewed, "dirty": dirty},
+            ensure_ascii=False, indent=2,
+        ))
+    else:  # manifest — строгий release-manifest (отказ при skew/dirty)
+        print(json.dumps(
+            build_manifest(REPO_ROOT, strict=True), ensure_ascii=False, indent=2
+        ))
 
 
 if __name__ == "__main__":

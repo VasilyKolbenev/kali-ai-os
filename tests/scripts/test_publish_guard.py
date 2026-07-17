@@ -37,7 +37,8 @@ def _green_baseline(tmp_path: Path, *, version: str = fx.VERSION,
     repo = tmp_path
     fx.write_all_desktop(repo, version, mobile)
     fx.write_version_file(repo, (version + "\n").encode("utf-8"))
-    fx.write_status(repo, distributable=distributable, frozen=frozen, burned=burned)
+    fx.write_status(repo, distributable=distributable, frozen=frozen,
+                    burned=burned, canonical=version)
     (repo / ".gitignore").write_text("dist_premium/\n", encoding="utf-8")
     fx.init_git(repo)
     fx.commit_all(repo, "baseline", date=committer_date)
@@ -286,11 +287,31 @@ def test_dirty_check_scoping_refuses_each_release_path(tmp_path: Path, perturb) 
     assert "DIRTY_TREE" in str(exc.value)
 
 
-def test_dirty_check_ignores_non_release_path(tmp_path: Path) -> None:
+def test_dirty_check_refuses_on_any_tracked_change(tmp_path: Path) -> None:
+    # Codex review: release обязан собираться из ПОЛНОСТЬЮ чистого worktree.
+    # Любое untracked/tracked изменение (даже docs/) => DIRTY_TREE.
     b = _green_baseline(tmp_path)
     (b.repo / "docs").mkdir(exist_ok=True)
-    (b.repo / "docs" / "notes.md").write_text("scratch", encoding="utf-8")  # вне scope
-    _guard(b)  # правка doc/ не триггерит guard
+    (b.repo / "docs" / "notes.md").write_text("scratch", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "DIRTY_TREE" in str(exc.value)
+
+
+@pytest.mark.parametrize("relpath", [
+    "kernel/main.py", "ui/src/App.tsx", "scripts/build_installer_premium.bat",
+])
+def test_dirty_check_refuses_backend_ui_build_change(tmp_path: Path, relpath: str) -> None:
+    # backend/UI/build-script правки обязаны валить release-guard (не только version-файлы).
+    b = _green_baseline(tmp_path)
+    p = b.repo / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("orig\n", encoding="utf-8")
+    fx.commit_all(b.repo, "add source")          # tracked + clean
+    p.write_text("modified\n", encoding="utf-8")  # dirty vs HEAD
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "DIRTY_TREE" in str(exc.value)
 
 
 def test_dirty_check_fail_closed_on_git_error(monkeypatch, tmp_path: Path) -> None:
@@ -407,3 +428,46 @@ def test_publish_proceeds_when_all_green(monkeypatch, tmp_path: Path) -> None:
     assert any(c[2] == "create" for c in ghc)
     assert any(c[2] == "upload" for c in ghc)
     assert any(c[2] == "edit" for c in ghc)
+
+
+# ── 17. freeze short-circuits ДО collect_assets/hashing гигабайтных файлов ────
+def test_freeze_short_circuits_before_reading_assets(monkeypatch, tmp_path: Path) -> None:
+    b = _green_baseline(tmp_path, distributable=False)
+    spy = {"collect": 0, "sha": 0}
+
+    def _collect(*a, **k):  # noqa: ANN002, ANN003
+        spy["collect"] += 1
+        return []
+
+    def _sha(*a, **k):  # noqa: ANN002, ANN003
+        spy["sha"] += 1
+        return "x"
+
+    monkeypatch.setattr(pr, "collect_assets", _collect)
+    monkeypatch.setattr(pr, "_sha256", _sha)
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "NOT_DISTRIBUTABLE" in str(exc.value)
+    assert spy == {"collect": 0, "sha": 0}   # ассеты не читались и не хешировались
+
+
+# ── 18. canonical_version в release-status обязан совпадать с VERSION ─────────
+def test_publish_refuses_on_canonical_mismatch(tmp_path: Path) -> None:
+    b = _green_baseline(tmp_path)
+    fx.write_status(b.repo, distributable=True, canonical="9.9.9")  # != VERSION rc3
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "CANONICAL_MISMATCH" in str(exc.value)
+
+
+# ── 19. schema release-status: burned/frozen неверного типа → fail-closed ─────
+@pytest.mark.parametrize("bad", ["burned", "frozen"])
+def test_status_schema_rejects_bad_types(tmp_path: Path, bad: str) -> None:
+    b = _green_baseline(tmp_path)
+    if bad == "burned":
+        fx.write_status(b.repo, distributable=True, burned="not-a-list")
+    else:
+        fx.write_status(b.repo, distributable=True, frozen="not-a-list")
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "STATUS_SCHEMA" in str(exc.value)
