@@ -110,3 +110,17 @@ U3. `rust_bind_failure_shows_distinct_error` — startup=`Failed/Degraded(PortOc
 3. **engine=rust bind-order — отложено в voice-трек.** A3 держит default engine=python (`serve()` → `Ok(None)` → :3006 биндится сразу, acceptance (b) выполняется). Перестановка bind-before-pipeline (backend/mod.rs + pipeline + ort) вне A3.
 4. **Test-delay lever: `KALI_BOOT_DELAY_MS`, только под `debug_assertions`** — **fake health delay в supervisor/health-probe** (задерживает признание health), НЕ инъекция в реальный Python/model startup, отсутствует в release-бинаре. Финализирует live first-paint/30-60с протокол без чистки реального кэша.
 5. **Degraded RU-copy** — предложу дефолты при commit 4 (три состояния: «backend не найден» / «backend упал, повтор…» / «не удалось запустить backend»), owner-апрув на месте.
+
+---
+
+## Review-fix #3 (Codex, после commit 1 `5e2df04`) — ownership + shutdown seams
+
+Эти правки **суперсидят** соответствующие места seam-таблицы/тестов выше. Реализуются НОВЫМ fix-коммитом (не amend `5e2df04`). Структура: production в `startup.rs`, тесты в `src/startup/tests.rs`, `mod startup;` (не `pub mod`), Cargo не трогать.
+
+1. **Per-spawn `KALI_DESKTOP_INSTANCE_ID` (ownership по ID).** desktop генерирует уникальный ID на каждый spawn → передаёт child через env → Python `/health` возвращает `desktop_instance_id`. **`OwnedHealthy` только при совпадающем ID + живом tracked child**; wrong/missing ID → `ForeignHealthy` даже при живом child. (env-передача + Python `/health` — адаптер/kernel в commit 2; здесь — seam.)
+2. **`HealthProbe`: `bool` → типизированный `ProbeStatus {Unhealthy | OwnedHealthy | ForeignHealthy}`.** `spawn_decision` заменяется на `classify(tracked_alive, ProbeStatus) -> Action {Spawn | Starting | Ready | Foreign}`; `(false,*occupied*)`→Foreign, `(true,ForeignHealthy)`→Foreign, `Ready` только `(true,OwnedHealthy)`.
+3. **`ChildHandle`: `try_alive`/`kill` → `io::Result`.** Ошибка `try_alive` ⇒ **сохранить handle, fail-closed, никогда не spawn второго** (reap на ошибке трактует как alive). Ошибка `kill` ⇒ логируется/отражается состоянием (`Failed`).
+4. **Внешний `ShutdownSignal`/`AtomicBool`** вместо поля `shutting_down`. Проверять **до/после probe и до/после spawn**. Тест: `FakeSpawner` выставляет shutdown ВНУТРИ `spawn()` → после spawn: child killed, slot=None, `Stop` (no orphan).
+5. **`PythonExited` во время backoff ⇒ `Degraded(Crashed)`**, затем восстановление через `PythonStarting`→`PythonReady`. **Spawn-failure ⇒ отдельная машинная причина `Degraded(SpawnFailed)`** (не маскируется обычной загрузкой/Crashed).
+
+**Обязательные тесты fix-коммита:** wrong-ID+alive ≠ PythonReady · try_wait-error не чистит slot и не спавнит · shutdown-внутри-spawn убивает child до store · Crashed реально эмитится и восстанавливается · **полная `state×event` matrix** (или снять ложное «полная» и дать эквивалентное полное покрытие) · точное число spawn/retry + **ровно один terminal emit** · `rustfmt --check` изменённых файлов.
