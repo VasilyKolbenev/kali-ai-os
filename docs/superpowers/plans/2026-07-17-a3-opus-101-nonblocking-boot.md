@@ -138,3 +138,17 @@ U3. `rust_bind_failure_shows_distinct_error` — startup=`Failed/Degraded(PortOc
 5. **State ordering:** `ExeMissing` и `ForeignHealthy` до `RustReady` не обходят Rust-gate (`guard_after_rust`).
 6. **Matrix:** либо настоящая expected `state×event` table, либо честно `matrix_invariants` + отдельные explicit-проверки всех переходов (выбрано: rename + explicit transitions per event).
 7. **Убрать collateral-форматирование** старых блоков `lib.rs` (восстановить lib.rs из `5e2df04` + только строка `mod startup;`).
+
+---
+
+## Review-fix #5 (Codex, после `08fe06b`) — NO-GO: runtime seams
+
+Новый fix-commit (не amend). Не трогать Cargo.lock/single-instance/UI/OPUS-102.
+
+1. **`RealChild::terminate_and_wait` race-safe:** try_wait → уже завершён=success (без blocking wait); жив → `kill()?` затем `wait()?`; **kill error НЕ проглатывать**; race: kill Err → повторный try_wait показал exit=success, иначе вернуть исходную kill-ошибку. Тесты: kill-error не вызывает blocking wait; exited-between-check-and-kill. (Ввести `RawProc`-seam для тестируемости.)
+2. **`RealProbe`:** один reusable `ureq::Agent`; `timeout_global` + `timeout_recv_response` + `timeout_recv_body`; health body ограничен разумным размером; hung listener не блокирует shutdown. Тест: TCP-listener принимает и не отвечает → status возвращается (Unhealthy) без hang.
+3. **`ShutdownControl`:** `done=true` только после **подтверждённого ack**; различать `Completed`/`Timeout`/`Disconnected`; при timeout receiver не терять (retryable); `ExitRequested` при неподтверждённом cleanup → `api.prevent_exit()`, exit только после реального ack; `WindowEvent::Destroyed` только flag+wake (не потребляет ack). Тесты: timeout→retry→success; disconnected≠success.
+4. **`Waker`:** `wait_timeout_while` по predicate; wake-before-wait возвращается сразу; после consume сброс флага. Детерминированный lost-wake тест.
+5. **Логи:** respawn НЕ truncate (append / session-rotation); crash marker переживает spawn#1→#2; ошибку открытия логов логировать. Тест marker-survives-respawn.
+6. **Standalone API восстановить:** public `backend::serve()` (без startup-типа) для `backend_dev`; internal `serve_with_bind_signal(bind_tx)` для Tauri. Проверка: `cargo check --bin backend_dev` + `cargo check` desktop-target (НЕ заявлять «whole app compiles» по `cargo test --lib`).
+7. **Setup без fallible-хвоста:** shortcut регистрировать ДО потоков либо fail-soft с логом; setup после spawn обязан гарантированно вернуть `Ok`.
