@@ -124,3 +124,17 @@ U3. `rust_bind_failure_shows_distinct_error` — startup=`Failed/Degraded(PortOc
 5. **`PythonExited` во время backoff ⇒ `Degraded(Crashed)`**, затем восстановление через `PythonStarting`→`PythonReady`. **Spawn-failure ⇒ отдельная машинная причина `Degraded(SpawnFailed)`** (не маскируется обычной загрузкой/Crashed).
 
 **Обязательные тесты fix-коммита:** wrong-ID+alive ≠ PythonReady · try_wait-error не чистит slot и не спавнит · shutdown-внутри-spawn убивает child до store · Crashed реально эмитится и восстанавливается · **полная `state×event` matrix** (или снять ложное «полная» и дать эквивалентное полное покрытие) · точное число spawn/retry + **ровно один terminal emit** · `rustfmt --check` изменённых файлов.
+
+---
+
+## Review-fix #4 (Codex, после `e6a0cb9`) — typed liveness + instance-id contract
+
+Новый fix-commit (не amend). Форматировать ТОЛЬКО `startup.rs`+`startup/tests.rs` (не lib.rs — убрать случайное форматирование старых блоков lib.rs из `e6a0cb9`).
+
+1. **Типизированная `Liveness {Absent | Alive | Unknown}`.** `reap_tracked` возвращает `Liveness`; `try_alive` `Err` ⇒ `Unknown` (handle сохраняется). **`Unknown` никогда не даёт Ready/Spawn даже при `OwnedHealthy`** → `Degraded(ProcessStatusUnknown)` (восстановимо).
+2. **Instance-ID = явный load-bearing контракт.** `Spawned<H> { handle, instance_id }`; `BackendSpawner::spawn() -> io::Result<Spawned<H>>`; `SuperviseCtx` хранит handle+instance_id; `HealthProbe::status(expected_instance_id: Option<&str>)`; подтверждённый exit чистит handle+ID; **respawn получает НОВЫЙ ID**. Тесты: ID вращается после respawn; stale ID не даёт Ready.
+3. **`ChildHandle`: `kill` → `terminate_and_wait() -> io::Result<()>`** (wait — часть успешной termination). При ошибке termination: handle+instance_id НЕ теряются, отражается `KillFailed`, следующий shutdown-step повторяет termination. Post-spawn shutdown + terminate error тоже сохраняет child для retry. `FakeChild` НЕ отмечается terminated при `Err`.
+4. **Новые тесты:** try_alive Err + OwnedHealthy ≠ Ready · terminate error сохраняет slot · повтор termination после ошибки чистит slot · post-spawn terminate error не теряет child · wait — часть успешной termination.
+5. **State ordering:** `ExeMissing` и `ForeignHealthy` до `RustReady` не обходят Rust-gate (`guard_after_rust`).
+6. **Matrix:** либо настоящая expected `state×event` table, либо честно `matrix_invariants` + отдельные explicit-проверки всех переходов (выбрано: rename + explicit transitions per event).
+7. **Убрать collateral-форматирование** старых блоков `lib.rs` (восстановить lib.rs из `5e2df04` + только строка `mod startup;`).
