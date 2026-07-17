@@ -82,9 +82,9 @@
 - **single-instance vs deep-link init-order**: docs требуют single-instance до deep-link (deep-link сейчас нет; заметка на будущее).
 - **Rollback**: каждый слайс независимо ревертится. commit 2 (макс value/risk) ревертится один, восстанавливая старый синхронный boot без трогания startup.rs/single-instance/UI. commits 1/3/4 аддитивны.
 
-## Open questions (owner) — блокируют финализацию тестов/импл
-1. **Restart policy**: сколько respawn-попыток до терминального Degraded и какой backoff. Предложение: `250ms→500ms→1s→2s→4s`, give-up на **5 failures в окне 60с**. (влияет на тест #2).
-2. **Windows Job Object сейчас или fast-follow**: гарантия ноль-orphan на hard-kill нужна `AssignProcessToJobObject(KILL_ON_JOB_CLOSE)` — reliability-critical, но scope сверх «reorder setup».
-3. **engine=rust :3006 bind-before-pipeline**: в scope A3 (нужно для (b) при engine=rust) или в voice-трек (трогает pipeline/ort)?
-4. **Test-delay lever**: `KALI_BOOT_DELAY_MS` (только debug_assertions) как воспроизводимый cold-boot рычаг — приемлемо, или live-протокол обязан чистить реальный model/HF-кэш ради подлинного 30–60с пути?
-5. **Degraded RU-copy**: точные строки трёх состояний — «backend не найден» (сломанная установка) / «backend упал / сдался» (терминал) — отдельно от существующего model-loading текста. Предложу дефолты, но нужен ваш апрув.
+## Owner-решения (2026-07-17) — план decision-complete
+1. **Restart policy: `250ms→500ms→1s→2s→4s`, give-up на 5 failures в окне 60с** → терминальный Degraded. Пиннит `next_backoff` тест #2: schedule=[250,500,1000,2000,4000]ms, `None` на attempt 6.
+2. **Windows Job Object — fast-follow** (отдельный блок после A3). A3 даёт graceful shutdown (`shutting_down`); zero-orphan-on-hard-kill (`AssignProcessToJobObject(KILL_ON_JOB_CLOSE)`) — следующий малый блок. Live-протокол shutdown проверяет graceful путь, hard-kill orphan помечается known-gap до fast-follow.
+3. **engine=rust bind-order — отложено в voice-трек.** A3 держит default engine=python (`serve()` → `Ok(None)` → :3006 биндится сразу, acceptance (b) выполняется). Перестановка bind-before-pipeline (backend/mod.rs + pipeline + ort) вне A3.
+4. **Test-delay lever: `KALI_BOOT_DELAY_MS`, только под `debug_assertions`**, инъекция в child (не в shell/release). Финализирует live first-paint/30-60с протокол без чистки реального кэша.
+5. **Degraded RU-copy** — предложу дефолты при commit 4 (три состояния: «backend не найден» / «backend упал, повтор…» / «не удалось запустить backend»), owner-апрув на месте.
