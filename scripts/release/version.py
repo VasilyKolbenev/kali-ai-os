@@ -394,6 +394,18 @@ def _cmp_pre(a: list[str] | None, b: list[str] | None) -> int:
     return (len(a) > len(b)) - (len(a) < len(b))
 
 
+def is_valid_semver(value: object) -> bool:
+    """True, если ``value`` — строка вида MAJOR.MINOR.PATCH[-prerelease].
+
+    Args:
+        value: Проверяемое значение (любого типа — не-строки → False).
+
+    Returns:
+        Признак валидного semver.
+    """
+    return isinstance(value, str) and bool(_SEMVER_RE.match(value))
+
+
 def compare_semver(a: str, b: str) -> int:
     """Сравнить две semver-строки (-1/0/1) с учётом pre-release-порядка.
 

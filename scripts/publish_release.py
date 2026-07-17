@@ -255,24 +255,51 @@ def _load_status(repo: Path) -> dict:
     return data
 
 
+_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
 def _validate_status_schema(status: dict) -> None:
-    """Структурная fail-closed схема release-status (до чтения VERSION/assets).
+    """Строгая fail-closed схема release-status (до чтения VERSION/assets).
+
+    Требования: ``distributable`` — bool; ``canonical_version`` — валидный
+    semver; ``burned_versions`` — non-empty уникальный list валидных semver;
+    ``frozen_artifacts`` — non-empty list[dict], где каждая запись имеет
+    непустые ``name``/``why`` и ``sha256`` ровно из 64 hex-символов.
 
     Args:
         status: Разобранный release-status.json.
 
     Raises:
-        SystemExit: 'STATUS_SCHEMA', если burned_versions не list[str] или
-            frozen_artifacts (если задан) не list[dict].
+        SystemExit: 'STATUS_SCHEMA' при любом нарушении (пустые списки,
+            missing fields, malformed SHA, дубликаты, не-semver).
     """
-    burned = status.get("burned_versions", [])
-    if not isinstance(burned, list) or not all(isinstance(x, str) for x in burned):
-        _refuse("STATUS_SCHEMA", "burned_versions должен быть list[str]")
+    if not isinstance(status.get("distributable"), bool):
+        _refuse("STATUS_SCHEMA", "distributable обязан быть bool")
+
+    if not relver.is_valid_semver(status.get("canonical_version")):
+        _refuse("STATUS_SCHEMA",
+                f"canonical_version не semver: {status.get('canonical_version')!r}")
+
+    burned = status.get("burned_versions")
+    if not isinstance(burned, list) or not burned:
+        _refuse("STATUS_SCHEMA", "burned_versions должен быть non-empty list")
+    if not all(relver.is_valid_semver(b) for b in burned):
+        _refuse("STATUS_SCHEMA", "burned_versions содержит не-semver")
+    if len(set(burned)) != len(burned):
+        _refuse("STATUS_SCHEMA", "burned_versions содержит дубликаты")
+
     frozen = status.get("frozen_artifacts")
-    if frozen is not None and (
-        not isinstance(frozen, list) or not all(isinstance(e, dict) for e in frozen)
-    ):
-        _refuse("STATUS_SCHEMA", "frozen_artifacts должен быть list[dict]")
+    if not isinstance(frozen, list) or not frozen \
+            or not all(isinstance(e, dict) for e in frozen):
+        _refuse("STATUS_SCHEMA", "frozen_artifacts должен быть non-empty list[dict]")
+    for entry in frozen:
+        name, why, sha = entry.get("name"), entry.get("why"), entry.get("sha256")
+        if not (isinstance(name, str) and name.strip()):
+            _refuse("STATUS_SCHEMA", "frozen-запись: пустой name")
+        if not (isinstance(why, str) and why.strip()):
+            _refuse("STATUS_SCHEMA", "frozen-запись: пустой why")
+        if not (isinstance(sha, str) and _HEX64_RE.match(sha)):
+            _refuse("STATUS_SCHEMA", f"frozen-запись: sha256 не 64-hex: {sha!r}")
 
 
 def _hash_assets(dist: Path, assets: list[AssetFile]) -> dict[str, str]:
@@ -287,13 +314,10 @@ def _hash_assets(dist: Path, assets: list[AssetFile]) -> dict[str, str]:
 
 
 def _check_frozen(status: dict, asset_hashes: dict[str, str]) -> None:
-    frozen = status.get("frozen_artifacts")
+    # Схема гарантирует sha256 = чистые 64 hex; сравниваем casefold обе стороны.
     live = {h.casefold() for h in asset_hashes.values()}
-    for entry in frozen or []:
-        stored = str(entry.get("sha256", "")).strip()
-        if stored.lower().startswith("0x"):
-            stored = stored[2:]
-        if stored.casefold() in live:
+    for entry in status.get("frozen_artifacts", []):
+        if str(entry["sha256"]).casefold() in live:
             _refuse("FROZEN_HASH", f"asset совпал с frozen {entry.get('name')!r}")
 
 
@@ -369,10 +393,6 @@ def _check_manifest(repo: Path, dist: Path, version: str,
             _refuse("MANIFEST_MISMATCH", f"asset sha256 расходится: {name}")
 
 
-# Sentinel: ключ distributable отсутствует (missing != false != true).
-_STATUS_ABSENT = object()
-
-
 def enforce_release_guard(repo: Path, dist: Path) -> None:
     """Fail-closed release-guard: read-only проверки ДО любого gh/git-push.
 
@@ -392,14 +412,9 @@ def enforce_release_guard(repo: Path, dist: Path) -> None:
     #    гигабайтных .bin. Компрометированный/frozen workspace не должен даже
     #    стартовать тяжёлые операции.
     status = _load_status(repo)
-    _validate_status_schema(status)
-    distributable = status.get("distributable", _STATUS_ABSENT)
-    if distributable is not True:
-        frozen = status.get("frozen_artifacts")
-        if not (isinstance(frozen, list) and frozen):
-            _refuse("FROZEN_LIST_EMPTY",
-                    "frozen_artifacts должен быть non-empty при блокировке")
-        _refuse("NOT_DISTRIBUTABLE", f"distributable={distributable!r} (нужен bool true)")
+    _validate_status_schema(status)  # distributable=bool, canonical/burned/frozen валидны
+    if status["distributable"] is not True:  # схема гарантирует bool
+        _refuse("NOT_DISTRIBUTABLE", "distributable=false (публикация заморожена)")
 
     # 2) distributable=true: только теперь читаем VERSION, ассеты и хеши.
     version = relver.read_version_file(repo)

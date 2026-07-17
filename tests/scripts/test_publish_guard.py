@@ -106,15 +106,15 @@ def _has_mutating(calls: list) -> bool:
 
 
 # ── 1. FROZEN_HASH: нормализация формы хранимого хеша ───────────────────────
-@pytest.mark.parametrize("form", ["upper", "lower", "mixed", "0x", "spaces"])
+@pytest.mark.parametrize("form", ["upper", "lower", "mixed"])
 def test_publish_refuses_on_frozen_hash(tmp_path: Path, form: str) -> None:
+    # Схема требует ровно 64 hex → нормализация только case (0x/spaces теперь
+    # ловятся схемой как STATUS_SCHEMA, см. test_status_schema_rejects_bad_sha).
     real = fx.sha256_bytes(DEFAULT_EXE)          # реальный lowercase hexdigest exe
     stored = {
         "upper": real.upper(),
         "lower": real,
         "mixed": real[:32].upper() + real[32:],
-        "0x": "0x" + real,
-        "spaces": "   " + real + "  ",
     }[form]
     b = _green_baseline(tmp_path, frozen=[{"name": "x", "sha256": stored, "why": "d"}])
     with pytest.raises(SystemExit) as exc:
@@ -123,12 +123,21 @@ def test_publish_refuses_on_frozen_hash(tmp_path: Path, form: str) -> None:
 
 
 # ── 2. NOT_DISTRIBUTABLE: строго bool True ──────────────────────────────────
-@pytest.mark.parametrize("value", [False, "false", "true", 0, 1, None, fx._ABSENT])
-def test_publish_refuses_unless_distributable_is_boolean_true(tmp_path: Path, value) -> None:
-    b = _green_baseline(tmp_path, distributable=value)
+def test_publish_refuses_when_distributable_false(tmp_path: Path) -> None:
+    # bool False → NOT_DISTRIBUTABLE (валидная схема, публикация заморожена)
+    b = _green_baseline(tmp_path, distributable=False)
     with pytest.raises(SystemExit) as exc:
         _guard(b)
     assert "NOT_DISTRIBUTABLE" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None, fx._ABSENT])
+def test_publish_rejects_non_bool_distributable(tmp_path: Path, value) -> None:
+    # не-bool / missing → STATUS_SCHEMA (distributable обязан быть bool)
+    b = _green_baseline(tmp_path, distributable=value)
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "STATUS_SCHEMA" in str(exc.value)
 
 
 def test_distributable_json_true_passes_axis(tmp_path: Path) -> None:
@@ -218,7 +227,7 @@ def test_frozen_artifacts_must_be_nonempty_when_blocking(tmp_path: Path, kind: s
         b = SimpleNamespace(repo=repo, dist=dist)
     with pytest.raises(SystemExit) as exc:
         _guard(b)
-    assert "FROZEN_LIST_EMPTY" in str(exc.value)
+    assert "STATUS_SCHEMA" in str(exc.value)   # схема требует non-empty frozen
 
 
 # ── 9. DIRTY_TREE: version-источник / release-status изменены после коммита ──
@@ -471,3 +480,45 @@ def test_status_schema_rejects_bad_types(tmp_path: Path, bad: str) -> None:
     with pytest.raises(SystemExit) as exc:
         _guard(b)
     assert "STATUS_SCHEMA" in str(exc.value)
+
+
+_GOOD_SHA = fx.FROZEN_RC2_SHA  # валидный 64-hex (в нижнем регистре ок для схемы)
+
+
+@pytest.mark.parametrize("mutate", [
+    # canonical_version не semver
+    lambda: dict(canonical="not-semver"),
+    # burned: пустой / не-semver / дубликаты
+    lambda: dict(burned=[]),
+    lambda: dict(burned=["not-semver"]),
+    lambda: dict(burned=["1.0.0-rc2", "1.0.0-rc2"]),
+    # frozen: пустой
+    lambda: dict(frozen=[]),
+    # frozen-запись без обязательных полей
+    lambda: dict(frozen=[{"sha256": _GOOD_SHA, "why": "d"}]),          # нет name
+    lambda: dict(frozen=[{"name": "n", "sha256": _GOOD_SHA}]),         # нет why
+    lambda: dict(frozen=[{"name": "n", "why": "d"}]),                  # нет sha
+    lambda: dict(frozen=[{"name": "", "sha256": _GOOD_SHA, "why": "d"}]),   # пустой name
+    lambda: dict(frozen=[{"name": "n", "sha256": _GOOD_SHA, "why": " "}]),  # пустой why
+    # sha неверной длины / не-hex
+    lambda: dict(frozen=[{"name": "n", "sha256": _GOOD_SHA[:63], "why": "d"}]),   # 63
+    lambda: dict(frozen=[{"name": "n", "sha256": _GOOD_SHA + "a", "why": "d"}]),  # 65
+    lambda: dict(frozen=[{"name": "n", "sha256": "z" * 64, "why": "d"}]),         # не-hex
+], ids=["canonical", "burned_empty", "burned_nonsemver", "burned_dup",
+        "frozen_empty", "frozen_no_name", "frozen_no_why", "frozen_no_sha",
+        "frozen_empty_name", "frozen_empty_why", "sha_63", "sha_65", "sha_nonhex"])
+def test_status_schema_rejects_malformed_fields(tmp_path: Path, mutate) -> None:
+    b = _green_baseline(tmp_path)
+    fx.write_status(b.repo, distributable=True, **mutate())
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "STATUS_SCHEMA" in str(exc.value)
+
+
+def test_unprotected_rebuilt_rc2_is_blocked(tmp_path: Path) -> None:
+    # rebuilt rc2: новые байты (hash НЕ во frozen), но версия ∈ burned →
+    # current VERSION не строго выше всех burned → BURNED_VERSION.
+    b = _green_baseline(tmp_path, version="1.0.0-rc2", exe_bytes=b"rebuilt-rc2-fresh")
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "BURNED_VERSION" in str(exc.value)
