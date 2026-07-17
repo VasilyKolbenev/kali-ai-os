@@ -1,0 +1,23 @@
+{
+  "distributable": false,
+  "reason": "stale rc2 предшествует STT/TTS-фиксам (собран 2026-07-15 19:33, до ebcf981); Authenticode NotSigned; version skew rc1(python)/rc2(desktop)/0.1.0(mobile); startup blocking; retired Anthropic default; updater без независимой подписи",
+  "as_of": "2026-07-17",
+  "canonical_version": "1.0.0-rc3",
+  "burned_versions": ["1.0.0-rc1", "1.0.0-rc2"],
+  "frozen_artifacts": [
+    {
+      "name": "KALI-Premium-Setup-1.0.0-rc2.exe",
+      "sha256": "E0A0B2A395DD5C1D6A42ED82E235AD6A7CB9768409D71F70ED0CC91E5C5B5C1A",
+      "why": "DO-NOT-DISTRIBUTE: stale/unsigned/skewed rc2 (аудит 2026-07-17 P0-01)"
+    }
+  ],
+  "requirements_for_distributable_true": [
+    "единая версия и commit во всех desktop-компонентах + release-manifest",
+    "Authenticode валиден и publisher проверен (signtool verify /pa)",
+    "artifact собран после последнего commit из clean immutable stage",
+    "updater подписан независимым ключом либо отключён",
+    "retired model IDs отсутствуют",
+    "startup non-blocking, offline text-degraded mode",
+    "privacy/legal blockers закрыты"
+  ]
+}

@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
+import scripts.release.version as relver
+
 log = logging.getLogger("publish_release")
 
 REPO_SLUG = "VasilyKolbenev/kali-ai-os"
@@ -34,6 +36,9 @@ class AssetFile:
 
 
 def _fail(msg: str) -> NoReturn:
+    # _fail = bare SystemExit(1), сообщение только в лог (не машинно-читаемо).
+    # Для guard-проверок используй _refuse — он несёт reason-token в SystemExit,
+    # что делает отказ mutation-provable в тестах.
     log.error(msg)
     raise SystemExit(1)
 
@@ -61,6 +66,10 @@ def _read_iss_version(repo: Path) -> str:
 
 def validate_versions(repo: Path, dist: Path) -> str:
     """Единство версии: tauri.conf == Cargo.toml == .iss == имена файлов.
+
+    Примечание: покрытие этой функции полностью subsumed guard-делегацией в
+    ``relver.check`` (все 6 desktop-источников + VERSION); оставлена как
+    file-name-присутствие + возврат версии для остального pipeline.
 
     Расхождение = update-петля (апп обновился, считает себя старым) — hard fail.
 
@@ -219,11 +228,184 @@ def flip_manifest(manifest: dict) -> None:
     _run(["git", "push", "origin", "main"])
 
 
+RELEASE_TRACKED_PATHS = frozenset({
+    "pyproject.toml",
+    "kernel/__init__.py",
+    "src-tauri/Cargo.toml",
+    "src-tauri/Cargo.lock",
+    "src-tauri/tauri.conf.json",
+    "scripts/installer_premium.iss",
+    "VERSION",
+    "release-status.json",
+})
+
+
+def _refuse(token: str, detail: str) -> NoReturn:
+    """Отказать в публикации с reason-token в сообщении ``SystemExit``.
+
+    Args:
+        token: Машинный reason-token (напр. ``FROZEN_HASH``).
+        detail: Человекочитаемое уточнение причины.
+
+    Raises:
+        SystemExit: Всегда, сообщение начинается с ``token``.
+    """
+    log.error("%s: %s", token, detail)
+    raise SystemExit(f"{token}: {detail}")
+
+
+def _load_status(repo: Path) -> dict:
+    path = repo / "release-status.json"
+    if not path.exists():
+        _refuse("STATUS_MISSING", f"нет {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError, OSError) as exc:
+        _refuse("STATUS_MALFORMED", f"release-status.json не читается: {exc}")
+    if not isinstance(data, dict):
+        _refuse("STATUS_MALFORMED", "release-status.json не является объектом")
+    return data
+
+
+def _hash_assets(dist: Path, assets: list[AssetFile]) -> dict[str, str]:
+    dist_root = dist.resolve()
+    hashes: dict[str, str] = {}
+    for a in assets:
+        resolved = a.path.resolve()
+        if not resolved.is_relative_to(dist_root):
+            _refuse("FROZEN_HASH", f"asset вне dist: {resolved}")
+        hashes[a.name] = _sha256(resolved)
+    return hashes
+
+
+def _check_frozen(status: dict, asset_hashes: dict[str, str]) -> None:
+    frozen = status.get("frozen_artifacts")
+    live = {h.casefold() for h in asset_hashes.values()}
+    for entry in frozen or []:
+        stored = str(entry.get("sha256", "")).strip()
+        if stored.lower().startswith("0x"):
+            stored = stored[2:]
+        if stored.casefold() in live:
+            _refuse("FROZEN_HASH", f"asset совпал с frozen {entry.get('name')!r}")
+
+
+def _check_burned(status: dict, version: str) -> None:
+    burned = status.get("burned_versions") or []
+    if version in burned or any(relver.compare_semver(version, b) <= 0 for b in burned):
+        _refuse("BURNED_VERSION", f"{version} ∈/≤ burned {burned}")
+
+
+def _check_dirty(repo: Path, dist: Path, allowed_asset_names: set[str]) -> None:
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        _refuse("DIRTY_TREE", f"git status упал (fail-closed): {exc}")
+    for line in proc.stdout.splitlines():
+        path = line[3:].strip().strip('"')
+        if "->" in path:
+            path = path.split("->", 1)[1].strip().strip('"')
+        path = path.replace("\\", "/")
+        if path in RELEASE_TRACKED_PATHS or path.startswith("releases/"):
+            _refuse("DIRTY_TREE", f"release-путь изменён: {path}")
+    for item in dist.iterdir():
+        if item.is_file() and item.name != "release-manifest.json" \
+                and item.name not in allowed_asset_names:
+            _refuse("DIRTY_TREE", f"посторонний файл в installer: {item.name}")
+
+
+def _check_stale(repo: Path, assets: list[AssetFile]) -> None:
+    # mtime — слабый/подделываемый сигнал (touch переставит его вперёд);
+    # единственный ЖЁСТКИЙ staleness-гейт — frozen-hash allowlist (_check_frozen).
+    try:
+        iso = subprocess.run(
+            ["git", "log", "-1", "--format=%cI"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError) as exc:
+        _refuse("STALE_ARTIFACT", f"git log упал (fail-closed): {exc}")
+    committer_epoch = datetime.fromisoformat(iso).timestamp()
+    for a in assets:
+        if a.path.stat().st_mtime < committer_epoch:
+            _refuse("STALE_ARTIFACT", f"{a.name} старше коммита HEAD")
+
+
+def _check_manifest(repo: Path, dist: Path, version: str,
+                    asset_hashes: dict[str, str]) -> None:
+    path = dist / "release-manifest.json"
+    if not path.exists():
+        _refuse("MANIFEST_MISSING", f"нет {path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError, OSError) as exc:
+        _refuse("MANIFEST_MISMATCH", f"release-manifest.json не читается: {exc}")
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError) as exc:
+        _refuse("MANIFEST_MISMATCH", f"git rev-parse упал (fail-closed): {exc}")
+    if manifest.get("version") != version:
+        _refuse("MANIFEST_MISMATCH", f"version {manifest.get('version')!r} != {version!r}")
+    if manifest.get("git_sha") != head:
+        _refuse("MANIFEST_MISMATCH", f"git_sha {manifest.get('git_sha')!r} != HEAD")
+    if manifest.get("dirty") is not False:
+        _refuse("MANIFEST_MISMATCH", "manifest.dirty != false")
+    stored = {a.get("name"): a.get("sha256") for a in manifest.get("assets", [])}
+    for name, digest in asset_hashes.items():
+        if stored.get(name) != digest:
+            _refuse("MANIFEST_MISMATCH", f"asset sha256 расходится: {name}")
+
+
+# Sentinel: ключ distributable отсутствует (missing != false != true).
+_STATUS_ABSENT = object()
+
+
+def enforce_release_guard(repo: Path, dist: Path) -> None:
+    """Fail-closed release-guard: read-only проверки ДО любого gh/git-push.
+
+    Отказывает при: отсутствии/битом release-status, ``distributable != true``,
+    совпадении frozen-hash, сожжённой версии, version-skew, грязном дереве,
+    устаревшем артефакте или неверном/отсутствующем манифесте. Каждый отказ —
+    ``SystemExit`` с distinct reason-token.
+
+    Args:
+        repo: Корень репозитория (release-status.json, version-источники).
+        dist: Директория installer-ассетов + release-manifest.json.
+
+    Raises:
+        SystemExit: При провале любой проверки (см. reason-tokens).
+    """
+    status = _load_status(repo)
+    version = relver.read_version_file(repo)
+    assets = collect_assets(dist, version)
+    asset_hashes = _hash_assets(dist, assets)
+
+    distributable = status.get("distributable", _STATUS_ABSENT)
+    if distributable is not True:
+        frozen = status.get("frozen_artifacts")
+        if not (isinstance(frozen, list) and frozen):
+            _refuse("FROZEN_LIST_EMPTY",
+                    "frozen_artifacts должен быть non-empty при блокировке")
+        _refuse("NOT_DISTRIBUTABLE", f"distributable={distributable!r} (нужен bool true)")
+
+    _check_frozen(status, asset_hashes)
+    _check_burned(status, version)
+    relver.check(repo)  # VERSION_SKEW делегируется version.py
+    _check_dirty(repo, dist, {a.name for a in assets})
+    _check_stale(repo, assets)
+    _check_manifest(repo, dist, version, asset_hashes)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--notes", required=True, help="Release notes (RU, кратко)")
     args = parser.parse_args()
+    enforce_release_guard(REPO_ROOT, DIST_DIR)  # fail-closed, ДО gh/git-push
     version = validate_versions(REPO_ROOT, DIST_DIR)
     assets = collect_assets(DIST_DIR, version)
     manifest = build_manifest(version, args.notes, assets)
