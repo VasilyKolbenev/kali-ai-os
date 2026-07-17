@@ -1,6 +1,6 @@
 {
   "productName": "KALI",
-  "version": "1.0.0-rc2",
+  "version": "1.0.0-rc3",
   "identifier": "com.kali.desktop",
   "build": {
     "frontendDist": "../ui/dist",

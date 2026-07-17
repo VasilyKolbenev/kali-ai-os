@@ -1,6 +1,6 @@
 [project]
 name = "kali"
-version = "1.0.0-rc1"
+version = "1.0.0-rc3"
 description = "KALI — Kernel Agent Lifecycle Intelligence"
 requires-python = ">=3.12"
 dependencies = [

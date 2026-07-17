@@ -2121,7 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "kali-desktop"
-version = "1.0.0-rc1"
+version = "1.0.0-rc3"
 dependencies = [
  "anyhow",
  "axum",
