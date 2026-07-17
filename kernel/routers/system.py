@@ -10,6 +10,7 @@ order (sacred). ``_GUARDED_SECTIONS`` stays inside the patch_config body.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -27,9 +28,13 @@ router = APIRouter()
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
     s = request.app.state
+    # desktop_instance_id: per-spawn ID проброшенный desktop-shell через env
+    # (ownership-контракт A3/OPUS-101). При ручном запуске без env — null, тогда
+    # HealthProbe десктопа трактует backend как ForeignHealthy (не наш).
     return {
         "status": "ok",
         "version": __version__,
+        "desktop_instance_id": os.environ.get("KALI_DESKTOP_INSTANCE_ID"),
         "components": {
             "event_bus": {"subscribers": s.event_bus.subscriber_count},
             "database": {"connected": s.database.is_connected},

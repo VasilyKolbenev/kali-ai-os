@@ -71,6 +71,22 @@ class TestHealthEndpoint:
         assert "event_bus" in data["components"]
         assert "database" in data["components"]
 
+    async def test_health_echoes_desktop_instance_id(
+        self, client: AsyncClient, monkeypatch
+    ) -> None:
+        """Ownership-контракт A3: /health возвращает KALI_DESKTOP_INSTANCE_ID."""
+        monkeypatch.setenv("KALI_DESKTOP_INSTANCE_ID", "abc-123")
+        resp = await client.get("/health")
+        assert resp.json()["desktop_instance_id"] == "abc-123"
+
+    async def test_health_instance_id_null_when_launched_manually(
+        self, client: AsyncClient, monkeypatch
+    ) -> None:
+        """Ручной запуск без env → desktop_instance_id == null (не наш backend)."""
+        monkeypatch.delenv("KALI_DESKTOP_INSTANCE_ID", raising=False)
+        resp = await client.get("/health")
+        assert resp.json()["desktop_instance_id"] is None
+
 
 class TestAgentsEndpoint:
     async def test_list_agents(self, client: AsyncClient) -> None:

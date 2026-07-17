@@ -61,7 +61,13 @@ fn resolve_bind_addr() -> String {
     }
 }
 
-pub async fn serve() -> anyhow::Result<()> {
+/// Стартовать Rust axum (:3006), отправив authoritative bind-результат в
+/// `bind_tx`. `AddrInUse` → `PortOccupied`; любая другая pre-bind/bind ошибка
+/// возвращается как `Err` БЕЗ отправки — вызывающий трактует dropped-sender
+/// (channel disconnect) как `RustStartupFailed`, не «порт занят».
+pub async fn serve(
+    bind_tx: std::sync::mpsc::Sender<crate::startup::BindOutcome>,
+) -> anyhow::Result<()> {
     let bus = Arc::new(event_bus::EventBus::new());
 
     // Auto-update: удалить каталоги старых/непарсящихся загрузок при старте
@@ -95,16 +101,12 @@ pub async fn serve() -> anyhow::Result<()> {
     // LAN surface without a token would reopen the audit BLOCKER.
     let token = auth::load_or_create().context("load control-plane token")?;
 
-    let app = auth::with_auth(
-        http::router_full(bus, pipeline, skills, catalog),
-        token,
-    )
-    .layer(build_cors_layer())
-    // Record only method + PATH in the request span — never the query string,
-    // which carries the LAN control-plane token on /ws?token=… (a debug-level
-    // full-URI span would leak it into logs).
-    .layer(
-        TraceLayer::new_for_http().make_span_with(
+    let app = auth::with_auth(http::router_full(bus, pipeline, skills, catalog), token)
+        .layer(build_cors_layer())
+        // Record only method + PATH in the request span — never the query string,
+        // which carries the LAN control-plane token on /ws?token=… (a debug-level
+        // full-URI span would leak it into logs).
+        .layer(TraceLayer::new_for_http().make_span_with(
             |req: &axum::http::Request<axum::body::Body>| {
                 tracing::info_span!(
                     "http",
@@ -112,14 +114,27 @@ pub async fn serve() -> anyhow::Result<()> {
                     path = %req.uri().path(),
                 )
             },
-        ),
-    );
+        ));
 
     let bind = resolve_bind_addr();
-    let addr: SocketAddr = bind.parse().with_context(|| format!("parse bind address {bind}"))?;
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind {}", addr))?;
+    let addr: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("parse bind address {bind}"))?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => {
+            let _ = bind_tx.send(crate::startup::BindOutcome::Ok);
+            l
+        }
+        Err(e) => {
+            let outcome = if e.kind() == std::io::ErrorKind::AddrInUse {
+                crate::startup::BindOutcome::PortOccupied
+            } else {
+                crate::startup::BindOutcome::StartupFailed
+            };
+            let _ = bind_tx.send(outcome);
+            return Err(e).with_context(|| format!("bind {}", addr));
+        }
+    };
     if addr.ip().is_loopback() {
         info!("Rust backend listening on http://{} (loopback only)", addr);
     } else {
@@ -186,13 +201,19 @@ fn build_skills_registry() -> http::SkillsRegistryHandle {
     let sources = match default_sources() {
         Ok(s) => s,
         Err(err) => {
-            warn!(?err, "skills registry: failed to resolve sources, proxy fallback");
+            warn!(
+                ?err,
+                "skills registry: failed to resolve sources, proxy fallback"
+            );
             return None;
         }
     };
     let registry = SkillsRegistry::new(sources);
     if let Err(err) = registry.discover() {
-        warn!(?err, "skills registry: initial discovery failed, proxy fallback");
+        warn!(
+            ?err,
+            "skills registry: initial discovery failed, proxy fallback"
+        );
         return None;
     }
     Some(Arc::new(registry))
@@ -213,7 +234,10 @@ fn build_catalog_client() -> http::CatalogClientHandle {
     match CatalogClient::new(opts) {
         Ok(client) => Some(client),
         Err(err) => {
-            warn!(?err, "catalog client: initialisation failed, proxy fallback");
+            warn!(
+                ?err,
+                "catalog client: initialisation failed, proxy fallback"
+            );
             None
         }
     }
@@ -229,7 +253,10 @@ async fn build_pipeline_if_enabled(
     let cfg = match config::load() {
         Ok(c) => c,
         Err(err) => {
-            warn!(?err, "could not load config — voice engine defaults to python (proxy)");
+            warn!(
+                ?err,
+                "could not load config — voice engine defaults to python (proxy)"
+            );
             return Ok(None);
         }
     };

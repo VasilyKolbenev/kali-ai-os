@@ -27,8 +27,22 @@ pub enum DegradedReason {
     SpawnFailed,
     /// Статус процесса неизвестен (`try_alive` вернул io-ошибку) — восстановимо.
     ProcessStatusUnknown,
+    /// Rust axum не смог стартовать (init/bind error ≠ AddrInUse, или channel
+    /// disconnect) — терминально, НЕ «порт занят».
+    RustStartupFailed,
     /// Исчерпан лимит респавнов (терминально).
     GaveUp,
+}
+
+/// Результат bind Rust axum (:3006), приходящий authoritative-каналом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindOutcome {
+    /// Успешный bind нашего процесса.
+    Ok,
+    /// `AddrInUse` — порт держит чужой/старый процесс.
+    PortOccupied,
+    /// Другая init/bind-ошибка или channel disconnect (не «порт занят»).
+    StartupFailed,
 }
 
 /// Тотальное состояние загрузки desktop-shell.
@@ -102,6 +116,8 @@ pub enum HealthEvent {
     SpawnFailed,
     /// `terminate_and_wait()` вернул io-ошибку (отражаем в состоянии).
     KillFailed,
+    /// Rust axum не смог стартовать (не AddrInUse) — терминально.
+    RustStartupFailed,
     /// Backoff исчерпан — терминально.
     GaveUp,
 }
@@ -168,6 +184,7 @@ fn rank(s: &StartupState) -> u8 {
         StartupState::PythonStarting => 2,
         StartupState::PythonReady => 3,
         StartupState::Degraded(DegradedReason::PortOccupied)
+        | StartupState::Degraded(DegradedReason::RustStartupFailed)
         | StartupState::Degraded(DegradedReason::GaveUp)
         | StartupState::Failed(_) => 4,
         StartupState::Degraded(_) => 1,
@@ -180,6 +197,7 @@ fn is_hard_terminal(s: &StartupState) -> bool {
         s,
         StartupState::Failed(_)
             | StartupState::Degraded(DegradedReason::PortOccupied)
+            | StartupState::Degraded(DegradedReason::RustStartupFailed)
             | StartupState::Degraded(DegradedReason::GaveUp)
     )
 }
@@ -204,6 +222,7 @@ pub fn next_state(cur: StartupState, ev: HealthEvent) -> StartupState {
     }
     match ev {
         E::RustBindErr => S::Degraded(PortOccupied),
+        E::RustStartupFailed => S::Degraded(RustStartupFailed),
         E::GaveUp => S::Degraded(GaveUp),
         E::KillFailed => S::Failed("kill failed".into()),
         E::RustBindOk if rank(&cur) < rank(&S::RustReady) => S::RustReady,
@@ -296,8 +315,8 @@ pub struct SuperviseCtx<H: ChildHandle> {
     pub tracked: Option<Spawned<H>>,
     pub failures: Vec<Instant>,
     pub backoff_until: Option<Instant>,
-    /// None=bind ещё не резолвлен, Some(true)=ok, Some(false)=порт занят.
-    pub rust_bound: Option<bool>,
+    /// None=bind ещё не резолвлен; иначе authoritative-результат bind :3006.
+    pub rust_bound: Option<BindOutcome>,
     pub exe_present: bool,
     pub base: Duration,
     pub max: Duration,
@@ -410,11 +429,15 @@ where
 
     match ctx.rust_bound {
         None => return LoopControl::Continue,
-        Some(false) => {
+        Some(BindOutcome::PortOccupied) => {
             apply(ctx, HealthEvent::RustBindErr, emit);
             return LoopControl::Stop;
         }
-        Some(true) => {
+        Some(BindOutcome::StartupFailed) => {
+            apply(ctx, HealthEvent::RustStartupFailed, emit);
+            return LoopControl::Stop;
+        }
+        Some(BindOutcome::Ok) => {
             if rank(&ctx.state) < rank(&StartupState::RustReady) {
                 apply(ctx, HealthEvent::RustBindOk, emit);
                 return LoopControl::Continue;

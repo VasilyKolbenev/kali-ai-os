@@ -152,7 +152,7 @@ fn clock() -> FakeClock {
 
 fn ready_ctx() -> SuperviseCtx<FakeChild> {
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     ctx.state = StartupState::RustReady;
     ctx
 }
@@ -190,6 +190,7 @@ fn all_states() -> Vec<StartupState> {
         StartupState::Degraded(Crashed),
         StartupState::Degraded(SpawnFailed),
         StartupState::Degraded(ProcessStatusUnknown),
+        StartupState::Degraded(RustStartupFailed),
         StartupState::Degraded(GaveUp),
         StartupState::Failed("x".into()),
     ]
@@ -208,6 +209,7 @@ fn all_events() -> Vec<HealthEvent> {
         Crashed,
         SpawnFailed,
         KillFailed,
+        RustStartupFailed,
         GaveUp,
     ]
 }
@@ -217,8 +219,58 @@ fn is_terminal(s: &StartupState) -> bool {
         s,
         StartupState::Failed(_)
             | StartupState::Degraded(DegradedReason::PortOccupied)
+            | StartupState::Degraded(DegradedReason::RustStartupFailed)
             | StartupState::Degraded(DegradedReason::GaveUp)
     )
+}
+
+// ── bind outcome: PortOccupied vs RustStartupFailed (различаем) ───────────────
+#[test]
+fn supervise_port_occupied_never_ready() {
+    let probe = FakeProbe::new(false, None);
+    let mut spawner = FakeSpawner::new(-1);
+    let clk = clock();
+    let mut ctx = SuperviseCtx::new(true);
+    ctx.rust_bound = Some(BindOutcome::PortOccupied);
+    let mut emits = Vec::new();
+    let ctrl = drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 4);
+    assert_eq!(ctrl, LoopControl::Stop);
+    assert_eq!(
+        ctx.state,
+        StartupState::Degraded(DegradedReason::PortOccupied)
+    );
+    assert!(!emits.contains(&StartupState::RustReady));
+    assert_eq!(spawner.count, 0);
+}
+
+#[test]
+fn supervise_rust_startup_failed_distinct_from_port() {
+    let probe = FakeProbe::new(false, None);
+    let mut spawner = FakeSpawner::new(-1);
+    let clk = clock();
+    let mut ctx = SuperviseCtx::new(true);
+    ctx.rust_bound = Some(BindOutcome::StartupFailed);
+    let mut emits = Vec::new();
+    let ctrl = drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 4);
+    assert_eq!(ctrl, LoopControl::Stop);
+    assert_eq!(
+        ctx.state,
+        StartupState::Degraded(DegradedReason::RustStartupFailed),
+        "не порт занят — другая startup-ошибка"
+    );
+    assert_ne!(
+        ctx.state,
+        StartupState::Degraded(DegradedReason::PortOccupied)
+    );
+    assert!(!emits.contains(&StartupState::RustReady));
+}
+
+#[test]
+fn next_state_rust_startup_failed_terminal() {
+    let s = next_state(StartupState::ShellReady, HealthEvent::RustStartupFailed);
+    assert_eq!(s, StartupState::Degraded(DegradedReason::RustStartupFailed));
+    // терминал: последующий RustBindOk не даёт RustReady
+    assert_eq!(next_state(s.clone(), HealthEvent::RustBindOk), s);
 }
 
 // ── 1. classify truth-table (typed liveness + ownership) ─────────────────────
@@ -273,6 +325,7 @@ fn next_state_matrix_invariants() {
                     ev,
                     HealthEvent::RustBindOk
                         | HealthEvent::RustBindErr
+                        | HealthEvent::RustStartupFailed
                         | HealthEvent::GaveUp
                         | HealthEvent::KillFailed
                 );
@@ -388,7 +441,7 @@ fn supervise_happy_sequence() {
     let mut spawner = FakeSpawner::new(-1);
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 2);
     probe.up.set(true); // backend поднялся, ID совпадает
@@ -411,7 +464,7 @@ fn supervise_crash_storm_exact_count_one_terminal() {
     let mut spawner = FakeSpawner::new(0); // child умирает мгновенно
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     let ctrl = drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 300);
     assert_eq!(ctrl, LoopControl::Stop);
@@ -431,7 +484,7 @@ fn supervise_no_kill_while_alive() {
     let mut spawner = FakeSpawner::new(-1);
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 120);
     assert_eq!(ctx.state, StartupState::PythonStarting);
@@ -464,7 +517,7 @@ fn supervise_instance_id_rotates_after_respawn() {
     let mut spawner = FakeSpawner::new(0); // фаза 1: child умирает
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 2); // spawn#1 id-1
     let first = ctx.tracked.as_ref().map(|s| s.instance_id.clone());
@@ -589,7 +642,7 @@ fn supervise_crashed_emits_and_recovers() {
     let mut spawner = FakeSpawner::new(0); // фаза 1: падает
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 6);
     assert!(emits.contains(&StartupState::Degraded(DegradedReason::Crashed)));
@@ -617,7 +670,7 @@ fn supervise_spawn_failure_distinct_reason() {
     spawner.fail = true;
     let clk = clock();
     let mut ctx = SuperviseCtx::new(true);
-    ctx.rust_bound = Some(true);
+    ctx.rust_bound = Some(BindOutcome::Ok);
     let mut emits = Vec::new();
     drive(&mut ctx, &probe, &mut spawner, &clk, &mut emits, 4);
     assert!(emits.contains(&StartupState::Degraded(DegradedReason::SpawnFailed)));
