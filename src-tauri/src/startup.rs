@@ -160,7 +160,6 @@ pub trait BackendSpawner {
 /// Источник времени (инъекция для виртуального времени в тестах).
 pub trait Clock {
     fn now(&self) -> Instant;
-    fn sleep(&self, d: Duration);
 }
 
 /// Внешний сигнал завершения (реальный — `AtomicBool`), проверяется вокруг IO.

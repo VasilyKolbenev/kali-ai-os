@@ -27,8 +27,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const STARTUP_EVENT: &str = "startup://state";
 /// Период тика supervisor (пробуждается раньше по shutdown через Condvar).
 const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
-/// Ограниченное ожидание ack при shutdown (bounded).
-const SHUTDOWN_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+/// Гранулярность recv-loop shutdown-waiter'а (авто-продолжение при timeout).
+const SHUTDOWN_ACK_TICK: Duration = Duration::from_secs(1);
 /// Предел тела /health (защита от зависшего/огромного ответа).
 const HEALTH_BODY_LIMIT: u64 = 64 * 1024;
 
@@ -73,49 +73,78 @@ impl Waker {
     }
 }
 
-/// Результат попытки graceful shutdown.
+/// Решение по `ExitRequested`.
 #[derive(Debug, PartialEq, Eq)]
-enum ShutdownResult {
+enum ExitDecision {
+    /// `done` подтверждён → разрешить выход.
+    Allow,
+    /// cleanup не подтверждён → `api.prevent_exit()`.
+    Prevent,
+}
+
+/// Исход ожидания ack shutdown-waiter'ом.
+#[derive(Debug, PartialEq, Eq)]
+enum AckOutcome {
     Completed,
-    Timeout,
     Disconnected,
 }
 
-/// Идемпотентный shutdown: флаг + будильник + ack. `done` ставится ТОЛЬКО после
-/// подтверждённого ack; при timeout receiver сохраняется (cleanup retryable).
+/// Shutdown-оркестрация: флаг + будильник + ack. `done` ставится ТОЛЬКО после
+/// подтверждённого ack. `waiter_started` гарантирует ровно один waiter.
 struct ShutdownControl {
     flag: Arc<AtomicBool>,
     waker: Arc<Waker>,
     ack: Mutex<Option<Receiver<()>>>,
-    done: AtomicBool,
+    done: Arc<AtomicBool>,
+    waiter_started: AtomicBool,
 }
 
-/// Попытка graceful shutdown с ограниченным ожиданием ack.
-fn attempt_shutdown(ctl: &ShutdownControl, timeout: Duration) -> ShutdownResult {
+/// Ждать ack вне event-loop: timeout → авто-продолжение (receiver не теряется),
+/// Disconnected → terminal failure. Успех — единственный путь к завершению.
+fn wait_for_ack(rx: &Receiver<()>, tick: Duration) -> AckOutcome {
+    loop {
+        match rx.recv_timeout(tick) {
+            Ok(()) => return AckOutcome::Completed,
+            Err(RecvTimeoutError::Timeout) => continue, // auto-continue, без 2-го клика
+            Err(RecvTimeoutError::Disconnected) => return AckOutcome::Disconnected,
+        }
+    }
+}
+
+/// Обработать `ExitRequested`. `done` → Allow. Иначе запустить РОВНО ОДИН
+/// waiter-поток (не блокируя event-loop): по confirmed ack — `done=true` +
+/// `on_complete` (в проде `app.exit(0)`); Disconnected — лог cleanup-failure,
+/// НИКОГДА не Completed и без авто-exit (pending остаётся terminal).
+fn on_exit_requested<F>(ctl: &ShutdownControl, tick: Duration, on_complete: F) -> ExitDecision
+where
+    F: FnOnce() + Send + 'static,
+{
     if ctl.done.load(Ordering::SeqCst) {
-        return ShutdownResult::Completed;
+        return ExitDecision::Allow;
     }
     ctl.flag.store(true, Ordering::SeqCst);
     ctl.waker.wake();
-    let mut guard = ctl.ack.lock().unwrap();
-    let recv = match guard.take() {
-        Some(r) => r,
-        None => return ShutdownResult::Completed,
-    };
-    match recv.recv_timeout(timeout) {
-        Ok(()) => {
-            ctl.done.store(true, Ordering::SeqCst);
-            ShutdownResult::Completed
-        }
-        Err(RecvTimeoutError::Timeout) => {
-            *guard = Some(recv); // не терять receiver → cleanup retryable
-            ShutdownResult::Timeout
-        }
-        Err(RecvTimeoutError::Disconnected) => ShutdownResult::Disconnected,
+    if !ctl.waiter_started.swap(true, Ordering::SeqCst) {
+        let rx = ctl.ack.lock().unwrap().take();
+        let done = ctl.done.clone();
+        std::thread::spawn(move || {
+            if let Some(rx) = rx {
+                match wait_for_ack(&rx, tick) {
+                    AckOutcome::Completed => {
+                        done.store(true, Ordering::SeqCst);
+                        on_complete();
+                    }
+                    AckOutcome::Disconnected => {
+                        eprintln!("shutdown cleanup FAILED: supervisor disconnected without ack");
+                    }
+                }
+            }
+        });
     }
+    ExitDecision::Prevent
 }
 
-/// Только выставить флаг+wake (Destroyed): не потребляет ack.
+/// Только выставить флаг+wake (Destroyed): не потребляет ack и не стартует waiter.
 fn signal_shutdown_only(ctl: &ShutdownControl) {
     ctl.flag.store(true, Ordering::SeqCst);
     ctl.waker.wake();
@@ -360,9 +389,6 @@ impl startup::Clock for RealClock {
     fn now(&self) -> Instant {
         Instant::now()
     }
-    fn sleep(&self, d: Duration) {
-        std::thread::sleep(d);
-    }
 }
 
 /// Записать новое состояние в `StartupCell` и эмитнуть на фронт (только смена).
@@ -457,7 +483,8 @@ pub fn run() {
             flag: shutdown.clone(),
             waker: waker.clone(),
             ack: Mutex::new(Some(ack_rx)),
-            done: AtomicBool::new(false),
+            done: Arc::new(AtomicBool::new(false)),
+            waiter_started: AtomicBool::new(false),
         })
         .setup(move |app| {
             // Шорткат ПЕРВЫМ и fail-soft: сбой хоткея не должен абортить boot
@@ -488,14 +515,20 @@ pub fn run() {
         .expect("error while building KALI")
         .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { api, .. } => {
-                // Не выходить, пока cleanup не подтверждён реальным ack.
-                match attempt_shutdown(&app.state::<ShutdownControl>(), SHUTDOWN_ACK_TIMEOUT) {
-                    ShutdownResult::Completed => {}
-                    ShutdownResult::Timeout | ShutdownResult::Disconnected => api.prevent_exit(),
+                // done → выпустить; иначе prevent_exit + один waiter, который вне
+                // event-loop дождётся ack и вызовет app.exit(0) (тогда повторный
+                // ExitRequested увидит done=true и разрешит выход).
+                let app2 = app.clone();
+                match on_exit_requested(
+                    &app.state::<ShutdownControl>(),
+                    SHUTDOWN_ACK_TICK,
+                    move || {
+                        app2.exit(0);
+                    },
+                ) {
+                    ExitDecision::Allow => {}
+                    ExitDecision::Prevent => api.prevent_exit(),
                 }
-            }
-            tauri::RunEvent::Exit => {
-                let _ = attempt_shutdown(&app.state::<ShutdownControl>(), SHUTDOWN_ACK_TIMEOUT);
             }
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::Destroyed,

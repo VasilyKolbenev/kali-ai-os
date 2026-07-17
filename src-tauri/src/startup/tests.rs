@@ -140,7 +140,10 @@ impl Clock for FakeClock {
     fn now(&self) -> Instant {
         self.t.get()
     }
-    fn sleep(&self, d: Duration) {
+}
+impl FakeClock {
+    /// Продвинуть виртуальное время (inherent — вне трейта Clock).
+    fn advance(&self, d: Duration) {
         self.t.set(self.t.get() + d);
     }
 }
@@ -172,7 +175,7 @@ fn drive(
         if last == LoopControl::Stop {
             break;
         }
-        clock.sleep(Duration::from_millis(500));
+        clock.advance(Duration::from_millis(500));
     }
     last
 }
