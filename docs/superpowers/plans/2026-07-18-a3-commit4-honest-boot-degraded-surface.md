@@ -170,7 +170,7 @@ describe("classifyStartup", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --dir ui vitest run src/lib/__tests__/startupState.test.ts`
+Run: `pnpm --dir ui exec vitest run src/lib/__tests__/startupState.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write the implementation**
@@ -281,7 +281,7 @@ export function classifyStartup(label: string | null): StartupView {
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pnpm --dir ui vitest run src/lib/__tests__/startupState.test.ts`
+Run: `pnpm --dir ui exec vitest run src/lib/__tests__/startupState.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Mutation checks**
@@ -444,7 +444,7 @@ describe("useStartupState", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --dir ui vitest run src/hooks/__tests__/useStartupState.test.ts`
+Run: `pnpm --dir ui exec vitest run src/hooks/__tests__/useStartupState.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write the implementation**
@@ -526,7 +526,7 @@ export function useStartupState(): string | null {
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pnpm --dir ui vitest run src/hooks/__tests__/useStartupState.test.ts`
+Run: `pnpm --dir ui exec vitest run src/hooks/__tests__/useStartupState.test.ts`
 Expected: PASS — 10 tests.
 
 - [ ] **Step 5: Mutation checks**
@@ -651,7 +651,7 @@ describe("App startup surface", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --dir ui vitest run src/__tests__/App.startup.test.tsx`
+Run: `pnpm --dir ui exec vitest run src/__tests__/App.startup.test.tsx`
 Expected: FAIL — no `startup-*` testid.
 
 - [ ] **Step 3: Modify `App.tsx`**
@@ -673,12 +673,12 @@ Remove the timer-terminal: delete the `kernelStage === 2` red branch and drop `f
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pnpm --dir ui vitest run src/__tests__/App.startup.test.tsx`
+Run: `pnpm --dir ui exec vitest run src/__tests__/App.startup.test.tsx`
 Expected: PASS — U1–U5.
 
 - [ ] **Step 5: Full UI gate**
 
-Run: `pnpm --dir ui vitest run` and `pnpm --dir ui tsc -b --noEmit`
+Run: `pnpm --dir ui exec vitest run` and `pnpm --dir ui exec tsc -b --noEmit`
 Expected: all suites pass, no type errors. Confirm no other test depended on `kernelStage === 2`.
 
 - [ ] **Step 6: Commit**
@@ -692,8 +692,8 @@ git commit -m "feat(ui): honest boot and degraded surface over onboarding"
 
 ## Verification & gates (definition of done)
 
-- `pnpm --dir ui vitest run` — all suites green (new: `startupState`, `useStartupState` ×10, `App.startup` ×5).
-- `pnpm --dir ui tsc -b --noEmit` — no type errors.
+- `pnpm --dir ui exec vitest run` — all suites green (new: `startupState`, `useStartupState` ×10, `App.startup` ×5).
+- `pnpm --dir ui exec tsc -b --noEmit` — no type errors.
 - Mutation evidence recorded for classifier (2) and hook (5).
 - `git status ui/` — only intended files touched; no OPUS-102 / updater / model files.
 - **⛔ STOP before the GUI live gate.** GUI live evidence (Vasily's desktop) is a separate gate: each red/amber surface renders over the boot splash for its real trigger; healthy `python_ready` shows the normal UI; a degraded→`python_ready` recovery clears the overlay via reconciliation.
