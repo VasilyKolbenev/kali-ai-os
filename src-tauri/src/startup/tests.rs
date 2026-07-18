@@ -9,6 +9,8 @@ use std::sync::Arc;
 // и его тесты загейчены: иначе `cargo test --release` падает на
 // несуществующих элементах.
 #[cfg(debug_assertions)]
+mod backend_override;
+#[cfg(debug_assertions)]
 mod boot_delay;
 
 // ── тест-даблы ───────────────────────────────────────────────────────────────
@@ -404,17 +406,59 @@ fn next_state_explicit_transitions() {
     );
 }
 
-// ── 4. resolve_backend_path порядок ──────────────────────────────────────────
+// ── 4. resolve_backend_path: fail-closed, только adjacent onedir ─────────────
+/// Предикат existence по явному списку «существующих» путей.
+fn exists_set(paths: Vec<PathBuf>) -> impl Fn(&Path) -> bool {
+    move |x: &Path| paths.iter().any(|p| p == x)
+}
+
 #[test]
-fn resolve_backend_path_candidate_order() {
+fn resolve_backend_accepts_adjacent_onedir() {
     let dir = PathBuf::from("C:/app");
-    let premium = dir.join("kali-backend").join("kali-backend.exe");
-    let flat = dir.join("kali-backend.exe");
-    let p = premium.clone();
-    assert_eq!(resolve_backend_path(Some(&dir), |x| x == p), Some(premium));
-    let f = flat.clone();
-    assert_eq!(resolve_backend_path(Some(&dir), |x| x == f), Some(flat));
+    let bundle = dir.join("kali-backend");
+    let exe = bundle.join("kali-backend.exe");
+    let ok = exists_set(vec![exe.clone(), bundle.join("_internal")]);
+    assert_eq!(resolve_backend_path(Some(&dir), ok), Some(exe));
+}
+
+#[test]
+fn resolve_backend_rejects_onedir_without_internal() {
+    // exe на месте, но каталога _internal нет → это не валидный onedir-бандл.
+    let dir = PathBuf::from("C:/app");
+    let exe = dir.join("kali-backend").join("kali-backend.exe");
+    let only_exe = exists_set(vec![exe]);
+    assert_eq!(resolve_backend_path(Some(&dir), only_exe), None);
+}
+
+#[test]
+fn resolve_backend_ignores_flat_onefile_even_if_present() {
+    // Плоский onefile рядом с desktop-exe больше НЕ кандидат (он порождает
+    // внука-bootloader, который переживает Child.kill() и держит порт).
+    let dir = PathBuf::from("C:/app");
+    let flat = exists_set(vec![dir.join("kali-backend.exe")]);
+    assert_eq!(resolve_backend_path(Some(&dir), flat), None);
+}
+
+#[test]
+fn resolve_backend_has_no_ancestor_or_cwd_fallback() {
+    // Ни <repo>/dist, ни голое имя из cwd/PATH не должны подхватываться.
+    let dir = PathBuf::from("C:/app/target/debug");
+    let fallbacks = exists_set(vec![
+        PathBuf::from("C:/app/dist/kali-backend.exe"),
+        PathBuf::from("C:/app/dist/kali-backend/kali-backend.exe"),
+        PathBuf::from("C:/app/dist/kali-backend/_internal"),
+        PathBuf::from("C:/app/target/kali-backend.exe"),
+        PathBuf::from("kali-backend.exe"),
+    ]);
+    assert_eq!(resolve_backend_path(Some(&dir), fallbacks), None);
+}
+
+#[test]
+fn resolve_backend_missing_bundle_is_none() {
+    let dir = PathBuf::from("C:/app");
     assert_eq!(resolve_backend_path(Some(&dir), |_| false), None);
+    // без exe_dir тоже None (никакого cwd-фоллбэка)
+    assert_eq!(resolve_backend_path(None, |_| true), None);
 }
 
 // ── 5. reap: Absent/Alive/Unknown ────────────────────────────────────────────

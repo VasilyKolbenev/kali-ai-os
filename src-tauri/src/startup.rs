@@ -350,26 +350,63 @@ pub fn failures_in_window(failures: &[Instant], now: Instant, window: Duration) 
         .count() as u32
 }
 
-/// Кандидаты пути backend в порядке приоритета; инъекция `exists` делает
-/// None-ветку (сломанная установка) детерминированной без реального FS.
+/// Имя дистрибутивного onedir-каталога рядом с desktop-exe.
+const BACKEND_DIR: &str = "kali-backend";
+/// Имя исполняемого файла бэкенда внутри onedir-каталога.
+const BACKEND_EXE: &str = "kali-backend.exe";
+/// Обязательный маркер валидного PyInstaller onedir-бандла.
+const ONEDIR_MARKER: &str = "_internal";
+
+/// Единственный допустимый путь бэкенда: onedir рядом с desktop-exe.
+///
+/// Fail-closed: принимается ТОЛЬКО `<exe_dir>/kali-backend/kali-backend.exe`
+/// при наличии соседнего каталога `_internal`. Прежние fallback-кандидаты
+/// (плоский onefile рядом с exe, `<repo>/dist`, голое имя из cwd/PATH) удалены:
+/// onefile-бандл порождает внука-bootloader, который переживает `Child.kill()`
+/// и продолжает держать порт, а cwd/ancestor-поиск делал выбор артефакта
+/// зависимым от места запуска. Отсутствие бандла → `None` → честный `NotFound`.
+///
+/// Инъекция `exists` делает обе ветки детерминированными без реальной ФС.
+///
+/// Args:
+///     exe_dir: Каталог desktop-exe (`None` — путь неизвестен).
+///     exists: Предикат существования пути (файла или каталога).
+///
+/// Returns:
+///     Канонический путь бэкенда либо `None`.
 pub fn resolve_backend_path(
     exe_dir: Option<&Path>,
     exists: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = exe_dir {
-        candidates.push(dir.join("kali-backend").join("kali-backend.exe"));
-        candidates.push(dir.join("kali-backend.exe"));
-        if let Some(root) = dir
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-        {
-            candidates.push(root.join("dist").join("kali-backend.exe"));
-        }
+    let bundle = exe_dir?.join(BACKEND_DIR);
+    let exe = bundle.join(BACKEND_EXE);
+    (exists(&exe) && exists(&bundle.join(ONEDIR_MARKER))).then_some(exe)
+}
+
+/// Debug-only override пути бэкенда (`KALI_BACKEND_EXE`).
+///
+/// Нужен потому, что в dev-раскладке рядом с `target/debug/` onedir-бандла нет,
+/// а fallback-кандидаты удалены намеренно. Принимается только абсолютный путь к
+/// существующему exe с соседним `_internal` — те же инварианты, что и у
+/// канонического пути, чтобы override не стал лазейкой для onefile.
+/// Отсутствует в release-сборке: переменную читает вызывающий под `cfg`.
+///
+/// Args:
+///     raw: Сырое значение переменной окружения, если задана.
+///     exists: Предикат существования пути.
+///
+/// Returns:
+///     Валидный override либо `None` (тогда используется канонический путь).
+#[cfg(debug_assertions)]
+pub fn resolve_backend_override(
+    raw: Option<&str>,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let exe = PathBuf::from(raw?.trim());
+    if !exe.is_absolute() || !exists(&exe) {
+        return None;
     }
-    candidates.push(PathBuf::from("kali-backend.exe"));
-    candidates.into_iter().find(|p| exists(p))
+    exists(&exe.parent()?.join(ONEDIR_MARKER)).then_some(exe)
 }
 
 /// Reap tracked-процесса → `Liveness`. Подтверждённый exit (`Ok(false)`) чистит

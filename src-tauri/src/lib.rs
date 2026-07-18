@@ -214,6 +214,17 @@ fn open_backend_logs(logs_dir: &Path) -> std::io::Result<(File, File)> {
 
 /// Путь backend через pure `resolve_backend_path` (реальная FS-проба).
 fn find_backend() -> Option<PathBuf> {
+    // Debug-only override: в dev-раскладке onedir-бандла рядом с target/debug нет,
+    // а fallback-кандидаты удалены намеренно (fail-closed). Переменная и её чтение
+    // отсутствуют в release-сборке.
+    #[cfg(debug_assertions)]
+    if let Some(overridden) =
+        startup::resolve_backend_override(std::env::var("KALI_BACKEND_EXE").ok().as_deref(), |p| {
+            p.exists()
+        })
+    {
+        return Some(overridden);
+    }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -371,8 +382,11 @@ impl startup::BackendSpawner for RealSpawner {
             Err(err) => eprintln!("backend log open failed (non-fatal): {err}"),
         }
         let child = command.spawn()?;
+        // Путь в логе обязателен: он делает выбор артефакта проверяемым в live-гейте
+        // (какой именно бандл подхвачен — канонический onedir или debug-override).
         eprintln!(
-            "spawned kali-backend PID {} instance {}",
+            "spawned kali-backend path {} PID {} instance {}",
+            backend_exe.display(),
             child.id(),
             instance_id
         );
