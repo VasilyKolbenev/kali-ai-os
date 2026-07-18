@@ -1,5 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+
+// Локальное объявление вместо @types/node: тесты идут в node-процессе Vitest,
+// а добавлять зависимость ради одного слушателя — вне границ этого коммита.
+declare const process: {
+  on(event: string, cb: () => void): void;
+  off(event: string, cb: () => void): void;
+};
 
 const { listen, invoke } = vi.hoisted(() => ({
   listen: vi.fn(),
@@ -11,13 +19,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import { RECONCILE_MS, useStartupState } from "../useStartupState";
 
 let handler: ((e: { payload: string }) => void) | undefined;
-let unlisten: ReturnType<typeof vi.fn>;
+let unlisten: Mock<() => void>;
 
 beforeEach(() => {
   listen.mockReset();
   invoke.mockReset();
   handler = undefined;
-  unlisten = vi.fn();
+  unlisten = vi.fn<() => void>();
   listen.mockImplementation((_e: string, h: (e: { payload: string }) => void) => {
     handler = h;
     return Promise.resolve(unlisten);

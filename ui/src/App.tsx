@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "./stores/appStore";
 import { useWebSocket } from "./api/websocket";
 import { useOnboardingGate } from "./hooks/useOnboardingGate";
+import { useStartupState } from "./hooks/useStartupState";
+import { classifyStartup } from "./lib/startupState";
+import { StartupSurface } from "./components/Startup/StartupSurface";
 import { Avatar } from "./components/Avatar/Avatar";
 import { Dashboard } from "./components/Dashboard/Dashboard";
 import { AgentStore } from "./components/AgentStore/AgentStore";
@@ -21,24 +24,21 @@ import { AnimatePresence, motion } from "framer-motion";
 /** Kernel connectivity stage:
     - 0: connected / brief blip (no banner)
     - 1: unreachable > graceMs → "reconnecting" (transient)
-    - 2: unreachable > failMs → treat as a terminal backend-start failure and
-         stop pretending we're still reconnecting (Rust also emits
-         `backend://failed` for logs). */
-function useKernelStage(graceMs = 3000, failMs = 12000): 0 | 1 | 2 {
+
+    A timer must NOT manufacture a terminal state: the authoritative Rust
+    startup-state owns terminal failure (see `useStartupState` +
+    `classifyStartup`). This hook only reports a transient WS hint. */
+function useKernelStage(graceMs = 3000): 0 | 1 {
   const connected = useAppStore((s) => s.kernelConnected);
-  const [stage, setStage] = useState<0 | 1 | 2>(0);
+  const [stage, setStage] = useState<0 | 1>(0);
   useEffect(() => {
     if (connected) {
       setStage(0);
       return;
     }
     const t1 = setTimeout(() => setStage(1), graceMs);
-    const t2 = setTimeout(() => setStage(2), failMs);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [connected, graceMs, failMs]);
+    return () => clearTimeout(t1);
+  }, [connected, graceMs]);
   return stage;
 }
 
@@ -46,6 +46,7 @@ export default function App() {
   const mode = useAppStore((s) => s.mode);
   useWebSocket();
   const { loading: onboardingLoading, gated: onboardingGated, slow } = useOnboardingGate();
+  const startup = classifyStartup(useStartupState());
   const kernelStage = useKernelStage();
   const updaterCheck = useUpdaterStore((s) => s.check);
   useEffect(() => {
@@ -53,6 +54,13 @@ export default function App() {
     const id = setInterval(() => void updaterCheck(), 24 * 3600 * 1000); // раз в сутки
     return () => clearInterval(id);
   }, [updaterCheck]);
+
+  // Rust startup-state is authoritative: a failed/degraded backend must win
+  // over BOTH the boot splash and the onboarding wizard, otherwise a broken
+  // backend hides behind an infinite "Джарвис запускается…".
+  if (startup.kind === "failed" || startup.kind === "degraded") {
+    return <StartupSurface view={startup} />;
+  }
 
   if (onboardingLoading) {
     return (
@@ -94,23 +102,10 @@ export default function App() {
 
       <Sidebar />
 
-      {/* Kernel connectivity — plain words instead of raw fetch errors.
-          After a prolonged outage we stop pretending we're "reconnecting" and
-          show an honest terminal failure (red) telling the user to restart. */}
-      {kernelStage === 2 ? (
-        <div
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl
-            text-sm flex items-center gap-2 border backdrop-blur-md max-w-md text-center"
-          style={{
-            color: "var(--j-red, #ef4444)",
-            borderColor: "color-mix(in srgb, var(--j-red, #ef4444) 40%, transparent)",
-            background: "rgba(0,0,0,0.6)",
-          }}
-        >
-          <span className="w-2 h-2 rounded-full bg-current shrink-0" />
-          Ядро не запустилось. Перезапусти приложение; если не помогает — проверь логи в папке данных KALI.
-        </div>
-      ) : kernelStage === 1 ? (
+      {/* Kernel connectivity — plain words instead of raw fetch errors. This
+          is a TRANSIENT hint only; terminal failure is owned by the Rust
+          startup-state above (StartupSurface), never by a timer here. */}
+      {kernelStage === 1 ? (
         <div
           className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl
             text-sm flex items-center gap-2 border backdrop-blur-md"
