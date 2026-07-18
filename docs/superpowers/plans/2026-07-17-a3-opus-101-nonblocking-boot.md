@@ -152,3 +152,23 @@ U3. `rust_bind_failure_shows_distinct_error` — startup=`Failed/Degraded(PortOc
 5. **Логи:** respawn НЕ truncate (append / session-rotation); crash marker переживает spawn#1→#2; ошибку открытия логов логировать. Тест marker-survives-respawn.
 6. **Standalone API восстановить:** public `backend::serve()` (без startup-типа) для `backend_dev`; internal `serve_with_bind_signal(bind_tx)` для Tauri. Проверка: `cargo check --bin backend_dev` + `cargo check` desktop-target (НЕ заявлять «whole app compiles» по `cargo test --lib`).
 7. **Setup без fallible-хвоста:** shortcut регистрировать ДО потоков либо fail-soft с логом; setup после spawn обязан гарантированно вернуть `Ok`.
+
+---
+
+## Review-gap #7 (Codex, после commit 4) — пропущенный acceptance `KALI_BOOT_DELAY_MS`
+
+**Что было пропущено.** Owner-решение №4 (строка 111) и live-протокол first-paint (строка 76) требуют debug-only рычаг `KALI_BOOT_DELAY_MS`. Коммиты 1–2 (`5e2df04`…`94448bc`) его **не реализовали**: рычага не существовало ни в `startup.rs`, ни в `lib.rs`. Гейт first-paint ≤1с при «медленном Python» был бы невыполним без реальной 30–60с загрузки — то есть acceptance-критерий A3 нечем было проверить.
+
+**Чем закрыт** — отдельный TDD fix-commit `63f74f6` (не amend):
+
+- **`DelayedProbe<'a, P, C>`** (`startup.rs`) — обёртка над `HealthProbe`; `supervise_step` и `SuperviseCtx` не менялись, рычаг подключается подменой типа probe в `run_supervisor`.
+- **Задерживается ТОЛЬКО признание `OwnedHealthy`** → до дедлайна возвращается `Unhealthy`, значит `Alive + Unhealthy → Action::Starting` (не `Spawn`): supervisor держит `PythonStarting` и **не убивает живой child**. `ForeignHealthy` и реальная неготовность **не маскируются**.
+- **Без sleep:** дедлайн — неблокирующее сравнение `elapsed` от инъектируемого `Clock`; петля продолжает тикать.
+- **`parse_boot_delay_ms`:** отсутствует/пусто/не число/отрицательное/переполнение → `0` (рычаг выключен, без паники); превышение зажимается в `MAX_BOOT_DELAY_MS` = 600_000 (10 мин).
+- **Release-исключение:** весь блок, включая строковый литерал имени переменной, под `#[cfg(debug_assertions)]`; `[profile.*]` в `Cargo.toml` не переопределён, поэтому release (`debug-assertions=false`) его не содержит. `cargo check --release --bins` — чисто.
+
+**Тесты (4):** parse-варианты; до/на/после дедлайна; `Foreign`/`Unhealthy` неизменны по обе стороны дедлайна; сквозной `supervise_step` при 45000 мс — держит `PythonStarting`, child не терминируется, `spawn count == 1`, после дедлайна → `PythonReady` (ровно один emit на состояние). **Mutation:** обход delay краснит ровно два delay-теста.
+
+**Гейты:** `cargo test --lib` 128 passed · `cargo check --bins --offline --locked` без warnings · rustfmt `skip_children` только по изменённым leaf-файлам · `backend/` не задет · `Cargo.toml`/`Cargo.lock`/UI не тронуты.
+
+**Урок (в копилку [[feedback-dev-machine-masks-truth]]):** acceptance-критерий, записанный в план, но не превращённый в commit-слайс, тихо выпадает — план перечислял рычаг в owner-решениях и в live-протоколе, но ни один слайс за него не отвечал.
