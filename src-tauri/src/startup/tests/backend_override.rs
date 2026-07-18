@@ -1,64 +1,153 @@
 //! Тесты debug-only override пути бэкенда (`KALI_BACKEND_EXE`).
 //!
-//! Вынесены в модуль под `#[cfg(debug_assertions)]`: `resolve_backend_override`
-//! отсутствует в release-сборке, поэтому и тесты не должны там компилироваться.
+//! Вынесены в модуль под `#[cfg(debug_assertions)]`: override отсутствует в
+//! release-сборке, поэтому и тесты не должны там компилироваться.
 //!
-//! Контракт: override принимается ТОЛЬКО если путь абсолютный, exe существует и
-//! рядом с ним лежит каталог `_internal` (валидный PyInstaller onedir). Любое
-//! нарушение → `None`, то есть падаем на канонический путь, а не на мусор.
+//! Контракт (tri-state, fail-closed):
+//! * переменная не задана → `Unset` → используется канонический adjacent onedir;
+//! * задана и валидна → `Valid` → используется override;
+//! * задана, но пуста/невалидна → `Invalid` → `None`, **без отката** на adjacent
+//!   (иначе опечатка в пути тихо подсунула бы другой артефакт).
+//!
+//! Валидность = абсолютный путь к файлу с именем `kali-backend.exe`, рядом с
+//! которым лежит КАТАЛОГ `_internal`.
 use super::*;
+use std::ffi::OsStr;
 
-fn exists_set(paths: Vec<PathBuf>) -> impl Fn(&Path) -> bool {
-    move |x: &Path| paths.iter().any(|p| p == x)
+fn ov(raw: &str, f: Vec<PathBuf>, d: Vec<PathBuf>) -> BackendOverride {
+    resolve_backend_override(Some(OsStr::new(raw)), files(f), dirs(d))
+}
+
+fn exe() -> PathBuf {
+    PathBuf::from("C:/custom/kali-backend/kali-backend.exe")
+}
+fn internal() -> PathBuf {
+    PathBuf::from("C:/custom/kali-backend/_internal")
+}
+
+#[test]
+fn override_unset_when_env_absent() {
+    assert_eq!(
+        resolve_backend_override(None, |_| true, |_| true),
+        BackendOverride::Unset
+    );
 }
 
 #[test]
 fn override_accepts_absolute_onedir_exe() {
-    let exe = PathBuf::from("C:/custom/kali-backend/kali-backend.exe");
-    let internal = PathBuf::from("C:/custom/kali-backend/_internal");
-    let ok = exists_set(vec![exe.clone(), internal]);
     assert_eq!(
-        resolve_backend_override(Some("C:/custom/kali-backend/kali-backend.exe"), ok),
-        Some(exe)
+        ov(
+            "C:/custom/kali-backend/kali-backend.exe",
+            vec![exe()],
+            vec![internal()]
+        ),
+        BackendOverride::Valid(exe())
     );
 }
 
 #[test]
 fn override_rejects_relative_path() {
-    // Относительный путь зависит от cwd — ровно тот класс фоллбэка, который убран.
-    let ok = exists_set(vec![
-        PathBuf::from("kali-backend/kali-backend.exe"),
-        PathBuf::from("kali-backend/_internal"),
-    ]);
+    // Относительный путь зависит от cwd — ровно тот класс фоллбэка, что убран.
     assert_eq!(
-        resolve_backend_override(Some("kali-backend/kali-backend.exe"), ok),
-        None
+        ov(
+            "kali-backend/kali-backend.exe",
+            vec![PathBuf::from("kali-backend/kali-backend.exe")],
+            vec![PathBuf::from("kali-backend/_internal")]
+        ),
+        BackendOverride::Invalid
     );
 }
 
 #[test]
 fn override_rejects_missing_exe() {
-    let ok = exists_set(vec![PathBuf::from("C:/custom/kali-backend/_internal")]);
     assert_eq!(
-        resolve_backend_override(Some("C:/custom/kali-backend/kali-backend.exe"), ok),
-        None
+        ov(
+            "C:/custom/kali-backend/kali-backend.exe",
+            vec![],
+            vec![internal()]
+        ),
+        BackendOverride::Invalid
     );
 }
 
 #[test]
 fn override_rejects_exe_without_sibling_internal() {
     // Плоский onefile по абсолютному пути не должен пролезать через override.
-    let exe = PathBuf::from("C:/custom/kali-backend.exe");
-    let only_exe = exists_set(vec![exe]);
     assert_eq!(
-        resolve_backend_override(Some("C:/custom/kali-backend.exe"), only_exe),
-        None
+        ov(
+            "C:/custom/kali-backend.exe",
+            vec![PathBuf::from("C:/custom/kali-backend.exe")],
+            vec![]
+        ),
+        BackendOverride::Invalid
     );
 }
 
 #[test]
-fn override_absent_or_blank_is_none() {
-    assert_eq!(resolve_backend_override(None, |_| true), None);
-    assert_eq!(resolve_backend_override(Some(""), |_| true), None);
-    assert_eq!(resolve_backend_override(Some("   "), |_| true), None);
+fn override_rejects_internal_that_is_a_file() {
+    // `_internal` есть, но это файл, а не каталог → не валидный onedir.
+    assert_eq!(
+        ov(
+            "C:/custom/kali-backend/kali-backend.exe",
+            vec![exe(), internal()], // _internal среди ФАЙЛОВ
+            vec![]
+        ),
+        BackendOverride::Invalid
+    );
+}
+
+#[test]
+fn override_rejects_wrong_exe_name() {
+    // Указывать можно только на kali-backend.exe, даже если рядом есть _internal.
+    let other = PathBuf::from("C:/custom/kali-backend/python.exe");
+    assert_eq!(
+        ov(
+            "C:/custom/kali-backend/python.exe",
+            vec![other],
+            vec![internal()]
+        ),
+        BackendOverride::Invalid
+    );
+}
+
+#[test]
+fn override_blank_is_invalid_not_unset() {
+    // Пустое значение — это заданная переменная с мусором, а НЕ «не задано».
+    assert_eq!(ov("", vec![], vec![]), BackendOverride::Invalid);
+    assert_eq!(ov("   ", vec![], vec![]), BackendOverride::Invalid);
+}
+
+// ── select_backend: невалидный override НЕ откатывается на adjacent ──────────
+
+#[test]
+fn select_invalid_override_does_not_fall_back_to_adjacent() {
+    let adjacent = PathBuf::from("C:/app/kali-backend/kali-backend.exe");
+    assert_eq!(
+        select_backend(BackendOverride::Invalid, Some(adjacent)),
+        None,
+        "опечатка в KALI_BACKEND_EXE обязана падать, а не подсовывать другой артефакт"
+    );
+}
+
+#[test]
+fn select_unset_override_uses_adjacent() {
+    let adjacent = PathBuf::from("C:/app/kali-backend/kali-backend.exe");
+    assert_eq!(
+        select_backend(BackendOverride::Unset, Some(adjacent.clone())),
+        Some(adjacent)
+    );
+}
+
+#[test]
+fn select_valid_override_wins_over_adjacent() {
+    let adjacent = PathBuf::from("C:/app/kali-backend/kali-backend.exe");
+    assert_eq!(
+        select_backend(BackendOverride::Valid(exe()), Some(adjacent)),
+        Some(exe())
+    );
+}
+
+#[test]
+fn select_unset_without_adjacent_is_none() {
+    assert_eq!(select_backend(BackendOverride::Unset, None), None);
 }

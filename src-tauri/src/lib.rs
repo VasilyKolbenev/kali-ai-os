@@ -214,21 +214,22 @@ fn open_backend_logs(logs_dir: &Path) -> std::io::Result<(File, File)> {
 
 /// Путь backend через pure `resolve_backend_path` (реальная FS-проба).
 fn find_backend() -> Option<PathBuf> {
-    // Debug-only override: в dev-раскладке onedir-бандла рядом с target/debug нет,
-    // а fallback-кандидаты удалены намеренно (fail-closed). Переменная и её чтение
-    // отсутствуют в release-сборке.
-    #[cfg(debug_assertions)]
-    if let Some(overridden) =
-        startup::resolve_backend_override(std::env::var("KALI_BACKEND_EXE").ok().as_deref(), |p| {
-            p.exists()
-        })
-    {
-        return Some(overridden);
-    }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    startup::resolve_backend_path(exe_dir.as_deref(), |p| p.exists())
+    let canonical =
+        startup::resolve_backend_path(exe_dir.as_deref(), |p| p.is_file(), |p| p.is_dir());
+    // Debug-only override: в dev-раскладке onedir-бандла рядом с target/debug нет,
+    // а fallback-кандидаты удалены намеренно (fail-closed). Переменная и её чтение
+    // отсутствуют в release-сборке. var_os — путь не обязан быть валидным Unicode.
+    #[cfg(debug_assertions)]
+    {
+        let raw = std::env::var_os("KALI_BACKEND_EXE");
+        let ov = startup::resolve_backend_override(raw.as_deref(), |p| p.is_file(), |p| p.is_dir());
+        startup::select_backend(ov, canonical)
+    }
+    #[cfg(not(debug_assertions))]
+    canonical
 }
 
 // ── реальные адаптеры pure-трейтов ───────────────────────────────────────────

@@ -7,6 +7,8 @@
 //! terminate-retry, reap-fail-closed) тестируются БЕЗ реальных OS-процессов.
 //! `lib.rs` — тонкий адаптер. Несёт только process-liveness, НЕ прогресс загрузки
 //! моделей (OPUS-102 = отдельный трек).
+#[cfg(debug_assertions)]
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -376,11 +378,28 @@ const ONEDIR_MARKER: &str = "_internal";
 ///     Канонический путь бэкенда либо `None`.
 pub fn resolve_backend_path(
     exe_dir: Option<&Path>,
-    exists: impl Fn(&Path) -> bool,
+    is_file: impl Fn(&Path) -> bool,
+    is_dir: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    let bundle = exe_dir?.join(BACKEND_DIR);
-    let exe = bundle.join(BACKEND_EXE);
-    (exists(&exe) && exists(&bundle.join(ONEDIR_MARKER))).then_some(exe)
+    let exe = exe_dir?.join(BACKEND_DIR).join(BACKEND_EXE);
+    is_valid_onedir_exe(&exe, &is_file, &is_dir).then_some(exe)
+}
+
+/// Инварианты валидного onedir-бэкенда, общие для канонического пути и override.
+///
+/// Проверки РАЗДЕЛЕНЫ по типу узла: `exists()` не отличает файл от каталога, из-за
+/// чего каталог с именем `kali-backend.exe` или файл с именем `_internal` прошли
+/// бы как валидный бандл и упали бы только на spawn.
+fn is_valid_onedir_exe(
+    exe: &Path,
+    is_file: &dyn Fn(&Path) -> bool,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> bool {
+    exe.file_name().is_some_and(|n| n == BACKEND_EXE)
+        && is_file(exe)
+        && exe
+            .parent()
+            .is_some_and(|dir| is_dir(&dir.join(ONEDIR_MARKER)))
 }
 
 /// Debug-only override пути бэкенда (`KALI_BACKEND_EXE`).
@@ -398,15 +417,46 @@ pub fn resolve_backend_path(
 /// Returns:
 ///     Валидный override либо `None` (тогда используется канонический путь).
 #[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackendOverride {
+    /// Переменная не задана — использовать канонический adjacent onedir.
+    Unset,
+    /// Задана и прошла все инварианты.
+    Valid(PathBuf),
+    /// Задана, но невалидна — fail-closed: НЕ откатываться на adjacent.
+    Invalid,
+}
+
+#[cfg(debug_assertions)]
 pub fn resolve_backend_override(
-    raw: Option<&str>,
-    exists: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    let exe = PathBuf::from(raw?.trim());
-    if !exe.is_absolute() || !exists(&exe) {
-        return None;
+    raw: Option<&OsStr>,
+    is_file: impl Fn(&Path) -> bool,
+    is_dir: impl Fn(&Path) -> bool,
+) -> BackendOverride {
+    let Some(raw) = raw else {
+        return BackendOverride::Unset;
+    };
+    // OsStr, а не str: путь не обязан быть валидным Unicode, и debug-путь не
+    // должен зависеть от успеха конвертации.
+    let exe = PathBuf::from(raw);
+    if exe.is_absolute() && is_valid_onedir_exe(&exe, &is_file, &is_dir) {
+        BackendOverride::Valid(exe)
+    } else {
+        BackendOverride::Invalid
     }
-    exists(&exe.parent()?.join(ONEDIR_MARKER)).then_some(exe)
+}
+
+/// Свести override и канонический путь в итоговый выбор артефакта.
+///
+/// `Invalid` даёт `None`, а не откат на `canonical`: заданная, но битая
+/// переменная — это ошибка оператора, и тихо подменять артефакт нельзя.
+#[cfg(debug_assertions)]
+pub fn select_backend(ov: BackendOverride, canonical: Option<PathBuf>) -> Option<PathBuf> {
+    match ov {
+        BackendOverride::Valid(exe) => Some(exe),
+        BackendOverride::Invalid => None,
+        BackendOverride::Unset => canonical,
+    }
 }
 
 /// Reap tracked-процесса → `Liveness`. Подтверждённый exit (`Ok(false)`) чистит
