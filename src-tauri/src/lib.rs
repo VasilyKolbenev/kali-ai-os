@@ -410,9 +410,22 @@ fn run_supervisor(
 ) {
     let exe_present = find_backend().is_some();
     let mut ctx: SuperviseCtx<RealChild<Child>> = SuperviseCtx::new(exe_present);
-    let probe = RealProbe::new();
     let mut spawner = RealSpawner;
     let clock = RealClock;
+    let probe = RealProbe::new();
+    // Debug-only тест-рычаг `KALI_BOOT_DELAY_MS`: искусственно откладывает
+    // признание готовности backend, чтобы вручную проверить неблокирующий boot
+    // (first paint без ожидания Python). Задержка неблокирующая — supervisor
+    // продолжает тикать, живой child не убивается, Foreign/ошибки не
+    // маскируются. В release-сборке блок и сама строка имени переменной
+    // отсутствуют.
+    #[cfg(debug_assertions)]
+    let probe = startup::DelayedProbe::new(
+        probe,
+        &clock,
+        Instant::now(),
+        startup::parse_boot_delay_ms(std::env::var("KALI_BOOT_DELAY_MS").ok().as_deref()),
+    );
     loop {
         if ctx.rust_bound.is_none() {
             match bind_rx.try_recv() {

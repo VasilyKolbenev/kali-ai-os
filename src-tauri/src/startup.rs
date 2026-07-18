@@ -167,6 +167,86 @@ pub trait ShutdownSignal {
     fn is_set(&self) -> bool;
 }
 
+// ── debug-only тест-рычаг `KALI_BOOT_DELAY_MS` ───────────────────────────────
+// Позволяет вручную проверить неблокирующий boot: искусственно откладывает
+// признание готовности backend. Весь блок (включая саму строку имени
+// переменной) компилируется ТОЛЬКО при `debug_assertions` и отсутствует в
+// release-сборке.
+
+/// Верхняя граница искусственной задержки — защита от опечатки (10 минут).
+#[cfg(debug_assertions)]
+pub const MAX_BOOT_DELAY_MS: u64 = 600_000;
+
+/// Разобрать значение `KALI_BOOT_DELAY_MS`.
+///
+/// Любое некорректное значение (отсутствует, пустое, не число, отрицательное,
+/// переполнение u64) → `0` = рычаг выключен (fail-safe, без паники). Слишком
+/// большое зажимается в [`MAX_BOOT_DELAY_MS`].
+///
+/// Args:
+///     raw: Сырое значение переменной окружения, если она задана.
+///
+/// Returns:
+///     Задержка в миллисекундах, `0` = выключено.
+#[cfg(debug_assertions)]
+pub fn parse_boot_delay_ms(raw: Option<&str>) -> u64 {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        .min(MAX_BOOT_DELAY_MS)
+}
+
+/// Отложить признание ТОЛЬКО `OwnedHealthy` до истечения `delay`.
+///
+/// До дедлайна возвращается `Unhealthy`, из-за чего supervisor держит
+/// `PythonStarting` и НЕ убивает живой процесс (`Alive` + `Unhealthy` →
+/// `Action::Starting`, не `Spawn`). `ForeignHealthy` и реальная неготовность
+/// не маскируются — рычаг не должен прятать настоящие проблемы.
+#[cfg(debug_assertions)]
+pub fn gate_owned_healthy(probe: ProbeStatus, elapsed: Duration, delay: Duration) -> ProbeStatus {
+    if probe == ProbeStatus::OwnedHealthy && elapsed < delay {
+        ProbeStatus::Unhealthy
+    } else {
+        probe
+    }
+}
+
+/// Debug-обёртка над реальным probe: неблокирующая проверка дедлайна (без sleep).
+#[cfg(debug_assertions)]
+pub struct DelayedProbe<'a, P, C> {
+    inner: P,
+    clock: &'a C,
+    t0: Instant,
+    delay: Duration,
+}
+
+#[cfg(debug_assertions)]
+impl<'a, P, C> DelayedProbe<'a, P, C> {
+    /// Создать обёртку; `delay_ms` = 0 делает её прозрачной.
+    pub fn new(inner: P, clock: &'a C, t0: Instant, delay_ms: u64) -> Self {
+        DelayedProbe {
+            inner,
+            clock,
+            t0,
+            delay: Duration::from_millis(delay_ms),
+        }
+    }
+
+    /// Доступ к обёрнутому probe — существует исключительно для тестов.
+    #[cfg(test)]
+    pub fn inner_ref(&self) -> &P {
+        &self.inner
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<P: HealthProbe, C: Clock> HealthProbe for DelayedProbe<'_, P, C> {
+    fn status(&self, expected_instance_id: Option<&str>) -> ProbeStatus {
+        // saturating: часы не обязаны быть монотонными относительно t0.
+        let elapsed = self.clock.now().saturating_duration_since(self.t0);
+        gate_owned_healthy(self.inner.status(expected_instance_id), elapsed, self.delay)
+    }
+}
+
 impl ShutdownSignal for AtomicBool {
     fn is_set(&self) -> bool {
         self.load(Ordering::SeqCst)
