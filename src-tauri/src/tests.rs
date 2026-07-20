@@ -250,6 +250,53 @@ fn shutdown_disconnected_never_completes_pending_terminal() {
     );
 }
 
+// Production adapter: через реальный вход on_exit_requested() (обёртка), НЕ seam.
+// Если обёртка перестанет запускать waiter — waiter_started/completion не наступят
+// и тест покраснеет. Синхронизация — completion channel (recv = bounded watchdog).
+#[test]
+fn on_exit_requested_wrapper_completes_then_allows() {
+    let (ctl, tx) = mk_shutdown();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let n = Arc::new(AtomicUsize::new(0));
+
+    // Pending → Prevent через production-вход.
+    let n1 = n.clone();
+    let d1 = on_exit_requested(&ctl, TICK, move || {
+        n1.fetch_add(1, Ordering::SeqCst);
+        let _ = done_tx.send(());
+    });
+    assert_eq!(d1, ExitDecision::Prevent);
+    assert!(ctl.flag.load(Ordering::SeqCst), "flag выставлен");
+    assert!(
+        ctl.waiter_started.load(Ordering::SeqCst),
+        "обёртка обязана запустить waiter"
+    );
+
+    // ack → callback гарантированно завершается (recv — bounded watchdog, не sleep).
+    tx.send(()).unwrap();
+    done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("callback должен выполниться после ack");
+    // Порядок в waiter'е: done=true ПЕРЕД on_complete → done виден после recv.
+    assert!(
+        ctl.done.load(Ordering::SeqCst),
+        "done=true после подтверждённого ack"
+    );
+    assert_eq!(n.load(Ordering::SeqCst), 1, "callback ровно один раз");
+
+    // Повторный on_exit_requested после done → Allow и без нового callback.
+    let n2 = n.clone();
+    let d2 = on_exit_requested(&ctl, TICK, move || {
+        n2.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(d2, ExitDecision::Allow, "done → Allow");
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "второй on_exit_requested не вызывает callback"
+    );
+}
+
 #[test]
 fn wait_for_ack_disconnected() {
     let (tx, rx) = mpsc::channel::<()>();
@@ -260,17 +307,42 @@ fn wait_for_ack_disconnected() {
     );
 }
 
+// Детерминированно (без sleep-как-доказательства): наблюдатель сигналит о РЕАЛЬНОМ
+// Timeout-цикле; только ПОСЛЕ этого тест шлёт ack; waiter обязан вернуть Completed.
+// Порядок доказан: Timeout observed → send ack → Completed.
 #[test]
-fn wait_for_ack_completes_after_timeout_cycles() {
+fn wait_for_ack_survives_timeout_then_completes() {
     let (tx, rx) = mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50)); // несколько tick-циклов
-        let _ = tx.send(());
+    let (obs_tx, obs_rx) = mpsc::channel::<()>(); // waiter → тест: «пережил Timeout»
+    let (out_tx, out_rx) = mpsc::channel::<AckOutcome>(); // исход waiter'а (bounded sync)
+
+    // ack НЕ послан → recv_timeout гарантированно вернёт Timeout ≥1 раз.
+    let waiter = std::thread::spawn(move || {
+        let outcome = wait_for_ack_with_timeout_observer(&rx, TICK, || {
+            let _ = obs_tx.send(());
+        });
+        let _ = out_tx.send(outcome);
     });
+
+    // Ждём ЯВНОГО подтверждения ≥1 Timeout-цикла (recv — bounded watchdog теста,
+    // не способ «подождать достаточно»).
+    obs_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("waiter должен пережить минимум один Timeout-цикл");
+    // Только теперь, после observed Timeout, отправляем ack.
+    tx.send(()).unwrap();
+
+    // Waiter обязан вернуть Completed. out_rx — bounded watchdog: если ack «потерян»
+    // (Ok-ветка сломана), waiter не пришлёт исход → recv истечёт → RED (не hang).
+    let outcome = out_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("waiter завершается после ack");
     assert_eq!(
-        wait_for_ack(&rx, Duration::from_millis(10)),
-        AckOutcome::Completed
+        outcome,
+        AckOutcome::Completed,
+        "после observed Timeout + ack → Completed"
     );
+    waiter.join().expect("поток завершается"); // достижимо только на success-пути
 }
 
 // ── Waker: wake-before-wait возвращается сразу, затем флаг сброшен ────────────

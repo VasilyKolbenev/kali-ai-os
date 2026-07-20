@@ -102,10 +102,25 @@ struct ShutdownControl {
 /// Ждать ack вне event-loop: timeout → авто-продолжение (receiver не теряется),
 /// Disconnected → terminal failure. Успех — единственный путь к завершению.
 fn wait_for_ack(rx: &Receiver<()>, tick: Duration) -> AckOutcome {
+    wait_for_ack_with_timeout_observer(rx, tick, || {})
+}
+
+/// Как [`wait_for_ack`], но вызывает `on_timeout` при каждом Timeout-цикле.
+/// Наблюдаемость нужна ТОЛЬКО тестам, чтобы детерминированно дождаться реального
+/// Timeout-цикла перед отправкой ack (без wall-clock sleep). Production
+/// `wait_for_ack` передаёт no-op — поведение и семантика не меняются.
+fn wait_for_ack_with_timeout_observer(
+    rx: &Receiver<()>,
+    tick: Duration,
+    mut on_timeout: impl FnMut(),
+) -> AckOutcome {
     loop {
         match rx.recv_timeout(tick) {
             Ok(()) => return AckOutcome::Completed,
-            Err(RecvTimeoutError::Timeout) => continue, // auto-continue, без 2-го клика
+            Err(RecvTimeoutError::Timeout) => {
+                on_timeout(); // сигнал наблюдателю; затем auto-continue, без 2-го клика
+                continue;
+            }
             Err(RecvTimeoutError::Disconnected) => return AckOutcome::Disconnected,
         }
     }
