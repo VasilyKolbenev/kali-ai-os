@@ -9,27 +9,27 @@ blocker (a non-deterministic shutdown test) is closed. Next critical-path work i
 
 ---
 
-## 0. Repo / git state (verify first)
+## 0. Repo / git state (verify first — do NOT trust hardcoded SHAs here)
 
-```
-Branch : release/phase-a-desktop-alpha
-HEAD   : e4642f5  (this handoff; UNPUSHED — awaiting owner short-review)
-origin/release/phase-a-desktop-alpha : 6a3b86d  (all A3 code pushed)
-main   : e3db43c  — DO NOT TOUCH, never merge here yourself
-unpushed: 1 (only this handoff commit)
-```
+**Stable anchors (won't drift):**
+- Branch: `release/phase-a-desktop-alpha`.
+- **A3 code baseline = `6a3b86d`** — all A3 CODE is at this commit, pushed, Codex GO.
+- `main = e3db43c` — protected baseline. DO NOT touch, never merge here yourself.
+- Handoff commits are **docs-only** (they touch only this file); the code baseline
+  above does not move when a handoff commit is added or amended.
 
-Verify on resume:
+**Current HEAD / origin / unpushed are volatile — never hardcode them here.**
+Read the live values on resume:
 ```bash
-git rev-parse --abbrev-ref HEAD                       # release/phase-a-desktop-alpha
-git rev-parse --short HEAD origin/release/phase-a-desktop-alpha main
-git log --oneline origin/release/phase-a-desktop-alpha..HEAD   # should be just the handoff
-git status --short                                    # see "do not touch" list below
+git rev-parse --abbrev-ref HEAD                                   # release/phase-a-desktop-alpha
+git rev-parse --short HEAD
+git rev-parse --short origin/release/phase-a-desktop-alpha
+git log --oneline origin/release/phase-a-desktop-alpha..HEAD      # any unpushed commits
+git rev-parse --short main                                        # must stay e3db43c
+git status --short                                                # see "do not touch" list below
 ```
-
-**Pending decision:** the two shutdown-fix commits (`8737a53`, `6a3b86d`) are
-pushed with Codex GO. This handoff commit `e4642f5` is NOT pushed — the owner
-asked for a short review before pushing it. Push only on owner GO.
+If `origin..HEAD` is empty, everything is pushed. Any commits it lists are
+docs-only handoffs unless a diff says otherwise.
 
 ---
 
@@ -153,6 +153,18 @@ Scenarios (all PASS):
   unit-covered and not externally triggerable without code injection — Codex
   ruled: **no temporary fault-injection hooks.**
 
+### Residual risk — boundary of the orphan proof (explicit)
+- **Proven:** a graceful WM_CLOSE on the shipping onedir layout leaves **zero
+  orphan** and frees `:3005`/`:3006` (S6 + close-during-spawn; onedir is
+  single-process per `topology-probe.md`).
+- **NOT proven zero-orphan:** killing the desktop by force — `TerminateProcess`
+  / Task Manager hard-kill, power loss, or a desktop process crash — bypasses the
+  graceful WM_CLOSE path entirely and is untested for orphaned backend children.
+- A **Windows Job Object** (kill-on-close of the whole process group) remains a
+  deferred **fast-follow**, not part of A3.
+- Therefore: **do not claim that every form of forced desktop death is already
+  orphan-safe.** Only the graceful-close path is proven.
+
 ---
 
 ## 4. Gates (green on `6a3b86d`)
@@ -175,9 +187,18 @@ Scenarios (all PASS):
 Critical path: OPUS-001/002 ✅ → **OPUS-101 ✅ (=A3)** / 102 / 103 → 201/202/203 →
 301/302/303/304 → 401.. / 501.. → 601..603 → clean-device RC.
 
-**Immediate next candidate = OPUS-202 (owner has flagged it repeatedly):**
-- Files: `src-tauri/src/backend/updater.rs`, tauri config, release workflow.
-- Temporarily disable auto-execution of the custom updater; migrate to Tauri
+### NEXT MACRO-ITERATION (+5%) — run in a NEW clean session
+
+The approved cadence is a single macro-iteration of **OPUS-202 (3%) + OPUS-301 (2%)
+= +5% total**, done together:
+- separate commits and separate focused gates per task;
+- ONE integrated Codex review at the end of the +5%;
+- executed in a **new clean session** (this session is docs-closure only);
+- do NOT start OPUS-102 / OPUS-103 / OPUS-201 / OPUS-304 until this +5% completes.
+
+**OPUS-202 (3%) — Secure updater.** Files: `src-tauri/src/backend/updater.rs`,
+tauri config, release workflow.
+- Temporarily disable auto-execution of the custom updater; migrate to the Tauri
   signed updater OR an independent signed-manifest chain; add tamper / wrong-key /
   replay / downgrade / expired-manifest tests.
 - Acceptance: a hash placed next to a swapped EXE is NOT sufficient for acceptance.
@@ -185,17 +206,20 @@ Critical path: OPUS-001/002 ✅ → **OPUS-101 ✅ (=A3)** / 102 / 103 → 201/2
   which bypasses graceful shutdown — OPUS-202 should also remove that so the
   non-blocking shutdown path from A3 is honored.
 
-**Other remaining (not started):**
-- **OPUS-102** — lifespan without heavy voice prewarm: single-flight
-  `ModelCoordinator`, one shared STT owner, no torch.hub/HF network on each start,
-  timeout/cancellation/degraded. Acceptance: `/live` ≤1s, `/ready` text ≤3s,
-  voice readiness independent. (Deliberately OUT of A3.)
-- **OPUS-103** — clean frozen build/stage (unique build id, manifest-driven asset
-  copy, smoke from exact stage + clean VM, full offline startup).
+**OPUS-301 (2%) — Current provider model registry.**
+- Centralize model defaults; replace the retired Anthropic model with a supported
+  one; sync desktop / mobile / UI; add capability validation + a deprecation test
+  (retired ID must be absent from runtime defaults).
+- Acceptance: smoke with a test Anthropic account passes; no retired ID in runtime.
+
+### Later (do NOT start before the +5% above completes)
+- **OPUS-102** — lifespan without heavy voice prewarm (single-flight
+  `ModelCoordinator`, one shared STT owner, no torch.hub/HF network on each start;
+  `/live` ≤1s, `/ready` text ≤3s). Deliberately OUT of A3.
+- **OPUS-103** — clean frozen build/stage (unique build id, manifest-driven copy,
+  smoke from exact stage + clean VM).
 - **OPUS-201/203** — Windows release signing (needs owner cert) / reproducible
   dependency gate (pin ort, --locked, SBOM).
-- **OPUS-301** — provider model registry: centralize defaults, replace retired
-  Anthropic model, sync desktop/mobile/UI, capability validation + deprecation test.
 - **OPUS-302/303/304** — data-map/privacy, voice/asset license cleanup, community
   bundle containment (fail-closed native import for alpha).
 - **OPUS-401+ / 501+** — Android release AAB / iOS, in parallel after
@@ -269,7 +293,11 @@ GUI-gate re-run: copy `dist_premium/kali-backend` next to a release
 - **The shutdown flake only reproduces under full-suite scheduler load.** Isolated
   focused runs pass 50/50 on an idle machine. Deterministic repro = throwaway
   150 ms `sleep` inside the on_complete closure (models delayed scheduling) → the
-  old test reliably RED. See [[feedback-dev-machine-masks-truth]].
+  old test reliably RED.
+  **Lesson (self-contained):** a focused / isolated test can hide a scheduler race,
+  so after ANY concurrency or lifecycle change run the FULL test suite under load
+  (multiple consecutive full `cargo test --lib` runs) — never trust a single
+  isolated run to prove a timing-sensitive fix.
 - **rustfmt on a crate-root recurses the whole module tree** → collateral in
   `backend/*.rs`. Always `rustfmt --edition 2021 --config skip_children=true <file>`
   on individual leaf files; check `git status src-tauri/src/backend/`.
