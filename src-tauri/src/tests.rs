@@ -183,35 +183,37 @@ fn shutdown_done_allows_exit_without_waiter() {
 fn shutdown_pending_prevents_starts_one_waiter_completes_once() {
     let (ctl, tx) = mk_shutdown();
     let n = Arc::new(AtomicUsize::new(0));
-    // ExitRequested #1 → Prevent, стартует РОВНО один waiter.
+    // ExitRequested #1 → Prevent, стартует РОВНО один waiter (возвращает JoinHandle).
     let n1 = n.clone();
-    assert_eq!(
-        on_exit_requested(&ctl, TICK, move || {
-            n1.fetch_add(1, Ordering::SeqCst);
-        }),
-        ExitDecision::Prevent
-    );
+    let (d1, h1) = spawn_exit_waiter(&ctl, TICK, move || {
+        n1.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(d1, ExitDecision::Prevent);
     assert!(ctl.waiter_started.load(Ordering::SeqCst));
-    // ExitRequested #2 до ack → всё ещё Prevent, второй waiter НЕ стартует.
+    let waiter = h1.expect("первый ExitRequested должен запустить waiter");
+
+    // ExitRequested #2 до ack → всё ещё Prevent, второй waiter НЕ стартует (handle None).
     let n2 = n.clone();
-    assert_eq!(
-        on_exit_requested(&ctl, TICK, move || {
-            n2.fetch_add(1, Ordering::SeqCst);
-        }),
-        ExitDecision::Prevent
-    );
-    // поздний ack (после нескольких timeout-циклов waiter'а — auto-continue).
-    std::thread::sleep(Duration::from_millis(60));
+    let (d2, h2) = spawn_exit_waiter(&ctl, TICK, move || {
+        n2.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(d2, ExitDecision::Prevent);
+    assert!(h2.is_none(), "второй waiter не должен стартовать");
+
+    // ack → waiter завершает Completed-ветку. Синхронизация — join() (без wall-clock):
+    // waiter ставит done=true, затем on_complete (n+=1), затем поток выходит; join
+    // наблюдает всё это по happens-before. Скорость планировщика роли не играет.
     tx.send(()).unwrap();
-    std::thread::sleep(Duration::from_millis(80));
+    waiter.join().expect("waiter поток завершается");
+
+    assert!(
+        ctl.done.load(Ordering::SeqCst),
+        "done после подтверждённого ack"
+    );
     assert_eq!(
         n.load(Ordering::SeqCst),
         1,
         "completion callback ровно один раз"
-    );
-    assert!(
-        ctl.done.load(Ordering::SeqCst),
-        "done после подтверждённого ack"
     );
 }
 
@@ -220,14 +222,17 @@ fn shutdown_disconnected_never_completes_pending_terminal() {
     let (ctl, tx) = mk_shutdown();
     let n = Arc::new(AtomicUsize::new(0));
     let n1 = n.clone();
-    assert_eq!(
-        on_exit_requested(&ctl, TICK, move || {
-            n1.fetch_add(1, Ordering::SeqCst);
-        }),
-        ExitDecision::Prevent
-    );
-    drop(tx); // supervisor «умер» без ack
-    std::thread::sleep(Duration::from_millis(60));
+    let (d1, h1) = spawn_exit_waiter(&ctl, TICK, move || {
+        n1.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(d1, ExitDecision::Prevent);
+    let waiter = h1.expect("первый ExitRequested должен запустить waiter");
+
+    drop(tx); // supervisor «умер» без ack → wait_for_ack вернёт Disconnected
+              // Синхронизация — join() (без wall-clock): после выхода waiter'а
+              // Disconnected-ветка гарантированно отработала и НЕ тронула done/callback.
+    waiter.join().expect("waiter завершается по Disconnected");
+
     assert_eq!(n.load(Ordering::SeqCst), 0, "disconnected → без completion");
     assert!(
         !ctl.done.load(Ordering::SeqCst),
@@ -235,10 +240,11 @@ fn shutdown_disconnected_never_completes_pending_terminal() {
     );
     // повторный запрос всё ещё НЕ Allow — pending остаётся terminal.
     let n2 = n.clone();
+    let (d2, _h2) = spawn_exit_waiter(&ctl, TICK, move || {
+        n2.fetch_add(1, Ordering::SeqCst);
+    });
     assert_eq!(
-        on_exit_requested(&ctl, TICK, move || {
-            n2.fetch_add(1, Ordering::SeqCst);
-        }),
+        d2,
         ExitDecision::Prevent,
         "повторный ExitRequested не может разрешить выход"
     );

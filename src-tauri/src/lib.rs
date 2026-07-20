@@ -119,15 +119,37 @@ fn on_exit_requested<F>(ctl: &ShutdownControl, tick: Duration, on_complete: F) -
 where
     F: FnOnce() + Send + 'static,
 {
+    // Прод отбрасывает JoinHandle → waiter-поток детачится РОВНО как раньше
+    // (drop(JoinHandle) не джойнит). Handle нужен только тестам для
+    // детерминированной синхронизации через join (см. spawn_exit_waiter).
+    spawn_exit_waiter(ctl, tick, on_complete).0
+}
+
+/// Как [`on_exit_requested`], но дополнительно возвращает `JoinHandle` waiter'а
+/// (если он был запущен). Реальная реализация; `on_exit_requested` — обёртка,
+/// отбрасывающая handle. Тесты вызывают эту форму, чтобы `join()`-ить waiter и
+/// синхронизироваться детерминированно, без wall-clock sleep.
+///
+/// Поведение в проде не меняется: отброшенный handle детачит поток так же, как
+/// прежний `std::thread::spawn` без сохранения результата.
+fn spawn_exit_waiter<F>(
+    ctl: &ShutdownControl,
+    tick: Duration,
+    on_complete: F,
+) -> (ExitDecision, Option<std::thread::JoinHandle<()>>)
+where
+    F: FnOnce() + Send + 'static,
+{
     if ctl.done.load(Ordering::SeqCst) {
-        return ExitDecision::Allow;
+        return (ExitDecision::Allow, None);
     }
     ctl.flag.store(true, Ordering::SeqCst);
     ctl.waker.wake();
+    let mut handle = None;
     if !ctl.waiter_started.swap(true, Ordering::SeqCst) {
         let rx = ctl.ack.lock().unwrap().take();
         let done = ctl.done.clone();
-        std::thread::spawn(move || {
+        handle = Some(std::thread::spawn(move || {
             if let Some(rx) = rx {
                 match wait_for_ack(&rx, tick) {
                     AckOutcome::Completed => {
@@ -139,9 +161,9 @@ where
                     }
                 }
             }
-        });
+        }));
     }
-    ExitDecision::Prevent
+    (ExitDecision::Prevent, handle)
 }
 
 /// Только выставить флаг+wake (Destroyed): не потребляет ack и не стартует waiter.
