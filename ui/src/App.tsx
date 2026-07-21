@@ -16,7 +16,6 @@ import { OnboardingRoot } from "./components/Onboarding/OnboardingRoot";
 import { Sidebar } from "./components/Layout/Sidebar";
 import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
-import { UpdateBanner } from "./components/UpdateBanner";
 import { CrashReportPrompt } from "./components/CrashReportPrompt";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -155,8 +154,9 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      <UpdateBanner />
+      {/* OPUS-202: UpdateBanner removed from the production tree while the
+          custom updater is fail-closed/disabled. Component + store are kept as
+          dormant code for the future signed updater. */}
     </div>
   );
 }

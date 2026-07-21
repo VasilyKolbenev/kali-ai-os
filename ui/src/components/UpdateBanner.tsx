@@ -8,6 +8,9 @@ function gb(bytes: number): string {
     Рендерится только в фазах available/downloading/ready/error и пока не dismissed. */
 export function UpdateBanner() {
   const s = useUpdaterStore();
+  // OPUS-202: fail-closed — never surface download/install when the updater is
+  // disabled, even if a stale `available` lingers in the store.
+  if (s.phase === "disabled") return null;
   if (s.dismissed || s.phase === "idle" || s.phase === "installing" || !s.available) return null;
 
   const pct = s.total > 0 ? Math.floor((s.downloaded / s.total) * 100) : 0;

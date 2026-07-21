@@ -17,6 +17,15 @@ describe("UpdateBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("renders nothing when disabled, even with a stale available manifest", () => {
+    // OPUS-202: fail-closed — a lingering `available` must not surface a banner.
+    useUpdaterStore.setState({ phase: "disabled", available: manifest, total: 4_200_000_000 });
+    const { container } = render(<UpdateBanner />);
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByRole("button", { name: /скачать/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /перезапустить/i })).toBeNull();
+  });
+
   it("shows version, size and notes when available", () => {
     useUpdaterStore.setState({ phase: "available", available: manifest, total: 4_200_000_000 });
     render(<UpdateBanner />);
