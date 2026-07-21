@@ -109,6 +109,11 @@ class ModelCoordinator:
         """True iff ``name`` is registered."""
         return name in self._models
 
+    def is_disabled(self, name: str) -> bool:
+        """True iff ``name`` is registered and disabled (inactive engine)."""
+        m = self._models.get(name)
+        return bool(m and m.disabled)
+
     def status(self, name: str) -> ModelStatus:
         """Return the current status, deriving READY from the engine-truth probe."""
         m = self._models[name]

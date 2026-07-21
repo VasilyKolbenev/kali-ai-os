@@ -276,6 +276,46 @@ class TestPrewarmWiring:
                 pass
 
 
+class TestEngineScoped:
+    async def test_engine_rust_loads_nothing_in_python(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        # A Rust-owned voice engine must load NO voice model in Python — not at
+        # boot (prewarm skipped) and not on-demand (route skips disabled).
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text("voice:\n  engine: rust\n", encoding="utf-8")
+        counter = _Counter()
+        _patch_loaders(monkeypatch, counter, prewarm=True)  # prewarm ON but must skip disabled
+        import kernel.voice.tts_router as tr
+
+        monkeypatch.setattr(tr, "generate_audio", lambda *a, **k: (np.zeros(8, dtype=np.float32), 16000))
+        monkeypatch.setattr(tr, "audio_to_wav_bytes", lambda audio, sr: b"RIFFwav")
+
+        app, task, shutdown_event = await _make_app(monkeypatch, tmp_path, sample_agents_dir, cfg)
+        try:
+            await asyncio.sleep(0.1)  # give any (wrongly-spawned) prewarm a chance
+            coord = app.state.model_coordinator
+            assert coord.status("tts").state.value == "disabled"
+            assert coord.status("stt").state.value == "disabled"
+            assert counter.tts_calls == 0 and counter.stt_calls == 0
+            assert app.state.voice_pipeline is None
+
+            # on-demand /tts must also NOT load under engine=rust
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                r = await c.post("/tts", json={"text": "привет"})
+                ready = (await c.get("/ready")).json()
+            assert r.status_code == 200
+            assert counter.tts_calls == 0  # route skipped the disabled model
+            assert ready["voice"]["voice"] == "disabled"
+        finally:
+            shutdown_event.set()
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+
+
 class TestDegradedIsolation:
     async def test_tts_failure_keeps_text_ready_and_marks_voice_degraded(
         self, monkeypatch, tmp_path: Path, sample_agents_dir: Path, sample_config_path: Path

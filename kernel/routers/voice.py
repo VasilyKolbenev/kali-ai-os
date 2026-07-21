@@ -228,9 +228,11 @@ async def voice_clone(request: Request) -> dict[str, Any]:
 async def _ensure_voice_model(request: Request, name: str) -> None:
     """Route an on-demand voice-model load through the ModelCoordinator so the
     first request and a background prewarm share one single-flight load and the
-    machine status reflects it (OPUS-102). No-op if the coordinator is absent."""
+    machine status reflects it (OPUS-102). No-op if the coordinator is absent OR
+    the model is DISABLED (inactive engine) — Python never loads a Rust-owned
+    model even if this route is hit directly (acceptance #7, no VRAM duplication)."""
     coord = getattr(request.app.state, "model_coordinator", None)
-    if coord is not None and coord.has(name):
+    if coord is not None and coord.has(name) and not coord.is_disabled(name):
         await coord.ensure(name)
 
 

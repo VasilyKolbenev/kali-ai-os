@@ -623,10 +623,16 @@ def create_app(
             await model_coordinator.shutdown()
         except Exception:
             logger.debug("model coordinator shutdown error", exc_info=True)
-        for _attr in ("_tts_warmup_task", "_voice_bg_task", "_model_download_task"):
-            _t = getattr(app.state, _attr, None)
+        _bg_tasks = [
+            getattr(app.state, _attr, None)
+            for _attr in ("_tts_warmup_task", "_voice_bg_task", "_model_download_task")
+        ]
+        for _t in _bg_tasks:
             if _t is not None and not _t.done():
                 _t.cancel()
+        _live = [_t for _t in _bg_tasks if _t is not None]
+        if _live:
+            await asyncio.gather(*_live, return_exceptions=True)
         _vp = getattr(app.state, "voice_pipeline", None)
         if _vp is not None:
             try:
