@@ -77,16 +77,25 @@ def get_or_create_stt(app_state: Any) -> "SpeechToText":
             (e.g. missing model weights, GPU OOM).
     """
     existing = getattr(app_state, "stt", None)
-    if existing is not None:
+    if existing is not None and existing.is_loaded:
         return existing
 
     with _stt_lock:
         existing = getattr(app_state, "stt", None)
         if existing is not None:
+            # OPUS-102: the shared instance (e.g. VoicePipeline._stt) may be set
+            # but not yet loaded — load it here rather than returning a silent
+            # empty-transcript model. Single-flight via _stt_lock.
+            if not existing.is_loaded:
+                existing.load()
+                if not existing.is_loaded:
+                    raise RuntimeError("Whisper failed to load — see kernel.voice.stt logs")
             return existing
         from kernel.voice.stt import SpeechToText
 
-        stt = SpeechToText(model_size="small", device="auto")
+        # OPUS-102: model size from config voice.stt_model (no hardcoded second
+        # size); safe default when the config manager is absent.
+        stt = SpeechToText(model_size=_config_stt_size(app_state), device="auto")
         stt.load()
         if not stt.is_loaded:
             raise RuntimeError(
@@ -94,3 +103,12 @@ def get_or_create_stt(app_state: Any) -> "SpeechToText":
             )
         app_state.stt = stt
         return stt
+
+
+def _config_stt_size(app_state: Any) -> str:
+    """Resolve the STT model size from config (voice.stt_model), default 'base'."""
+    cfg = getattr(app_state, "config_manager", None)
+    try:
+        return cfg.config.voice.stt_model  # type: ignore[union-attr]
+    except Exception:
+        return "base"

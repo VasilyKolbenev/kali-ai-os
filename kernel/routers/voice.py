@@ -180,13 +180,29 @@ async def voice_status(request: Request) -> dict[str, Any]:
 
 
 @router.post("/voice/start")
-async def voice_start(request: Request) -> dict[str, str]:
+async def voice_start(request: Request) -> Any:
     vp = request.app.state.voice_pipeline
     if vp is None:
         return {"status": "error", "message": "Voice pipeline not available"}
     if vp.is_started:
         return {"status": "already_running"}
-    vp.load_models()
+    # OPUS-102: load VAD/wake/STT/TTS through the coordinator (daemon threads,
+    # single-flight, torch-ordered) — NOT vp.load_models() which blocks the event
+    # loop and bypasses the single owner. Start the realtime loop only once every
+    # required component is READY, so no early utterance is dropped.
+    from fastapi.responses import JSONResponse
+
+    from kernel.model_coordinator import ModelOutcome
+
+    coord = getattr(request.app.state, "model_coordinator", None)
+    if coord is not None:
+        outcomes = {m: await coord.ensure(m) for m in ("vad", "wake", "stt", "tts")}
+        if not all(o is ModelOutcome.READY for o in outcomes.values()):
+            return JSONResponse(
+                {"status": "error", "reason": "model_unavailable",
+                 "states": {m: o.value for m, o in outcomes.items()}},
+                status_code=503,
+            )
     await vp.start()
     return {"status": "started"}
 
@@ -225,15 +241,39 @@ async def voice_clone(request: Request) -> dict[str, Any]:
         return {"status": "error", "message": str(exc)}
 
 
-async def _ensure_voice_model(request: Request, name: str) -> None:
-    """Route an on-demand voice-model load through the ModelCoordinator so the
-    first request and a background prewarm share one single-flight load and the
-    machine status reflects it (OPUS-102). No-op if the coordinator is absent OR
-    the model is DISABLED (inactive engine) — Python never loads a Rust-owned
-    model even if this route is hit directly (acceptance #7, no VRAM duplication)."""
+async def _require_voice_model(request: Request, name: str) -> None:
+    """Fail-closed on-demand load via the ModelCoordinator (single-flight, shared
+    with prewarm). Raises :class:`ModelUnavailable` unless the model is READY, so
+    the caller returns a typed 409/503 and NEVER touches Python TTS/STT after a
+    DISABLED/FAILED/TIMEOUT outcome (OPUS-102 #1/#4). No-op only if the coordinator
+    is absent (legacy)."""
+    from kernel.model_coordinator import ModelOutcome, ModelUnavailable
+
     coord = getattr(request.app.state, "model_coordinator", None)
-    if coord is not None and coord.has(name) and not coord.is_disabled(name):
-        await coord.ensure(name)
+    if coord is None or not coord.has(name):
+        return
+    outcome = await coord.ensure(name)
+    if outcome is not ModelOutcome.READY:
+        raise ModelUnavailable(name, outcome)
+
+
+def _model_unavailable_response(exc: Any) -> Any:
+    """Machine-readable 409 (engine owned by Rust) / 503 (unavailable) response."""
+    from fastapi.responses import JSONResponse
+
+    from kernel.model_coordinator import ModelOutcome
+
+    if exc.outcome is ModelOutcome.DISABLED:
+        return JSONResponse(
+            {"error": "voice engine owned by Rust", "reason": "engine_owned_by_rust",
+             "model": exc.name, "state": exc.outcome.value},
+            status_code=409,
+        )
+    return JSONResponse(
+        {"error": "voice model unavailable", "reason": "model_unavailable",
+         "model": exc.name, "state": exc.outcome.value},
+        status_code=503,
+    )
 
 
 @router.post("/tts")
@@ -250,10 +290,16 @@ async def text_to_speech(request: Request) -> Any:
     if not text:
         return JSONResponse({"error": "No text provided"}, status_code=400)
 
+    from kernel.model_coordinator import ModelUnavailable
+
+    try:
+        await _require_voice_model(request, "tts")
+    except ModelUnavailable as e:
+        return _model_unavailable_response(e)
+
     try:
         from kernel.voice.tts_router import audio_to_wav_bytes, generate_audio
 
-        await _ensure_voice_model(request, "tts")
         audio, sr = await asyncio.to_thread(generate_audio, text, language)
 
         # Play through system speakers if requested
@@ -284,10 +330,16 @@ async def tts_speak(request: Request) -> dict[str, Any]:
     if not text:
         return {"error": "No text provided"}
 
+    from kernel.model_coordinator import ModelUnavailable
+
+    try:
+        await _require_voice_model(request, "tts")
+    except ModelUnavailable as e:
+        return _model_unavailable_response(e)
+
     try:
         from kernel.voice.tts_router import generate_audio
 
-        await _ensure_voice_model(request, "tts")
         audio, sr = await asyncio.to_thread(generate_audio, text, language)
         await asyncio.to_thread(_play_audio, audio, sr)
         return {"status": "ok", "duration": len(audio) / sr}
@@ -335,8 +387,14 @@ async def voice_transcribe(request: Request) -> Any:
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+    from kernel.model_coordinator import ModelUnavailable
+
     try:
-        await _ensure_voice_model(request, "stt")
+        await _require_voice_model(request, "stt")
+    except ModelUnavailable as e:
+        return _model_unavailable_response(e)
+
+    try:
         stt = await asyncio.to_thread(get_or_create_stt, request.app.state)
     except Exception as e:
         logger.exception("/voice/transcribe failed to init SpeechToText")

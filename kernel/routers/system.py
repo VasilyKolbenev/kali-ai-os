@@ -61,6 +61,10 @@ async def ready(request: Request) -> dict[str, Any]:
     s = request.app.state
     coord = getattr(s, "model_coordinator", None)
     voice = coord.snapshot() if coord is not None else {"models": {}, "voice": "idle"}
+    # A pipeline start failure (auto_start / /voice/start) must not report ready
+    # even if every component loaded — degrade instead (OPUS-102 #2).
+    if getattr(s, "voice_start_error", None) and voice.get("voice") == "ready":
+        voice = {**voice, "voice": "degraded", "start_error": s.voice_start_error}
     return {
         "text_ready": True,
         "version": __version__,

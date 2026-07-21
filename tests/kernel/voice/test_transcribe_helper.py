@@ -53,12 +53,19 @@ class _FakeAppState:
 
 
 def test_get_or_create_stt_returns_cached_instance() -> None:
-    """When `app_state.stt` is already set, helper returns it without
-    instantiating SpeechToText (covers the test-fixture / hot-request path)."""
+    """A cached, ALREADY-LOADED `app_state.stt` is returned without instantiating
+    or re-loading SpeechToText (hot-request path). OPUS-102: an unloaded cached
+    instance would instead be loaded in place — covered elsewhere."""
     from kernel.voice.transcribe_helper import get_or_create_stt
 
+    class _LoadedStub:
+        is_loaded = True
+
+        def load(self) -> None:  # must NOT be called for a loaded instance
+            raise AssertionError("loaded instance must not be re-loaded")
+
     state = _FakeAppState()
-    sentinel = object()  # any non-None value short-circuits the lazy-init
+    sentinel = _LoadedStub()
     state.stt = sentinel  # type: ignore[attr-defined]
     assert get_or_create_stt(state) is sentinel
 

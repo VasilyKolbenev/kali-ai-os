@@ -328,40 +328,47 @@ def create_app(
                     except ValueError as e:
                         logger.warning("Invalid cron for skill %s: %s", name, e)
 
-        # OPUS-102: single-flight, observable model coordinator. Heavy voice
-        # weight loads run as background prewarm (OFF the critical lifespan path);
-        # status is derived from each engine's own is_loaded() truth. Voice models
-        # are DISABLED (prewarm suppressed; on-demand still loads) when the Rust
-        # engine owns voice. Registration is cheap — loaders are not invoked here.
+        # OPUS-102: ModelCoordinator is the SINGLE owner of voice model loading —
+        # torch + VAD/wake/STT/TTS. Loaders run in daemon threads OFF the critical
+        # lifespan path; every voice model depends on `torch`, so the frozen
+        # _MEIPASS "import torch once, on a worker thread, before any model"
+        # guarantee is preserved without an awaited blocking import. State is
+        # derived from each component's own is_loaded() truth.
         from kernel.model_coordinator import ModelCoordinator
         from kernel.voice import tts_router as _tts_router
         from kernel.voice.transcribe_helper import get_or_create_stt as _get_stt
 
         _voice_disabled = config_manager.config.voice.engine != "python"
         model_coordinator = ModelCoordinator(event_bus)
-        model_coordinator.register(
-            "tts", _tts_router.load_models, _tts_router.is_loaded, disabled=_voice_disabled
-        )
-        model_coordinator.register(
-            "stt",
-            lambda: _get_stt(app.state),
-            lambda: getattr(app.state, "stt", None) is not None,
-            disabled=_voice_disabled,
-        )
         app.state.model_coordinator = model_coordinator
+        app.state.voice_start_error = None
 
-        # Voice pipeline (optional — only if dependencies available)
-        # Phase 3 Chunk 8: skip Python pipeline init when voice.engine="rust"
-        # so the Rust backend's native /voice/* routes own the lifecycle.
-        # `app.state.voice_pipeline = None` keeps any direct hits on Python's
-        # /voice/* endpoints returning 503 — UI dispatcher already routes
-        # them to Rust (RUST_ENDPOINTS allow-list).
-        if config_manager.config.voice.engine != "python":
+        # torch: single worker-thread import; the probe gates on a COMPLETED
+        # import flag (never sys.modules membership → no partial-torch race).
+        def _load_torch() -> None:
+            import torch  # noqa: F401
+            app.state._torch_ready = True
+
+        model_coordinator.register(
+            "torch", _load_torch, lambda: getattr(app.state, "_torch_ready", False)
+        )
+
+        _VOICE_MODELS = ("vad", "wake", "stt", "tts")
+
+        if _voice_disabled:
+            # Phase 3 Chunk 8: Rust owns voice. Register the four as DISABLED so
+            # /ready reports them disabled and Python routes fail-closed; Python
+            # loads no voice model.
             logger.info(
-                "Voice pipeline disabled in Python (voice.engine=%s) — Rust backend authoritative",
+                "Voice disabled in Python (voice.engine=%s) — Rust backend authoritative",
                 config_manager.config.voice.engine,
             )
             app.state.voice_pipeline = None
+            for _vm in _VOICE_MODELS:
+                model_coordinator.register(
+                    _vm, lambda: None, lambda: False,
+                    disabled=True, deps=("torch",), voice_component=True,
+                )
         else:
             try:
                 voice_pipeline = VoicePipeline(
@@ -372,8 +379,12 @@ def create_app(
                     app_state=app.state,
                 )
                 app.state.voice_pipeline = voice_pipeline
+                # Single STT instance: /voice/transcribe + remote pipeline share
+                # the pipeline's own SpeechToText (config voice.stt_model) — no
+                # second model, no size drift.
+                app.state.stt = voice_pipeline._stt
                 logger.info("Voice pipeline initialized")
-                
+
                 from kernel.voice.remote_pipeline import RemoteVoicePipeline
                 remote_pipeline = RemoteVoicePipeline(
                     event_bus=event_bus,
@@ -385,45 +396,53 @@ def create_app(
                 app.state.remote_pipeline = remote_pipeline
                 logger.info("Remote Voice pipeline initialized")
 
-                # Pre-import torch ONCE, in a worker thread, awaited, BEFORE the
-                # auto-start task and the TTS/STT prewarm spawn their own load
-                # threads. Two subtleties in the frozen bundle:
-                #   1) `import torch` on the MAIN thread crashes in torch's custom-op
-                #      registration (pyi_rth_inspect mishandles the main-thread frame);
-                #      the same import on a worker thread is fine.
-                #   2) concurrent first-imports of torch from multiple load threads
-                #      race ("partially initialized module 'torch'").
-                # Importing it here via to_thread (single, awaited) satisfies both:
-                # worker-thread import (no crash) + serialized (no race); later loads
-                # then see torch already imported and skip the racey first-import.
-                if hasattr(sys, "_MEIPASS"):
-                    def _preimport_torch() -> None:
-                        import torch  # noqa: F401
+                # One orchestration path: the four components load through the
+                # coordinator (torch-ordered, single-flight), never via
+                # pipeline.load_models. STT funnels through get_or_create_stt so
+                # the shared instance + _stt_lock stay authoritative.
+                model_coordinator.register(
+                    "vad", voice_pipeline._vad.load,
+                    lambda: voice_pipeline._vad.is_loaded, deps=("torch",), voice_component=True,
+                )
+                model_coordinator.register(
+                    "wake", voice_pipeline._wake_word.load,
+                    lambda: voice_pipeline._wake_word.is_loaded, deps=("torch",), voice_component=True,
+                )
+                model_coordinator.register(
+                    "stt", lambda: _get_stt(app.state),
+                    lambda: getattr(app.state, "stt", None) is not None and app.state.stt.is_loaded,
+                    deps=("torch",), voice_component=True,
+                )
+                model_coordinator.register(
+                    "tts", _tts_router.load_models, _tts_router.is_loaded,
+                    deps=("torch",), voice_component=True,
+                )
 
-                    try:
-                        await asyncio.to_thread(_preimport_torch)
-                        logger.info("torch pre-imported (single-threaded)")
-                    except Exception:
-                        logger.exception("torch pre-import failed")
-
-                # Voice pipeline — auto-start only if user opted in via config.
-                # Default OFF: user toggles via UI (privacy + battery + RAM friendly).
                 voice_cfg = config_manager.config.voice
                 if voice_cfg.auto_start and voice_cfg.mode != "off":
                     async def _voice_bg_start() -> None:
                         try:
-                            import asyncio as _aio_vp
-                            await _aio_vp.to_thread(voice_pipeline.load_models)
-                            await voice_pipeline.start()
-                            logger.info("Voice pipeline auto-started (mode=%s, wake_word=%s)",
-                                       voice_cfg.mode, voice_cfg.wake_word)
+                            # Load through the coordinator (daemon threads, not
+                            # pipeline.load_models) so there is ONE owner, then
+                            # start the realtime loop only once components are up.
+                            outcomes = [await model_coordinator.ensure(m) for m in _VOICE_MODELS]
+                            from kernel.model_coordinator import ModelOutcome as _MO
+                            if all(o is _MO.READY for o in outcomes):
+                                await voice_pipeline.start()
+                                logger.info("Voice pipeline auto-started (mode=%s)", voice_cfg.mode)
+                            else:
+                                app.state.voice_start_error = f"components not ready: {outcomes}"
+                                logger.warning("Voice auto-start skipped: %s", app.state.voice_start_error)
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
+                            app.state.voice_start_error = str(e)
                             logger.warning("Voice pipeline auto-start failed: %s", e)
-                    # OPUS-102: strong ref — a bare create_task is GC-cancellable.
+                    # Strong ref — a bare create_task is GC-cancellable.
                     app.state._voice_bg_task = asyncio.create_task(_voice_bg_start())
                 else:
-                    logger.info("Voice pipeline ready (mode=%s, auto_start=%s) — waiting for /voice/start",
-                               voice_cfg.mode, voice_cfg.auto_start)
+                    logger.info("Voice ready (mode=%s, auto_start=False) — waiting for /voice/start",
+                               voice_cfg.mode)
             except Exception:
                 logger.warning("Voice pipeline not available")
                 app.state.voice_pipeline = None
@@ -601,7 +620,11 @@ def create_app(
                         tts_ready = model_coordinator.status("tts").state.value == "ready"
                         if get_provider() == PROVIDER_F5 and tts_ready:
                             from kernel.voice import tts_engine_f5
-                            await asyncio.to_thread(tts_engine_f5.generate_audio, "Готов.")
+                            # daemon thread (not to_thread) so a hung CUDA synth
+                            # never holds the process past the shutdown SLA (F3).
+                            await model_coordinator.run_blocking(
+                                lambda: tts_engine_f5.generate_audio("Готов.")
+                            )
                             logger.info("TTS warmup synth: done (first answer is hot)")
                     except asyncio.CancelledError:
                         raise
