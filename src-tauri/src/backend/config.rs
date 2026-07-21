@@ -114,7 +114,9 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             cloud_provider: "anthropic".to_string(),
-            cloud_model: "claude-sonnet-4-20250514".to_string(),
+            // OPUS-301: independent literal kept in sync with the JSON SoT by
+            // model_registry::tests::config_default_matches_registry.
+            cloud_model: "claude-sonnet-5".to_string(),
             local_provider: "ollama".to_string(),
             local_model: "llama3".to_string(),
             auto_route: true,
@@ -151,9 +153,20 @@ pub fn resolve_config_path() -> PathBuf {
 }
 
 pub fn load_from(path: &Path) -> Result<AppConfig> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("read config from {:?}", path))?;
-    serde_yaml::from_str::<AppConfig>(&raw).with_context(|| format!("parse config at {:?}", path))
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("read config from {:?}", path))?;
+    let mut cfg: AppConfig =
+        serde_yaml::from_str(&raw).with_context(|| format!("parse config at {:?}", path))?;
+    // OPUS-301: a stored retired model id deterministically migrates to the
+    // provider default with a structured warning (fail-forward, never a
+    // silent 400 from a retired id).
+    let (migrated, warn) =
+        crate::backend::model_registry::migrate(&cfg.llm.cloud_provider, &cfg.llm.cloud_model);
+    if let Some(w) = warn {
+        tracing::warn!("{w}");
+        cfg.llm.cloud_model = migrated;
+    }
+    Ok(cfg)
 }
 
 pub fn load() -> Result<AppConfig> {

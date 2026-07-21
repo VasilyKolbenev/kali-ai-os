@@ -6,6 +6,7 @@ import { VoiceSettings } from "./sections/VoiceSettings";
 import { ProfileSettings } from "./sections/ProfileSettings";
 import { AdvancedSettings } from "./sections/AdvancedSettings";
 import { HexFrame, HudDivider } from "../hud";
+import { ANTHROPIC_DEFAULT, activeAnthropicModel } from "../../lib/modelRegistry";
 
 interface SettingsData {
   llm: LlmSettingsValue;
@@ -42,7 +43,7 @@ function emptySettings(): SettingsData {
       openai_key: "",
       openai_model: "gpt-5.4-mini",
       anthropic_key: "",
-      anthropic_model: "claude-sonnet-4-20250514",
+      anthropic_model: ANTHROPIC_DEFAULT,
       google_key: "",
       google_model: "gemini-3.1-pro",
       deepseek_key: "",
@@ -65,6 +66,11 @@ export function Settings() {
       .settings()
       .then((data) => {
         const merged = { ...emptySettings(), ...(data as Partial<SettingsData>) };
+        // OPUS-301: migrate a stored retired Anthropic id to the active default.
+        merged.llm = {
+          ...merged.llm,
+          anthropic_model: activeAnthropicModel(merged.llm?.anthropic_model),
+        };
         setSettings(merged as SettingsData);
       })
       .catch((e) =>

@@ -1,10 +1,15 @@
 """Pydantic models for KALI kernel — events, config, manifests, WebSocket messages."""
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from kernel.model_registry import default_model, migrate
+
+logger = logging.getLogger(__name__)
 
 VALID_PERMISSIONS = frozenset({
     "storage", "notifications", "event_bus", "network", "agents", "system",
@@ -172,8 +177,10 @@ class VoiceConfig(BaseModel):
 
 
 # Default models per cloud provider (used when user switches provider).
+# ``anthropic`` is sourced from the machine-readable registry
+# (``config/model_registry.json``) so desktop/mobile/UI stay in sync (OPUS-301).
 DEFAULT_CLOUD_MODELS: dict[str, str] = {
-    "anthropic": "claude-sonnet-4-20250514",
+    "anthropic": default_model("anthropic") or "claude-sonnet-5",
     "openai": "gpt-4.1",
     "google": "gemini-2.5-flash",
     "deepseek": "deepseek-chat",
@@ -186,10 +193,21 @@ class LLMConfig(BaseModel):
     """LLM routing configuration."""
 
     cloud_provider: str = "anthropic"  # anthropic | openai | google | deepseek | groq | mistral
-    cloud_model: str = "claude-sonnet-4-20250514"
+    cloud_model: str = Field(default_factory=lambda: DEFAULT_CLOUD_MODELS["anthropic"])
     local_provider: str = "ollama"
     local_model: str = "llama3"
     auto_route: bool = True
+
+    @model_validator(mode="after")
+    def _migrate_retired_cloud_model(self) -> "LLMConfig":
+        """Deterministically migrate a retired stored ``cloud_model`` to the
+        provider default with a structured warning (OPUS-301). No-op for
+        unmanaged providers or active ids.
+        """
+        migrated, warning = migrate(self.cloud_provider, self.cloud_model, log=True)
+        if warning is not None:
+            object.__setattr__(self, "cloud_model", migrated)
+        return self
 
 
 class ScheduleConfig(BaseModel):

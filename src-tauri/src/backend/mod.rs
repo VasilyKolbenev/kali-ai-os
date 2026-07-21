@@ -5,6 +5,7 @@ pub mod error;
 pub mod event_bus;
 pub mod http;
 pub mod ingestion;
+pub mod model_registry;
 pub mod models;
 pub mod proxy;
 pub mod skills;

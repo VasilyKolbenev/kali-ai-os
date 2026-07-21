@@ -333,3 +333,31 @@ class TestDoubleOutage:
             resp = await router.route(req)
         assert resp.provider_used == "error"
         assert resp.tool_calls is None
+
+
+class TestAnthropicRequestBuilder:
+    """OPUS-301: the anthropic request must not send sampling params that newer
+    models (e.g. Sonnet 5) may reject in incompatible combos."""
+
+    async def test_anthropic_kwargs_omit_sampling_params(self) -> None:
+        config = LLMConfig(cloud_provider="anthropic", cloud_model="claude-sonnet-5")
+        router = LLMRouter(config)
+        req = LLMRequest(text="hi", context=[], available_tools=[])
+
+        block = MagicMock()
+        block.type = "text"
+        block.text = "ok"
+        resp_obj = MagicMock()
+        resp_obj.content = [block]
+        mock_create = AsyncMock(return_value=resp_obj)
+        mock_client = MagicMock()
+        mock_client.messages.create = mock_create
+
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            await router._call_anthropic(req)
+
+        mock_create.assert_awaited_once()
+        kwargs = mock_create.await_args.kwargs
+        assert kwargs["model"] == "claude-sonnet-5"
+        for forbidden in ("temperature", "top_p", "top_k"):
+            assert forbidden not in kwargs, f"anthropic request must not send {forbidden}"

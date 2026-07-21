@@ -16,7 +16,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-20250514"
+_MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 1024
 
 

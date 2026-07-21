@@ -6,10 +6,25 @@ enum LlmProvider { anthropic, openai }
 /// Failure category surfaced to the UI for an honest, actionable message.
 enum LlmErrorKind { noKey, network, apiError, quota }
 
-/// Default model ids, matching the desktop router's `DEFAULT_CLOUD_MODELS`
-/// (`kernel/models.py`) so mobile and desktop agree on defaults.
-const String kAnthropicDefaultModel = 'claude-sonnet-4-20250514';
+/// Default model ids, matching the shared registry SoT
+/// (`config/model_registry.json`) so mobile and desktop agree (OPUS-301).
+const String kAnthropicDefaultModel = 'claude-sonnet-5';
 const String kOpenAiDefaultModel = 'gpt-4.1';
+
+/// Retired Anthropic ids that must never be sent as a live request model.
+const List<String> kAnthropicRetiredModels = <String>[
+  'claude-sonnet-4-20250514',
+  'claude-opus-4-20250414',
+  'claude-haiku-4-20250414',
+  'claude-3-5-haiku-20241022',
+];
+
+/// Migrate a stored Anthropic model id: a retired id (or null/empty) falls back
+/// to the active default; an active id is returned unchanged.
+String activeAnthropicModel(String? stored) {
+  if (stored == null || stored.isEmpty) return kAnthropicDefaultModel;
+  return kAnthropicRetiredModels.contains(stored) ? kAnthropicDefaultModel : stored;
+}
 
 /// Max tokens requested per reply.
 const int _maxTokens = 1024;

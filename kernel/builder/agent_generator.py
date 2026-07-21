@@ -54,7 +54,7 @@ def _detect_provider() -> tuple[str, str] | None:
 
     providers = [
         ("openai", "OPENAI_API_KEY", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
-        ("anthropic", "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")),
+        ("anthropic", "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")),
         ("google", "GOOGLE_API_KEY", os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash")),
         ("deepseek", "DEEPSEEK_API_KEY", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")),
     ]

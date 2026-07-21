@@ -13,6 +13,8 @@ import logging
 import os
 from typing import Any
 
+from kernel.model_registry import cheap_model, default_model
+
 from fastapi import APIRouter, Request
 
 from kernel import __version__
@@ -145,7 +147,7 @@ async def llm_test(request: Request) -> dict[str, Any]:
             import anthropic
             client = anthropic.AsyncAnthropic(api_key=api_key)
             resp = await client.messages.create(
-                model="claude-3-5-haiku-latest",
+                model=cheap_model("anthropic"),
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
             )
@@ -230,7 +232,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
             "openai_key": _mask_key(os.environ.get("OPENAI_API_KEY", "")),
             "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             "anthropic_key": _mask_key(os.environ.get("ANTHROPIC_API_KEY", "")),
-            "anthropic_model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            "anthropic_model": os.environ.get("ANTHROPIC_MODEL", default_model("anthropic")),
             "google_key": _mask_key(os.environ.get("GOOGLE_API_KEY", "")),
             "google_model": os.environ.get("GOOGLE_MODEL", "gemini-3.1-pro"),
             "deepseek_key": _mask_key(os.environ.get("DEEPSEEK_API_KEY", "")),

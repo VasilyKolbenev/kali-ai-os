@@ -26,7 +26,7 @@ function seed() {
       openai_key: "",
       openai_model: "gpt-4.1-mini",
       anthropic_key: "",
-      anthropic_model: "claude-sonnet-4-20250514",
+      anthropic_model: "claude-sonnet-5",
       google_key: "",
       google_model: "gemini-3.1-pro",
       deepseek_key: "",
@@ -54,7 +54,7 @@ describe("Settings — LLM provider/model picker", () => {
     });
     await user.click(anthropicProvider);
     await user.click(
-      screen.getByRole("button", { name: "claude-opus-4-20250414" }),
+      screen.getByRole("button", { name: "claude-opus-4-8" }),
     );
 
     await user.click(screen.getByRole("button", { name: /^сохранить$/i }));
@@ -64,7 +64,7 @@ describe("Settings — LLM provider/model picker", () => {
     expect(api.updateConfig).toHaveBeenCalledWith({
       llm: {
         cloud_provider: "anthropic",
-        cloud_model: "claude-opus-4-20250414",
+        cloud_model: "claude-opus-4-8",
       },
     });
   });

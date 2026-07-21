@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { api } from "../../../api/client";
 import { SecretField } from "../SecretField";
 import { HexFrame, HudDivider } from "../../hud";
+import { ANTHROPIC_ACTIVE } from "../../../lib/modelRegistry";
 
 type CheckStatus = "unknown" | "checking" | "valid" | "invalid";
 
@@ -31,11 +32,8 @@ const PROVIDERS = [
 ] as const;
 
 const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-thinking", "gpt-4.1-mini", "gpt-4.1-nano"];
-const ANTHROPIC_MODELS = [
-  "claude-sonnet-4-20250514",
-  "claude-opus-4-20250414",
-  "claude-haiku-4-20250414",
-];
+// OPUS-301: active Anthropic models come from the shared registry SoT.
+const ANTHROPIC_MODELS = [...ANTHROPIC_ACTIVE];
 const GOOGLE_MODELS = ["gemini-3.1-ultra", "gemini-3.1-pro", "gemini-3.1-flash-lite"];
 const DEEPSEEK_MODELS = ["deepseek-v3.2", "deepseek-r1", "deepseek-coder-v3"];
 

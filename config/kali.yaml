@@ -13,7 +13,7 @@ voice:
 
 llm:
   cloud_provider: "openai"            # "anthropic" or "openai"
-  cloud_model: "gpt-5.4-mini"              # gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, claude-sonnet-4-20250514
+  cloud_model: "gpt-5.4-mini"              # gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, claude-sonnet-5
   local_provider: "ollama"
   local_model: "llama3"
   auto_route: true
