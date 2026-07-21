@@ -328,6 +328,28 @@ def create_app(
                     except ValueError as e:
                         logger.warning("Invalid cron for skill %s: %s", name, e)
 
+        # OPUS-102: single-flight, observable model coordinator. Heavy voice
+        # weight loads run as background prewarm (OFF the critical lifespan path);
+        # status is derived from each engine's own is_loaded() truth. Voice models
+        # are DISABLED (prewarm suppressed; on-demand still loads) when the Rust
+        # engine owns voice. Registration is cheap — loaders are not invoked here.
+        from kernel.model_coordinator import ModelCoordinator
+        from kernel.voice import tts_router as _tts_router
+        from kernel.voice.transcribe_helper import get_or_create_stt as _get_stt
+
+        _voice_disabled = config_manager.config.voice.engine != "python"
+        model_coordinator = ModelCoordinator(event_bus)
+        model_coordinator.register(
+            "tts", _tts_router.load_models, _tts_router.is_loaded, disabled=_voice_disabled
+        )
+        model_coordinator.register(
+            "stt",
+            lambda: _get_stt(app.state),
+            lambda: getattr(app.state, "stt", None) is not None,
+            disabled=_voice_disabled,
+        )
+        app.state.model_coordinator = model_coordinator
+
         # Voice pipeline (optional — only if dependencies available)
         # Phase 3 Chunk 8: skip Python pipeline init when voice.engine="rust"
         # so the Rust backend's native /voice/* routes own the lifecycle.
@@ -397,7 +419,8 @@ def create_app(
                                        voice_cfg.mode, voice_cfg.wake_word)
                         except Exception as e:
                             logger.warning("Voice pipeline auto-start failed: %s", e)
-                    asyncio.create_task(_voice_bg_start())
+                    # OPUS-102: strong ref — a bare create_task is GC-cancellable.
+                    app.state._voice_bg_task = asyncio.create_task(_voice_bg_start())
                 else:
                     logger.info("Voice pipeline ready (mode=%s, auto_start=%s) — waiting for /voice/start",
                                voice_cfg.mode, voice_cfg.auto_start)
@@ -552,82 +575,65 @@ def create_app(
             plugin_registry=app.state.plugin_registry,
         )
 
-        # Voice-engine prewarm — load F5-TTS + Whisper STT eagerly so the
-        # first /tts/speak (wizard question) and /voice/transcribe (user
-        # utterance) don't pay the ~5s cold-load cost at the worst possible
-        # moment for the voice-builder pilot.
-        #
-        # Subsumes the previous `_tts_bg_load()` background task (deleted)
-        # which raced with this prewarm in default config (auto_start=true)
-        # and could double-load F5 weights → GPU OOM on smaller cards.
-        # Sequential `await` here is intentional: startup blocks until both
-        # engines are warm so the first user gesture sees a hot cache.
-        #
-        # Best-effort: each block has its own try/except → logger.warning;
-        # startup never aborts on prewarm failure (on-demand load paths
-        # in /tts/speak and get_or_create_stt still work as fallback).
-        #
-        # Tests skip via `KALI_SKIP_PREWARM=1` (set in tests/conftest.py)
-        # to avoid loading real ML models per-test fixture.
+        # OPUS-102: voice weights (F5-TTS + Whisper STT) prewarm in the
+        # BACKGROUND via the coordinator — NEVER on the critical lifespan path,
+        # so text-ready does not wait on ML. Single-flight: the prewarm and the
+        # first on-demand /tts // /voice/transcribe share one load (engine locks
+        # `_load_lock`/`_stt_lock` are the weight-load-once guarantee). Engine-
+        # scoped: `prewarm` skips DISABLED models when Rust owns voice. The frozen
+        # torch import-race fix (awaited `_preimport_torch` above) still runs first.
+        # Tests skip via `KALI_SKIP_PREWARM=1` (tests/conftest.py).
         if os.environ.get("KALI_SKIP_PREWARM"):
             logger.info("Voice prewarm skipped (KALI_SKIP_PREWARM set)")
         else:
-            try:
-                from kernel.voice.tts_router import is_loaded, load_models
+            model_coordinator.prewarm(["stt", "tts"])
 
-                if not is_loaded():
-                    logger.info("TTS prewarm: loading F5 models...")
-                    await asyncio.to_thread(load_models)
-                    logger.info("TTS prewarm: ready")
+            # CUDA warmup: a throwaway micro-synth AFTER TTS is ready moves the
+            # ~2x first-synth kernel-compile cost off the user's first answer.
+            # Backgrounded + strong-ref'd; F5 called directly so a warmup failure
+            # never triggers the router's cloud (ElevenLabs) fallback.
+            if not _voice_disabled:
+                async def _tts_warmup() -> None:
+                    try:
+                        await model_coordinator.ensure("tts")
+                        from kernel.voice.tts_router import PROVIDER_F5, get_provider
 
-                # CUDA warmup: the first real synth pays ~2x for kernel
-                # compilation (6.3 s vs 2.9 s for the same-size text in the
-                # live log) — a throwaway micro-synth in the background moves
-                # that cost off the user's first answer. F5 module called
-                # directly so a warmup failure can never trigger the router's
-                # cloud (ElevenLabs) fallback.
-                from kernel.voice.tts_router import PROVIDER_F5, get_provider
-
-                if get_provider() == PROVIDER_F5:
-                    async def _warmup_synth() -> None:
-                        try:
+                        tts_ready = model_coordinator.status("tts").state.value == "ready"
+                        if get_provider() == PROVIDER_F5 and tts_ready:
                             from kernel.voice import tts_engine_f5
-                            await asyncio.to_thread(
-                                tts_engine_f5.generate_audio, "Готов."
-                            )
+                            await asyncio.to_thread(tts_engine_f5.generate_audio, "Готов.")
                             logger.info("TTS warmup synth: done (first answer is hot)")
-                        except Exception as e:
-                            logger.warning("TTS warmup synth failed (non-fatal): %s", e)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning("TTS warmup synth failed (non-fatal): %s", e)
 
-                    app.state._tts_warmup_task = asyncio.create_task(_warmup_synth())
-            except Exception as e:
-                import traceback as _tb
-                logger.warning(
-                    "TTS prewarm failed (non-fatal): %s\n%s", e, _tb.format_exc()
-                )
-
-            # STT prewarm runs in the background so lifespan yields immediately:
-            # first-run Whisper download (~480MB) must not block /health. The
-            # on-demand load path (get_or_create_stt in /tts and /voice/transcribe)
-            # covers requests that arrive before the model is warm.
-            async def _prewarm_stt() -> None:
-                try:
-                    from kernel.voice.transcribe_helper import get_or_create_stt
-
-                    logger.info("STT prewarm: loading Whisper model...")
-                    await asyncio.to_thread(get_or_create_stt, app.state)
-                    logger.info("STT prewarm: ready")
-                except Exception as e:
-                    logger.warning("STT prewarm failed (non-fatal): %s", e)
-
-            # Strong reference prevents the task from being GC-cancelled.
-            app.state._prewarm_task = asyncio.create_task(_prewarm_stt())
+                app.state._tts_warmup_task = asyncio.create_task(_tts_warmup())
 
         logger.info("KALI kernel started (v%s)", __version__)
         yield
 
         # Graceful shutdown
         await event_bus.publish(Event(topic="system.shutdown", source="kernel", payload={}))
+
+        # OPUS-102: cancel background model work so a shutdown mid-load leaves no
+        # orphaned asyncio task, and stop the voice pipeline. (A weight load
+        # already running inside a worker thread runs to completion — not killed.)
+        try:
+            await model_coordinator.shutdown()
+        except Exception:
+            logger.debug("model coordinator shutdown error", exc_info=True)
+        for _attr in ("_tts_warmup_task", "_voice_bg_task", "_model_download_task"):
+            _t = getattr(app.state, _attr, None)
+            if _t is not None and not _t.done():
+                _t.cancel()
+        _vp = getattr(app.state, "voice_pipeline", None)
+        if _vp is not None:
+            try:
+                await _vp.stop()
+            except Exception:
+                logger.debug("voice pipeline stop error", exc_info=True)
+
         await agent_runtime.shutdown_all()
         await scheduler.stop()
         await database.close()

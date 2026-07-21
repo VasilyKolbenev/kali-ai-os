@@ -45,6 +45,29 @@ async def health(request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/live")
+async def live() -> dict[str, Any]:
+    """Liveness — the process is up and serving. Zero ML/network/state deps
+    (OPUS-102): if lifespan startup completed, this returns immediately."""
+    return {"status": "live", "version": __version__}
+
+
+@router.get("/ready")
+async def ready(request: Request) -> dict[str, Any]:
+    """Readiness — text mode is usable (chat/config/settings) independently of
+    voice. `voice` carries the machine-readable model status from the coordinator
+    (loading/ready/degraded/disabled); voice loading or failure never flips
+    `text_ready` (OPUS-102)."""
+    s = request.app.state
+    coord = getattr(s, "model_coordinator", None)
+    voice = coord.snapshot() if coord is not None else {"models": {}, "voice": "idle"}
+    return {
+        "text_ready": True,
+        "version": __version__,
+        "voice": voice,
+    }
+
+
 @router.get("/config")
 async def get_config(request: Request) -> dict[str, Any]:
     return request.app.state.config_manager.config.model_dump()

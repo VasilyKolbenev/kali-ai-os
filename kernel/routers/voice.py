@@ -225,6 +225,15 @@ async def voice_clone(request: Request) -> dict[str, Any]:
         return {"status": "error", "message": str(exc)}
 
 
+async def _ensure_voice_model(request: Request, name: str) -> None:
+    """Route an on-demand voice-model load through the ModelCoordinator so the
+    first request and a background prewarm share one single-flight load and the
+    machine status reflects it (OPUS-102). No-op if the coordinator is absent."""
+    coord = getattr(request.app.state, "model_coordinator", None)
+    if coord is not None and coord.has(name):
+        await coord.ensure(name)
+
+
 @router.post("/tts")
 async def text_to_speech(request: Request) -> Any:
     """Convert text to speech — F5-TTS (local GPU) or ElevenLabs (cloud)."""
@@ -240,16 +249,9 @@ async def text_to_speech(request: Request) -> Any:
         return JSONResponse({"error": "No text provided"}, status_code=400)
 
     try:
-        from kernel.voice.tts_router import (
-            audio_to_wav_bytes,
-            generate_audio,
-            is_loaded,
-            load_models,
-        )
-        if not is_loaded():
-            logger.info("TTS loading on first request...")
-            await asyncio.to_thread(load_models)
+        from kernel.voice.tts_router import audio_to_wav_bytes, generate_audio
 
+        await _ensure_voice_model(request, "tts")
         audio, sr = await asyncio.to_thread(generate_audio, text, language)
 
         # Play through system speakers if requested
@@ -281,14 +283,9 @@ async def tts_speak(request: Request) -> dict[str, Any]:
         return {"error": "No text provided"}
 
     try:
-        from kernel.voice.tts_router import (
-            generate_audio,
-            is_loaded,
-            load_models,
-        )
-        if not is_loaded():
-            await asyncio.to_thread(load_models)
+        from kernel.voice.tts_router import generate_audio
 
+        await _ensure_voice_model(request, "tts")
         audio, sr = await asyncio.to_thread(generate_audio, text, language)
         await asyncio.to_thread(_play_audio, audio, sr)
         return {"status": "ok", "duration": len(audio) / sr}
@@ -337,6 +334,7 @@ async def voice_transcribe(request: Request) -> Any:
         return JSONResponse({"error": str(e)}, status_code=400)
 
     try:
+        await _ensure_voice_model(request, "stt")
         stt = await asyncio.to_thread(get_or_create_stt, request.app.state)
     except Exception as e:
         logger.exception("/voice/transcribe failed to init SpeechToText")
