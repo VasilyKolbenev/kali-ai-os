@@ -13,12 +13,27 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("kernel.model_registry")
 
-REGISTRY_PATH = Path(__file__).resolve().parents[1] / "config" / "model_registry.json"
+
+def _registry_path() -> Path:
+    """Resolve ``config/model_registry.json`` in both dev and frozen layouts.
+
+    In a PyInstaller bundle the data lives under ``sys._MEIPASS/config`` (the
+    build adds the whole ``config`` dir); in dev it is ``<repo>/config``. Mirrors
+    the ``_MEIPASS`` idiom in ``kernel/main.py`` so a frozen import never crashes.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "config" / "model_registry.json"
+    return Path(__file__).resolve().parents[1] / "config" / "model_registry.json"
+
+
+REGISTRY_PATH = _registry_path()
 
 
 def validate_registry(reg: dict[str, Any]) -> None:
