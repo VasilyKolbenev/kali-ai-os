@@ -22,14 +22,23 @@ describe("modelRegistry invariants", () => {
     }
   });
 
-  it("the known retired default is actually retired", () => {
+  it("deny-list holds official retired + legacy typo aliases", () => {
+    // official retired snapshots
     expect(ANTHROPIC_RETIRED).toContain("claude-sonnet-4-20250514");
+    expect(ANTHROPIC_RETIRED).toContain("claude-opus-4-20250514");
+    // legacy UI typos a previous build may have stored
+    expect(ANTHROPIC_RETIRED).toContain("claude-opus-4-20250414");
+    expect(ANTHROPIC_RETIRED).toContain("claude-haiku-4-20250414");
   });
 });
 
 describe("activeAnthropicModel migration", () => {
-  it("migrates a retired id to the default", () => {
-    expect(activeAnthropicModel("claude-sonnet-4-20250514")).toBe(ANTHROPIC_DEFAULT);
+  it.each([
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    "claude-opus-4-20250414",
+  ])("migrates retired/legacy id %s to the default", (id) => {
+    expect(activeAnthropicModel(id)).toBe(ANTHROPIC_DEFAULT);
   });
 
   it("leaves an active id unchanged", () => {

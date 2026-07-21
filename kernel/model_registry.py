@@ -36,45 +36,74 @@ def _registry_path() -> Path:
 REGISTRY_PATH = _registry_path()
 
 
+# Provider names KALI supports. A key inside the SoT that is NOT here is a typo
+# and fails validation (build-time contract). Runtime helpers still no-op for a
+# known-but-absent provider (e.g. groq/mistral not yet in the SoT).
+KNOWN_PROVIDERS = frozenset(
+    {"anthropic", "openai", "google", "deepseek", "groq", "mistral"}
+)
+
+
+def _require_str_list(value: Any, name: str, field: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ValueError(f"model_registry: provider {name!r} {field} must be a list[str]")
+    if len(value) != len(set(value)):
+        raise ValueError(f"model_registry: provider {name!r} {field} has duplicate ids")
+    return value
+
+
 def validate_registry(reg: dict[str, Any]) -> None:
     """Validate a registry dict; raise ``ValueError`` on any inconsistency.
 
-    Checks per provider: ``default`` present and among ``models``; no duplicate
-    models; ``retired`` disjoint from ``models``.
+    Per provider: ``default`` present and among ``models``; ``cheap`` a non-empty
+    active id; ``models``/``retired``/``legacy_aliases`` are unique ``list[str]``;
+    the deny-list (retired ∪ legacy_aliases) is disjoint from ``models`` and holds
+    neither ``default`` nor ``cheap``. A provider key not in ``KNOWN_PROVIDERS``
+    is rejected (build-time contract distinct from the runtime no-op).
 
     Args:
         reg: Parsed registry mapping (``{"providers": {name: cfg}}``).
 
     Raises:
-        ValueError: On unknown shape, missing/foreign default, duplicate model,
-            or a retired id also listed as active.
+        ValueError: On any shape/consistency violation.
     """
     providers = reg.get("providers")
     if not isinstance(providers, dict) or not providers:
         raise ValueError("model_registry: 'providers' must be a non-empty object")
     for name, cfg in providers.items():
+        if name not in KNOWN_PROVIDERS:
+            raise ValueError(f"model_registry: unknown provider key {name!r}")
         if not isinstance(cfg, dict):
             raise ValueError(f"model_registry: provider {name!r} must be an object")
-        models = cfg.get("models")
-        if not isinstance(models, list) or not models:
+        models = _require_str_list(cfg.get("models"), name, "models")
+        if not models:
             raise ValueError(f"model_registry: provider {name!r} has no models")
-        if len(models) != len(set(models)):
-            raise ValueError(f"model_registry: provider {name!r} has duplicate models")
         default = cfg.get("default")
-        if not default:
+        if not default or not isinstance(default, str):
             raise ValueError(f"model_registry: provider {name!r} missing default")
         if default not in models:
             raise ValueError(
                 f"model_registry: provider {name!r} default {default!r} not in models"
             )
-        retired = cfg.get("retired", [])
-        if not isinstance(retired, list):
-            raise ValueError(f"model_registry: provider {name!r} retired must be a list")
-        if default in retired:
+        cheap = cfg.get("cheap")
+        if not cheap or not isinstance(cheap, str):
+            raise ValueError(f"model_registry: provider {name!r} cheap must be a non-empty string")
+        if cheap not in models:
+            raise ValueError(
+                f"model_registry: provider {name!r} cheap {cheap!r} not in models"
+            )
+        retired = _require_str_list(cfg.get("retired", []), name, "retired")
+        legacy = _require_str_list(cfg.get("legacy_aliases", []), name, "legacy_aliases")
+        denylist = set(retired) | set(legacy)
+        if default in denylist:
             raise ValueError(
                 f"model_registry: provider {name!r} default {default!r} is retired"
             )
-        overlap = set(retired) & set(models)
+        if cheap in denylist:
+            raise ValueError(
+                f"model_registry: provider {name!r} cheap {cheap!r} is retired"
+            )
+        overlap = denylist & set(models)
         if overlap:
             raise ValueError(
                 f"model_registry: provider {name!r} retired ids also active: {sorted(overlap)}"
@@ -135,14 +164,25 @@ def cheap_model(provider: str) -> str | None:
 
 
 def retired_models(provider: str) -> list[str]:
-    """Return the retired model ids for ``provider`` (empty if unmanaged)."""
+    """Return the official retired ids for ``provider`` (empty if unmanaged)."""
     cfg = _provider(provider)
     return list(cfg.get("retired", [])) if cfg else []
 
 
+def legacy_aliases(provider: str) -> list[str]:
+    """Return the legacy/typo alias ids for ``provider`` (empty if unmanaged)."""
+    cfg = _provider(provider)
+    return list(cfg.get("legacy_aliases", [])) if cfg else []
+
+
+def denylist(provider: str) -> list[str]:
+    """Return all ids that must migrate (retired ∪ legacy_aliases)."""
+    return retired_models(provider) + legacy_aliases(provider)
+
+
 def is_retired(provider: str, model: str) -> bool:
-    """True iff ``model`` is a retired id for a managed ``provider``."""
-    return model in retired_models(provider)
+    """True iff ``model`` is retired or a legacy alias for a managed ``provider``."""
+    return model in denylist(provider)
 
 
 def migrate(provider: str, model: str, *, log: bool = False) -> tuple[str, str | None]:

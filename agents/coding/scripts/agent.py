@@ -7,6 +7,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents._base.agent_base import BaseAgent
+from kernel.model_registry import default_model
 
 try:
     from anthropic import Anthropic
@@ -16,7 +17,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-5"
+# OPUS-301: load-bearing — the model is the registry SoT default, never a literal.
+_MODEL = default_model("anthropic")
 _MAX_TOKENS = 1024
 
 

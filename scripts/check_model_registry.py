@@ -43,9 +43,25 @@ CONSUMER_FILES = [
 ]
 
 
+# Load-bearing consumers: they must DERIVE the model from the registry (never a
+# literal), so a JSON default/cheap change moves them in lockstep. Each maps a
+# file → the registry call it must contain. The gate also asserts the derived
+# assignment line carries no ``claude-`` literal (drift vector).
+LOAD_BEARING = {
+    REPO / "agents/coding/agent.py": 'default_model("anthropic")',
+    REPO / "agents/coding/scripts/agent.py": 'default_model("anthropic")',
+    REPO / "kernel/builder/agent_generator.py": 'cheap_model("anthropic")',
+}
+
+
 def _fail(msg: str) -> None:
     print(f"FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def _denylist(anthropic: dict) -> list[str]:
+    """All ids that must never appear active: official retired ∪ legacy aliases."""
+    return list(anthropic.get("retired", [])) + list(anthropic.get("legacy_aliases", []))
 
 
 def _load_sot() -> dict:
@@ -82,8 +98,8 @@ def _check_ts(anthropic: dict) -> None:
         _fail(f"{TS_MIRROR.name}: ANTHROPIC_DEFAULT != SoT")
     if _extract_ts_list(text, "ANTHROPIC_ACTIVE") != anthropic["models"]:
         _fail(f"{TS_MIRROR.name}: ANTHROPIC_ACTIVE != SoT models")
-    if _extract_ts_list(text, "ANTHROPIC_RETIRED") != anthropic["retired"]:
-        _fail(f"{TS_MIRROR.name}: ANTHROPIC_RETIRED != SoT retired")
+    if sorted(_extract_ts_list(text, "ANTHROPIC_RETIRED")) != sorted(_denylist(anthropic)):
+        _fail(f"{TS_MIRROR.name}: ANTHROPIC_RETIRED != SoT deny-list (retired ∪ legacy)")
 
 
 def _check_dart(anthropic: dict) -> None:
@@ -95,17 +111,31 @@ def _check_dart(anthropic: dict) -> None:
     if not block:
         _fail(f"{DART_MIRROR.name}: kAnthropicRetiredModels not found")
     retired = re.findall(r"'([^']+)'", block.group(1))
-    if retired != anthropic["retired"]:
-        _fail(f"{DART_MIRROR.name}: kAnthropicRetiredModels != SoT retired")
+    if sorted(retired) != sorted(_denylist(anthropic)):
+        _fail(f"{DART_MIRROR.name}: kAnthropicRetiredModels != SoT deny-list (retired ∪ legacy)")
 
 
 def _check_no_retired_in_consumers(anthropic: dict) -> None:
-    retired = anthropic["retired"]
     for f in CONSUMER_FILES:
         text = f.read_text(encoding="utf-8")
-        for rid in retired:
+        for rid in _denylist(anthropic):
             if rid in text:
                 _fail(f"{f.relative_to(REPO)}: retired id {rid!r} present in a consumer")
+
+
+def _check_consumers_load_bearing(anthropic: dict) -> None:
+    """Coding agents / builder must DERIVE the model from the registry, so a JSON
+    default/cheap change moves them in lockstep (a plain retired-scan can't prove
+    this). Assert the derive-call is present and the model line has no literal."""
+    for f, call in LOAD_BEARING.items():
+        text = f.read_text(encoding="utf-8")
+        if call not in text:
+            _fail(f"{f.relative_to(REPO)}: must derive from registry via {call}")
+        # the assignment that feeds the model must not carry a hardcoded id
+        for line in text.splitlines():
+            is_model_line = ("_MODEL" in line or "_ANTHROPIC_FALLBACK_MODEL" in line) and "=" in line
+            if is_model_line and "claude-" in line:
+                _fail(f"{f.relative_to(REPO)}: hardcoded model id on {line.strip()!r}")
 
 
 def main() -> None:
@@ -114,7 +144,11 @@ def main() -> None:
     _check_ts(anthropic)
     _check_dart(anthropic)
     _check_no_retired_in_consumers(anthropic)
-    print("OK: model registry validated, mirrors in sync, no retired id in consumers")
+    _check_consumers_load_bearing(anthropic)
+    print(
+        "OK: registry validated; mirrors + consumers in sync; "
+        "no retired/legacy id in consumers"
+    )
 
 
 if __name__ == "__main__":

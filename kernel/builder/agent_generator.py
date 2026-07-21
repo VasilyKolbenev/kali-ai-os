@@ -11,8 +11,13 @@ from typing import Any
 import yaml
 
 from kernel.builder.safety_gate import check_code
+from kernel.model_registry import cheap_model
 
 logger = logging.getLogger(__name__)
+
+# OPUS-301: load-bearing anthropic fallback — the registry SoT cheap model, not
+# a literal. Changing config/model_registry.json 'cheap' moves this in lockstep.
+_ANTHROPIC_FALLBACK_MODEL = cheap_model("anthropic")
 
 _SYSTEM_PROMPT = """\
 You are an expert Python developer generating KALI agent code.
@@ -54,7 +59,7 @@ def _detect_provider() -> tuple[str, str] | None:
 
     providers = [
         ("openai", "OPENAI_API_KEY", os.environ.get("OPENAI_MODEL", "gpt-4o-mini")),
-        ("anthropic", "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")),
+        ("anthropic", "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_MODEL", _ANTHROPIC_FALLBACK_MODEL)),
         ("google", "GOOGLE_API_KEY", os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash")),
         ("deepseek", "DEEPSEEK_API_KEY", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")),
     ]

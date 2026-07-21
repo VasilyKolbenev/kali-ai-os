@@ -15,11 +15,20 @@ const REGISTRY_JSON: &str = include_str!("../../../config/model_registry.json");
 struct ProviderCfg {
     default: String,
     // Part of the parsed SoT contract (validates default ∈ models cross-language,
-    // asserted in tests); Rust prod only needs default + retired.
+    // asserted in tests); Rust prod only needs default + deny-list.
     #[allow(dead_code)]
     models: Vec<String>,
     #[serde(default)]
     retired: Vec<String>,
+    #[serde(default)]
+    legacy_aliases: Vec<String>,
+}
+
+impl ProviderCfg {
+    /// Ids that must migrate to `default`: official retired ∪ legacy aliases.
+    fn denylist(&self) -> impl Iterator<Item = &String> {
+        self.retired.iter().chain(self.legacy_aliases.iter())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,10 +52,10 @@ pub fn default_model(provider_name: &str) -> Option<&'static str> {
     provider(provider_name).map(|c| c.default.as_str())
 }
 
-/// True iff `model` is a retired id for a managed `provider`.
+/// True iff `model` is retired or a legacy alias for a managed `provider`.
 pub fn is_retired(provider_name: &str, model: &str) -> bool {
     provider(provider_name)
-        .map(|c| c.retired.iter().any(|r| r == model))
+        .map(|c| c.denylist().any(|r| r == model))
         .unwrap_or(false)
 }
 
@@ -74,19 +83,28 @@ mod tests {
 
     #[test]
     fn retired_ids_are_flagged_and_absent_from_active() {
+        // official retired + legacy typo alias both flagged
         assert!(is_retired("anthropic", "claude-sonnet-4-20250514"));
+        assert!(is_retired("anthropic", "claude-opus-4-20250514"));
+        assert!(is_retired("anthropic", "claude-opus-4-20250414"));
         assert!(!is_retired("anthropic", "claude-sonnet-5"));
-        let active = &registry().providers["anthropic"].models;
-        for r in &registry().providers["anthropic"].retired {
-            assert!(!active.contains(r), "retired {r} leaked into active");
+        let p = &registry().providers["anthropic"];
+        for r in p.denylist() {
+            assert!(!p.models.contains(r), "retired {r} leaked into active");
         }
     }
 
     #[test]
-    fn migrate_retired_to_default_with_warning() {
-        let (m, w) = migrate("anthropic", "claude-sonnet-4-20250514");
-        assert_eq!(m, "claude-sonnet-5");
-        assert!(w.unwrap().contains("claude-sonnet-4-20250514"));
+    fn migrate_retired_and_legacy_to_default() {
+        for id in [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514", // official retired opus 4
+            "claude-opus-4-20250414", // legacy UI typo
+        ] {
+            let (m, w) = migrate("anthropic", id);
+            assert_eq!(m, "claude-sonnet-5", "id={id}");
+            assert!(w.unwrap().contains(id));
+        }
     }
 
     #[test]

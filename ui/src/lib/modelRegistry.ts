@@ -13,12 +13,16 @@ export const ANTHROPIC_ACTIVE = [
 /** Active Anthropic default. */
 export const ANTHROPIC_DEFAULT = "claude-sonnet-5";
 
-/** Retired Anthropic ids that must never appear as a default/option. */
+// Deny-list = official retired snapshots ∪ legacy aliases a previous UI may have
+// stored (incl. the claude-opus-4-20250414 typo). None may be a default/option.
 export const ANTHROPIC_RETIRED = [
+  // official retired
   "claude-sonnet-4-20250514",
+  "claude-opus-4-20250514",
+  "claude-3-5-haiku-20241022",
+  // legacy aliases / typos
   "claude-opus-4-20250414",
   "claude-haiku-4-20250414",
-  "claude-3-5-haiku-20241022",
 ] as const;
 
 /**

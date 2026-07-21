@@ -1,19 +1,23 @@
 {
-  "_comment": "OPUS-301 single machine-readable source-of-truth for provider model defaults. Consumed by Python (kernel/model_registry.py), Rust (src-tauri/src/backend/model_registry.rs, include_str!), TS (ui/src/lib/modelRegistry.ts), Dart (mobile/lib/standalone/llm_client.dart). Enforced cross-language for anthropic this batch; other providers are managed at their own call sites and are NOT in this SoT yet. Cross-language sync + retired-id scan: scripts/check_model_registry.py.",
+  "_comment": "OPUS-301 single machine-readable source-of-truth for provider model defaults. Consumed by Python (kernel/model_registry.py), Rust (src-tauri/src/backend/model_registry.rs, include_str!), TS (ui/src/lib/modelRegistry.ts), Dart (mobile/lib/standalone/llm_client.dart) and the coding agents / agent_generator. Enforced cross-language for anthropic this batch; other providers are managed at their own call sites and are NOT in this SoT yet (OPUS-301b). Cross-language sync + retired-id scan: scripts/check_model_registry.py. 'retired' = official retired snapshots; 'legacy_aliases' = ids a previous KALI UI may have stored (incl. typos) — both migrate to 'default' and must never appear as an active default/option.",
+  "known_providers": ["anthropic", "openai", "google", "deepseek", "groq", "mistral"],
   "providers": {
     "anthropic": {
       "default": "claude-sonnet-5",
+      "cheap": "claude-haiku-4-5-20251001",
       "models": [
         "claude-sonnet-5",
         "claude-opus-4-8",
         "claude-haiku-4-5-20251001"
       ],
-      "cheap": "claude-haiku-4-5-20251001",
       "retired": [
         "claude-sonnet-4-20250514",
-        "claude-opus-4-20250414",
-        "claude-haiku-4-20250414",
+        "claude-opus-4-20250514",
         "claude-3-5-haiku-20241022"
+      ],
+      "legacy_aliases": [
+        "claude-opus-4-20250414",
+        "claude-haiku-4-20250414"
       ]
     }
   }

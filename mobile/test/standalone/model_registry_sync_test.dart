@@ -8,12 +8,15 @@ import 'package:kali_mobile/standalone/llm_client.dart';
 
 void main() {
   group('activeAnthropicModel migration', () {
-    test('migrates a retired id to the default', () {
-      expect(
-        activeAnthropicModel('claude-sonnet-4-20250514'),
-        kAnthropicDefaultModel,
-      );
-    });
+    for (final id in const [
+      'claude-sonnet-4-20250514', // official retired
+      'claude-opus-4-20250514', // official retired opus 4
+      'claude-opus-4-20250414', // legacy UI typo
+    ]) {
+      test('migrates retired/legacy id $id to the default', () {
+        expect(activeAnthropicModel(id), kAnthropicDefaultModel);
+      });
+    }
 
     test('leaves an active id unchanged', () {
       expect(activeAnthropicModel('claude-opus-4-8'), 'claude-opus-4-8');
@@ -37,10 +40,12 @@ void main() {
         (reg['providers'] as Map<String, dynamic>)['anthropic'] as Map<String, dynamic>;
 
     expect(kAnthropicDefaultModel, anthropic['default']);
-    expect(
-      kAnthropicRetiredModels,
-      (anthropic['retired'] as List).cast<String>(),
-    );
+    // deny-list = official retired ∪ legacy aliases from the SoT.
+    final denylist = <String>[
+      ...(anthropic['retired'] as List).cast<String>(),
+      ...((anthropic['legacy_aliases'] as List?)?.cast<String>() ?? const []),
+    ];
+    expect(kAnthropicRetiredModels.toSet(), denylist.toSet());
     for (final r in kAnthropicRetiredModels) {
       expect((anthropic['models'] as List).contains(r), isFalse);
     }

@@ -11,12 +11,16 @@ enum LlmErrorKind { noKey, network, apiError, quota }
 const String kAnthropicDefaultModel = 'claude-sonnet-5';
 const String kOpenAiDefaultModel = 'gpt-4.1';
 
-/// Retired Anthropic ids that must never be sent as a live request model.
+/// Deny-list = official retired snapshots plus legacy aliases a previous UI may
+/// have stored (incl. the claude-opus-4-20250414 typo). None may be sent live.
 const List<String> kAnthropicRetiredModels = <String>[
+  // official retired
   'claude-sonnet-4-20250514',
+  'claude-opus-4-20250514',
+  'claude-3-5-haiku-20241022',
+  // legacy aliases / typos
   'claude-opus-4-20250414',
   'claude-haiku-4-20250414',
-  'claude-3-5-haiku-20241022',
 ];
 
 /// Migrate a stored Anthropic model id: a retired id (or null/empty) falls back
