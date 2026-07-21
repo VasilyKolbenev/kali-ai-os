@@ -18,7 +18,6 @@ import { VoiceVisualizer } from "./components/VoiceVisualizer/VoiceVisualizer";
 import { ChatInput } from "./components/Chat/ChatInput";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { CrashReportPrompt } from "./components/CrashReportPrompt";
-import { useUpdaterStore } from "./stores/updaterStore";
 import { AnimatePresence, motion } from "framer-motion";
 
 /** Kernel connectivity stage:
@@ -48,12 +47,8 @@ export default function App() {
   const { loading: onboardingLoading, gated: onboardingGated, slow } = useOnboardingGate();
   const startup = classifyStartup(useStartupState());
   const kernelStage = useKernelStage();
-  const updaterCheck = useUpdaterStore((s) => s.check);
-  useEffect(() => {
-    void updaterCheck(); // на старте
-    const id = setInterval(() => void updaterCheck(), 24 * 3600 * 1000); // раз в сутки
-    return () => clearInterval(id);
-  }, [updaterCheck]);
+  // OPUS-202: авто-проверка обновлений убрана (updater fail-closed). Backend
+  // отвечает phase=disabled; баннер не показывается, download/install не предлагаются.
 
   // Rust startup-state is authoritative: a failed/degraded backend must win
   // over BOTH the boot splash and the onboarding wizard, otherwise a broken

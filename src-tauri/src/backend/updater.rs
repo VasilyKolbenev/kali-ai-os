@@ -22,6 +22,15 @@ pub fn manifest_url() -> String {
     std::env::var("KALI_UPDATE_URL").unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string())
 }
 
+/// OPUS-202: причина отключённого апдейтера (user-facing RU). Неподписанная
+/// цепочка обновления небезопасна (hash рядом с подменённым EXE недостаточен),
+/// поэтому в shipping-сборке авто-обновление отключено fail-closed: ни один
+/// env/debug-флаг НЕ включает его — только `Updater::new_for_tests` поднимает
+/// машинерию для крипто/негативного тест-набора.
+pub const DISABLED_REASON: &str =
+    "Автообновление отключено в этой сборке (неподписанный апдейтер). \
+     Обнови вручную с GitHub Releases.";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Asset {
     pub name: String,
@@ -128,8 +137,12 @@ pub fn build_install_args(_setup_exe: &Path, install_dir: &Path, log_path: &Path
 /// новее текущей версии; остальное (включая непарсящееся) удалить. Залоченное
 /// пропускаем молча — доудалится при следующем старте.
 pub fn cleanup_updates_dir(dir: &Path, current: &str) {
-    let Ok(cur) = semver::Version::parse(current) else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(cur) = semver::Version::parse(current) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let keep = semver::Version::parse(&name)
@@ -193,7 +206,10 @@ pub async fn download_asset_with_idle(
 ) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
     let dest = dir.join(&asset.name);
-    let mut have = tokio::fs::metadata(&dest).await.map(|m| m.len()).unwrap_or(0);
+    let mut have = tokio::fs::metadata(&dest)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
     if have > asset.size {
         tokio::fs::remove_file(&dest).await?;
         have = 0;
@@ -219,10 +235,7 @@ pub async fn download_asset_with_idle(
         // Watchdog: тихий стап (нет чанка за idle_timeout) → Err, а не вечное
         // ожидание. Таймер сбрасывается на каждый успешный чанк.
         match tokio::time::timeout(idle_timeout, stream.next()).await {
-            Err(_elapsed) => bail!(
-                "download stalled: no data for {}s",
-                idle_timeout.as_secs()
-            ),
+            Err(_elapsed) => bail!("download stalled: no data for {}s", idle_timeout.as_secs()),
             Ok(None) => break,
             Ok(Some(chunk)) => {
                 let bytes = chunk?;
@@ -242,6 +255,9 @@ use tokio::sync::{Mutex, Notify};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
+    /// Fail-closed: апдейтер отключён в этой сборке (OPUS-202). Терминально —
+    /// check/download/install из неё не выходят.
+    Disabled,
     Idle,
     Available,
     Downloading,
@@ -258,6 +274,10 @@ pub struct Snapshot {
     pub total: u64,
     pub downloaded: u64,
     pub error: Option<String>,
+    /// Явная причина, когда `phase == Disabled` (OPUS-202 API-контракт).
+    /// Опускается из JSON в остальных фазах.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Мутабельное состояние под Mutex; прогресс — отдельным атомиком, потому что
@@ -277,22 +297,36 @@ pub struct Updater {
     manifest_url: String,
     client: reqwest::Client,
     terminal: Notify,
+    /// OPUS-202 fail-closed: false в любой shipping-сборке (`new`). Только
+    /// `new_for_tests` ставит true, поднимая сеть/скачивание/spawn для
+    /// крипто/негативного тест-набора. НИ ОДИН env/debug-флаг это не меняет.
+    enabled: bool,
 }
 
 impl Updater {
+    /// Shipping-конструктор — апдейтер ОТКЛЮЧЁН fail-closed (OPUS-202).
     pub fn new(updates_root: PathBuf, current: &str) -> Arc<Self> {
-        Self::with_url(updates_root, current, manifest_url())
+        Self::with_url(updates_root, current, manifest_url(), false)
     }
 
-    /// Тесты/E2E: тот же конструктор, только явный URL (loopback-http валиден).
+    /// Тесты/E2E: явный URL (loopback-http валиден) + включённая машинерия.
     pub fn new_for_tests(updates_root: PathBuf, current: &str, url: &str) -> Arc<Self> {
-        Self::with_url(updates_root, current, url.to_string())
+        Self::with_url(updates_root, current, url.to_string(), true)
     }
 
-    fn with_url(updates_root: PathBuf, current: &str, manifest_url: String) -> Arc<Self> {
+    fn with_url(
+        updates_root: PathBuf,
+        current: &str,
+        manifest_url: String,
+        enabled: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
-                phase: Phase::Idle,
+                phase: if enabled {
+                    Phase::Idle
+                } else {
+                    Phase::Disabled
+                },
                 available: None,
                 total: 0,
                 error: None,
@@ -301,6 +335,7 @@ impl Updater {
             current: current.to_string(),
             updates_root,
             manifest_url,
+            enabled,
             // connect_timeout ловит мёртвый хост на этапе установки соединения
             // (idle-watchdog в download_asset покрывает стап уже в теле ответа).
             client: reqwest::Client::builder()
@@ -320,6 +355,7 @@ impl Updater {
             total: s.total,
             downloaded: self.downloaded.load(Ordering::Relaxed).min(s.total),
             error: s.error.clone(),
+            reason: (s.phase == Phase::Disabled).then(|| DISABLED_REASON.to_string()),
         }
     }
 
@@ -346,6 +382,10 @@ impl Updater {
     /// Фазы Downloading/Ready/Installing никогда не трогаются (N+2 в процессе
     /// N+1 — игнор до завершения цикла, спека §Данные).
     pub async fn check(&self) -> Snapshot {
+        // Fail-closed: отключённый апдейтер не открывает ни одного соединения.
+        if !self.enabled {
+            return self.snapshot().await;
+        }
         let result: Result<Manifest> = async {
             let raw = self
                 .client
@@ -392,10 +432,17 @@ impl Updater {
     }
 
     pub async fn start_download(self: &Arc<Self>) {
+        // Fail-closed: без сети/скачивания/spawn.
+        if !self.enabled {
+            return;
+        }
         let manifest = {
             let mut s = self.inner.lock().await;
             let Some(m) = s.available.clone() else { return };
-            if matches!(s.phase, Phase::Downloading | Phase::Ready | Phase::Installing) {
+            if matches!(
+                s.phase,
+                Phase::Downloading | Phase::Ready | Phase::Installing
+            ) {
                 return;
             }
             if !self.disk_ok(m.total_size()) {
@@ -465,6 +512,10 @@ impl Updater {
     /// Прод-путь: setup из скачанной директории, install_dir = родитель текущего exe,
     /// затем выход процесса (инсталятор перезапустит апп — .iss silent-ветка).
     pub async fn install(self: &Arc<Self>) -> Result<()> {
+        // Fail-closed: устаревший инсталятор никогда не исполняется автоматически.
+        if !self.enabled {
+            bail!("{DISABLED_REASON}");
+        }
         let setup = {
             let s = self.inner.lock().await;
             let m = s.available.clone().context("нет скачанного обновления")?;
@@ -478,16 +529,22 @@ impl Updater {
         };
         let exe = std::env::current_exe().context("current_exe")?;
         let install_dir = exe.parent().context("exe без родителя")?.to_path_buf();
-        self.install_with(&setup, &install_dir, true).await
+        self.install_with(&setup, &install_dir).await
     }
 
-    /// Тестируемое ядро: ре-верификация → spawn detached → (опц.) выход.
+    /// Тестируемое ядро: ре-верификация → spawn detached. Процесс НЕ убивается
+    /// принудительным выходом (OPUS-202 убрал прямой process-exit, чтобы не
+    /// обходить A3 graceful shutdown); выход инициирует штатный shutdown-путь.
+    /// Достижимо только через gated `install()` → в проде недостижимо, но
+    /// защищаемся и здесь (F9).
     pub async fn install_with(
         self: &Arc<Self>,
         setup_exe: &Path,
         install_dir: &Path,
-        exit_process: bool,
     ) -> Result<()> {
+        if !self.enabled {
+            bail!("{DISABLED_REASON}");
+        }
         let m = {
             let mut s = self.inner.lock().await;
             let m = s.available.clone().context("нет доступного обновления")?;
@@ -501,7 +558,9 @@ impl Updater {
         // Пред-инсталльная ре-верификация (спека: между ready и кликом — часы)
         for a in &m.assets {
             let p = dir.join(&a.name);
-            let ok = sha256_file(&p).await.map(|h| h.eq_ignore_ascii_case(&a.sha256));
+            let ok = sha256_file(&p)
+                .await
+                .map(|h| h.eq_ignore_ascii_case(&a.sha256));
             if !matches!(ok, Ok(true)) {
                 let _ = tokio::fs::remove_file(&p).await;
                 {
@@ -540,7 +599,8 @@ impl Updater {
         // в Error, иначе фаза Installing залипнет навсегда (recovery-веток из неё
         // нет: check трогает только Idle|Available, start_download блокирует
         // Installing). available остаётся Some → повторное скачивание/retry живо.
-        if let Err(e) = cmd.spawn().context("не удалось запустить инсталятор") {
+        if let Err(e) = cmd.spawn().context("не удалось запустить инсталятор")
+        {
             {
                 let mut s = self.inner.lock().await;
                 s.phase = Phase::Error;
@@ -548,12 +608,6 @@ impl Updater {
             }
             self.terminal.notify_waiters();
             return Err(e);
-        }
-        if exit_process {
-            tokio::spawn(async {
-                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-                std::process::exit(0);
-            });
         }
         Ok(())
     }

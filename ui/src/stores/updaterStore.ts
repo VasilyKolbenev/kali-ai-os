@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { resolveApiUrl } from "../api/endpoints";
 
 export type UpdaterPhase =
-  | "idle" | "available" | "downloading" | "ready" | "installing" | "error";
+  | "disabled" | "idle" | "available" | "downloading" | "ready" | "installing" | "error";
 
 export interface UpdaterManifest {
   version: string;
