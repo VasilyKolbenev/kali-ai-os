@@ -600,8 +600,9 @@ def create_app(
         # first on-demand /tts // /voice/transcribe share one load (engine locks
         # `_load_lock`/`_stt_lock` are the weight-load-once guarantee). Engine-
         # scoped: `prewarm` skips DISABLED models when Rust owns voice. The frozen
-        # torch import-race fix (awaited `_preimport_torch` above) still runs first.
-        # Tests skip via `KALI_SKIP_PREWARM=1` (tests/conftest.py).
+        # torch import-race fix is now the `torch` coordinator dependency (daemon
+        # worker-thread import, completion-gated probe) that every voice model
+        # waits on. Tests skip via `KALI_SKIP_PREWARM=1` (tests/conftest.py).
         if os.environ.get("KALI_SKIP_PREWARM"):
             logger.info("Voice prewarm skipped (KALI_SKIP_PREWARM set)")
         else:

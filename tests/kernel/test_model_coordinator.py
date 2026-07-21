@@ -114,6 +114,28 @@ async def test_deps_load_to_completion_before_dependent() -> None:
     assert log == ["torch", "tts"]  # torch finished before tts started
 
 
+async def test_concurrent_dependents_share_slow_dep_both_ready() -> None:
+    # Regression (integrated-review #1): two dependents pulling the SAME slow dep
+    # concurrently (like prewarm stt+tts pulling a cold torch import) must BOTH
+    # reach READY — the loser must WAIT for the in-flight dep, not treat its
+    # transient LOADING as a dependency failure.
+    log: list[str] = []
+    torch = FakeModel(delay=0.1, log=log, name="torch")  # slow shared dep
+    stt = FakeModel(log=log, name="stt")
+    tts = FakeModel(log=log, name="tts")
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("torch", torch.load, torch.probe)
+    c.register("stt", stt.load, stt.probe, deps=("torch",), voice_component=True)
+    c.register("tts", tts.load, tts.probe, deps=("torch",), voice_component=True)
+
+    outs = await asyncio.gather(c.ensure("stt"), c.ensure("tts"))
+    assert outs == [ModelOutcome.READY, ModelOutcome.READY]
+    assert torch.calls == 1  # dep loaded exactly once despite two dependents
+    assert c.status("stt").state is ModelState.READY
+    assert c.status("tts").state is ModelState.READY
+    assert log[0] == "torch"  # dep finished before either dependent
+
+
 async def test_dep_failure_fails_dependent() -> None:
     torch = FakeModel(fail=RuntimeError("no torch"))
     tts = FakeModel()

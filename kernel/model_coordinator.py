@@ -208,7 +208,7 @@ class ModelCoordinator:
             return ModelOutcome.LOADING
 
         for dep in m.deps:
-            out = await self.ensure(dep)
+            out = await self._ensure_dep(dep)
             if out is not ModelOutcome.READY:
                 m.error = f"dependency {dep!r} not ready: {out.value}"
                 return ModelOutcome.FAILED
@@ -253,6 +253,21 @@ class ModelCoordinator:
         if timeout is not None:
             return await asyncio.wait_for(asyncio.shield(fut), timeout)
         return await asyncio.shield(fut)
+
+    async def _ensure_dep(self, name: str) -> ModelOutcome:
+        """Ensure a dependency, WAITING for an in-flight load to conclude.
+
+        Unlike the top-level `ensure` fast-path (which returns LOADING so an
+        on-demand caller never blocks), a dependency MUST complete before its
+        dependent starts (torch-before-VAD/wake/STT/TTS). When a concurrent load
+        is in flight (e.g. stt and tts prewarm both pulling torch), poll until it
+        settles into READY/FAILED/TIMEOUT/DISABLED rather than treating the
+        transient LOADING as failure (the bug that broke frozen prewarm)."""
+        out = await self.ensure(name)
+        while out is ModelOutcome.LOADING:
+            await asyncio.sleep(0.02)
+            out = await self.ensure(name)
+        return out
 
     def prewarm(self, names: list[str]) -> None:
         """Spawn strong-referenced background loads for active (non-disabled) models."""
