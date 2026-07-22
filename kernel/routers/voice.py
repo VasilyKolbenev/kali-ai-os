@@ -196,7 +196,8 @@ async def voice_start(request: Request) -> Any:
 
     coord = getattr(request.app.state, "model_coordinator", None)
     if coord is not None:
-        outcomes = {m: await coord.ensure_ready(m) for m in ("vad", "wake", "stt", "tts")}
+        # One shared bounded operation deadline for all four components (P1-2).
+        outcomes = await coord.ensure_all_ready(["vad", "wake", "stt", "tts"])
         if not all(o is ModelOutcome.READY for o in outcomes.values()):
             request.app.state.voice_start_error = (
                 f"components not ready: {{{', '.join(f'{m}:{o.value}' for m, o in outcomes.items())}}}"

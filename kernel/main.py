@@ -425,7 +425,9 @@ def create_app(
                             # make us see a transient LOADING. Start the realtime
                             # loop exactly once, only when all are READY.
                             from kernel.model_coordinator import ModelOutcome as _MO
-                            outcomes = {m: await model_coordinator.ensure_ready(m) for m in _VOICE_MODELS}
+                            # One shared bounded operation deadline for all four
+                            # components (P1-2), not a full timeout each.
+                            outcomes = await model_coordinator.ensure_all_ready(list(_VOICE_MODELS))
                             if all(o is _MO.READY for o in outcomes.values()):
                                 await voice_pipeline.start()
                                 app.state.voice_start_error = None

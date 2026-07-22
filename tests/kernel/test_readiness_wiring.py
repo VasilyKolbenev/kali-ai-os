@@ -425,6 +425,74 @@ class TestShippingAutoStart:
             await _teardown(task, sd)
 
 
+class TestProbeConsistency:
+    async def test_vad_swallowed_load_failure_blocks_pipeline_start(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        # P1-1: VAD.load() returns normally but leaves is_loaded False (swallowed
+        # torch.hub failure). The component is FAILED, so auto-start must NOT start
+        # the pipeline and /ready must be degraded.
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text(
+            "voice:\n  engine: python\n  auto_start: true\n  mode: wake_word\n",
+            encoding="utf-8",
+        )
+        fakes = _VoiceFakes(torch_timing=0.02)
+        fakes.install(monkeypatch)
+        import kernel.voice.pipeline as pl
+        import kernel.voice.vad as vad_mod
+
+        # swallowed failure: returns without flipping is_loaded
+        monkeypatch.setattr(vad_mod.VoiceActivityDetector, "load", lambda self: None)
+        starts = {"n": 0}
+
+        async def _fake_start(self):  # type: ignore[no-untyped-def]
+            starts["n"] += 1
+            self._started = True
+
+        monkeypatch.setattr(pl.VoicePipeline, "start", _fake_start)
+        monkeypatch.delenv("KALI_SKIP_PREWARM", raising=False)
+
+        app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
+        try:
+            await asyncio.wait_for(app.state._voice_bg_task, timeout=8.0)
+            coord = app.state.model_coordinator
+            assert coord.status("vad").state.value == "failed"
+            assert coord.status("vad").error == "loader_completed_probe_false"
+            assert starts["n"] == 0  # pipeline NOT started on a failed component
+            assert app.state.voice_start_error is not None
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                ready = (await c.get("/ready")).json()
+            assert ready["voice"]["voice"] == "degraded"
+        finally:
+            await _teardown(task, sd)
+
+    async def test_ready_shows_timeout_not_eternal_loading(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        # P1-2: a component whose load overruns its deadline shows TIMEOUT in /ready
+        # (voice degraded), not eternal loading.
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text("voice:\n  engine: python\n  auto_start: false\n", encoding="utf-8")
+        fakes = _VoiceFakes(tts_delay=1.0)  # slow → overruns the short deadline
+        fakes.install(monkeypatch)
+        monkeypatch.setenv("KALI_SKIP_PREWARM", "1")
+        app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
+        try:
+            from kernel.model_coordinator import ModelOutcome
+
+            coord = app.state.model_coordinator
+            assert await coord.ensure_ready("tts", timeout=0.05) is ModelOutcome.TIMEOUT
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                ready = (await c.get("/ready")).json()
+            assert ready["voice"]["models"]["tts"]["state"] == "timeout"
+            assert ready["voice"]["voice"] == "degraded"
+        finally:
+            await _teardown(task, sd)
+
+
 class TestWarmup:
     async def test_warmup_synth_fires_after_tts_ready(
         self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
