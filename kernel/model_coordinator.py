@@ -222,12 +222,12 @@ class ModelCoordinator:
         m.thread = None
         if fut.cancelled():
             return
+        m.timed_out = False  # the load has concluded — no longer a live wait-timeout
         if exc is not None:
             m.error = f"{type(exc).__name__}: {exc}"
             self._emit(m.name, "failed")
         elif _safe_probe(m):
             m.error = None
-            m.timed_out = False
             m.ready_at = time.perf_counter()
             dur = int((m.ready_at - m.started_at) * 1000) if m.started_at else None
             self._emit(m.name, "ready", dur)
@@ -247,6 +247,10 @@ class ModelCoordinator:
             if m.load_future is not None and not m.load_future.done():
                 return m.load_future  # in-flight — share the same completion
             m.error = None
+            # A brand-new load has not exceeded any deadline — clear a prior
+            # attempt's timeout flag so status() reports this healthy retry as
+            # LOADING, not a stale TIMEOUT (covers every retry path).
+            m.timed_out = False
             m.started_at = time.perf_counter()
             self._emit(m.name, "loading")
             fut, t = _run_in_daemon(m.loader)

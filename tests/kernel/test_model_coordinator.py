@@ -307,6 +307,36 @@ async def test_late_success_after_timeout_recovers_to_ready() -> None:
         await asyncio.sleep(0.02)
 
 
+async def test_timed_out_flag_reset_on_retry_so_status_not_stale_timeout() -> None:
+    # Integrated-review finding: m.timed_out must clear when a fresh load starts,
+    # else a healthy RETRY load (after a timeout + late failure) is mislabelled
+    # TIMEOUT / voice=degraded while it is actually loading fine.
+    release = threading.Event()
+    state = {"calls": 0}
+
+    def _load() -> None:
+        state["calls"] += 1
+        if state["calls"] == 1:
+            time.sleep(0.15)  # first attempt: overruns the 0.05 wait, then fails
+            raise RuntimeError("late fail")
+        release.wait(5.0)  # retry attempt: stays loading (worker alive)
+
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("tts", _load, lambda: False, voice_component=True)
+    try:
+        assert await c.ensure_ready("tts", timeout=0.05) is ModelOutcome.TIMEOUT
+        assert c.status("tts").state is ModelState.TIMEOUT  # live wait-timeout
+        assert await _poll(lambda: c.status("tts").state is ModelState.FAILED, 2.0)  # load 1 failed
+
+        assert await c.ensure("tts") is ModelOutcome.LOADING  # kick the retry (load 2)
+        await asyncio.sleep(0.03)
+        assert c.status("tts").state is ModelState.LOADING  # NOT a stale TIMEOUT
+        assert c.snapshot()["voice"] == "loading"  # not 'degraded'
+    finally:
+        release.set()
+        await asyncio.sleep(0.02)
+
+
 async def test_concurrent_callers_different_deadlines_single_flight() -> None:
     fake = FakeModel(delay=0.1)
     c, _ = _coord(tts=fake)
