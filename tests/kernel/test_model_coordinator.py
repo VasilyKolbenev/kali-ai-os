@@ -284,6 +284,60 @@ async def test_shared_deadline_dep_plus_model_times_out_within_budget() -> None:
     # model's own wait is pinned by test_late_success_after_timeout_recovers.)
 
 
+async def test_expired_deadline_starts_no_loader() -> None:
+    # P1: a deadline already past at the single-flight decision must NOT start a
+    # new heavy loader → TIMEOUT, loader.calls == 0, observable TIMEOUT/degraded.
+    fake = FakeModel(delay=1.0)
+    c, _ = _coord(tts=fake)
+    out = await c.ensure_ready("tts", deadline_at=time.monotonic() - 1.0)
+    assert out is ModelOutcome.TIMEOUT
+    assert fake.calls == 0  # no new heavy work started after the deadline
+    assert c.status("tts").state is ModelState.TIMEOUT
+    assert c.snapshot()["voice"] == "degraded"
+
+
+async def test_others_not_started_once_shared_deadline_exhausted() -> None:
+    # P1.5 (no hidden warm-through): once the shared operation deadline is
+    # exhausted (as if the first component consumed it), the remaining components
+    # start NO loader. Deterministic: the shared deadline is already in the past
+    # (no boundary race), exactly what the later components see in ensure_all_ready.
+    others = {n: FakeModel(delay=1.0) for n in ("wake", "stt", "tts")}
+    c = ModelCoordinator(default_timeout=5.0)
+    for n, f in others.items():
+        c.register(n, f.load, f.probe, voice_component=True)
+    exhausted = time.monotonic() - 0.001  # the shared deadline already passed
+    outs = {n: await c.ensure_ready(n, deadline_at=exhausted) for n in others}
+    for n, f in others.items():
+        assert outs[n] is ModelOutcome.TIMEOUT
+        assert f.calls == 0, f"{n} started a loader after the deadline"
+        assert c.status(n).state is ModelState.TIMEOUT
+    assert c.snapshot()["voice"] == "degraded"
+
+
+async def test_fresh_deadline_starts_each_loader_exactly_once() -> None:
+    # P1.4: a fresh call with a new (non-expired) deadline clears TIMEOUT and
+    # starts exactly one loader per still-needed component.
+    models = {n: FakeModel(delay=0.02) for n in ("vad", "wake", "stt", "tts")}
+    c = ModelCoordinator(default_timeout=5.0)
+    for n, f in models.items():
+        c.register(n, f.load, f.probe, voice_component=True)
+    await c.ensure_all_ready(["vad", "wake", "stt", "tts"], timeout=0.001)  # expires → mostly denied
+    outs = await c.ensure_all_ready(["vad", "wake", "stt", "tts"], timeout=5.0)  # fresh, generous
+    assert all(o is ModelOutcome.READY for o in outs.values())
+    for n, f in models.items():
+        assert f.calls == 1, f"{n} loaded {f.calls}x"
+        assert c.status(n).state is ModelState.READY
+
+
+async def test_concurrent_callers_at_deadline_boundary_single_flight() -> None:
+    fake = FakeModel(delay=0.05)
+    c, _ = _coord(tts=fake)
+    dl = time.monotonic() + 0.02
+    outs = await asyncio.gather(*(c.ensure_ready("tts", deadline_at=dl) for _ in range(10)))
+    assert fake.calls <= 1  # at most ONE loader across the boundary
+    assert all(o in (ModelOutcome.TIMEOUT, ModelOutcome.READY) for o in outs)
+
+
 async def test_late_success_after_timeout_recovers_to_ready() -> None:
     release = threading.Event()
     state = {"loaded": False, "calls": 0}

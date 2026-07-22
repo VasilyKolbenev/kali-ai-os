@@ -37,6 +37,12 @@ DEFAULT_LOAD_TIMEOUT = 180.0
 # model is FAILED, not READY — the pipeline/route must not start on it (P1-1).
 PROBE_FALSE_ERROR = "loader_completed_probe_false"
 
+# Sentinel returned by _acquire_load when the operation deadline is already past
+# and NO in-flight load exists — a new heavy loader must NOT start (P1). Callers
+# discriminate by identity (never truthiness — a future and this object are both
+# truthy).
+_DEADLINE_EXPIRED: Any = object()
+
 
 class ModelState(str, Enum):
     """User-facing load state for a single model."""
@@ -190,6 +196,11 @@ class ModelCoordinator:
         A late true probe recovers to READY (P1-2). A worker still in flight after
         a wait-deadline shows TIMEOUT, not eternal LOADING. `error` is set for a
         loader exception OR a loader-completed-probe-false (P1-1)."""
+        # Order: probe→READY, error→FAILED (a real failure is never masked by a
+        # stale timeout), timed_out→TIMEOUT (a live wait-timeout OR a denied start
+        # with no thread), thread-alive→LOADING (healthy fresh load), then
+        # disabled/not-started. Called only on the event-loop thread (see the
+        # _acquire_load invariant) so it never reads a torn state.
         m = self._models[name]
         if _safe_probe(m):
             dur = (
@@ -198,11 +209,12 @@ class ModelCoordinator:
                 else None
             )
             return ModelStatus(ModelState.READY, None, dur)
-        if m.thread is not None and m.thread.is_alive():
-            state = ModelState.TIMEOUT if m.timed_out else ModelState.LOADING
-            return ModelStatus(state, m.error)
         if m.error is not None:
             return ModelStatus(ModelState.FAILED, m.error)
+        if m.timed_out:
+            return ModelStatus(ModelState.TIMEOUT, m.error)
+        if m.thread is not None and m.thread.is_alive():
+            return ModelStatus(ModelState.LOADING)
         if m.disabled:
             return ModelStatus(ModelState.DISABLED)
         return ModelStatus(ModelState.NOT_STARTED)
@@ -235,17 +247,32 @@ class ModelCoordinator:
             m.error = PROBE_FALSE_ERROR  # loader returned but the model is not loaded
             self._emit(m.name, "failed")
 
-    async def _acquire_load(self, m: _Model) -> asyncio.Future | None:
-        """Return the SHARED in-flight load future (starting one if needed), or
-        ``None`` if already loaded. Single-flight point (called under the model
-        lock): in-flight is judged by the shared future's own done-state (not
-        OS-thread liveness), so a caller in the post-death/pre-finalize window of
-        a FAILED load starts exactly one retry — never stacks loaders."""
+    async def _acquire_load(
+        self, m: _Model, *, deadline_at: float | None = None
+    ) -> asyncio.Future | None | Any:
+        """Single-flight decision, atomic with the deadline check (both under
+        ``m.lock``): returns ``None`` if already loaded, the SHARED in-flight
+        future if one is running (allowed past the deadline — it is not NEW work),
+        the ``_DEADLINE_EXPIRED`` sentinel if the deadline is already past and no
+        loader is running (refuse to start new heavy work — P1), else starts
+        exactly one loader and returns its future.
+
+        INVARIANT: the critical section is ``await``-free between clearing
+        ``m.timed_out`` and publishing ``m.thread``/``m.load_future``; combined
+        with ``status()`` only ever being called on the event-loop thread, no
+        caller can observe a torn ``(timed_out=True, fresh thread alive)`` state.
+        """
         async with m.lock:
             if _safe_probe(m):
                 return None
             if m.load_future is not None and not m.load_future.done():
                 return m.load_future  # in-flight — share the same completion
+            if deadline_at is not None and time.monotonic() >= deadline_at:
+                # Deadline exhausted → do NOT start a new loader (no hidden
+                # warm-through). Honest TIMEOUT; a fresh-deadline retry may start one.
+                m.error = None
+                m.timed_out = True
+                return _DEADLINE_EXPIRED
             m.error = None
             # A brand-new load has not exceeded any deadline — clear a prior
             # attempt's timeout flag so status() reports this healthy retry as
@@ -282,7 +309,9 @@ class ModelCoordinator:
         deadline_at = time.monotonic() + m.timeout
         if (dep_out := await self._resolve_deps(m, deadline_at=deadline_at)) is not None:
             return ModelOutcome.FAILED
-        fut = await self._acquire_load(m)
+        # Prewarm is an EXPLICIT background load — start unconditionally
+        # (deadline_at=None), never a deadline-denied side effect.
+        fut = await self._acquire_load(m, deadline_at=None)
         return ModelOutcome.READY if fut is None else ModelOutcome.LOADING
 
     async def ensure_ready(
@@ -311,9 +340,11 @@ class ModelCoordinator:
                 m.timed_out = True
             return dep_out
 
-        fut = await self._acquire_load(m)
+        fut = await self._acquire_load(m, deadline_at=deadline_at)
         if fut is None:
             return ModelOutcome.READY
+        if fut is _DEADLINE_EXPIRED:
+            return ModelOutcome.TIMEOUT  # no new loader started; m.timed_out set
 
         remaining = deadline_at - time.monotonic()
         if remaining <= 0:

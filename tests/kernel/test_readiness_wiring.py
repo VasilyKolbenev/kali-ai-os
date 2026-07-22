@@ -243,11 +243,24 @@ class TestOwnership:
         monkeypatch.setattr(pl.VoicePipeline, "load_models", _boom)
         app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, sample_config_path)
         try:
+            # P2 test-honesty: /voice/start must drive exactly ONE ensure_all_ready
+            # over vad/wake/stt/tts (one shared bounded deadline), not four separate
+            # ensure_ready.
+            coord = app.state.model_coordinator
+            all_calls: list[list[str]] = []
+            _orig_all = coord.ensure_all_ready
+
+            async def _spy_all(names, **kw):  # type: ignore[no-untyped-def]
+                all_calls.append(list(names))
+                return await _orig_all(names, **kw)
+
+            coord.ensure_all_ready = _spy_all  # type: ignore[method-assign]
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as c:
                 r = await c.post("/voice/start")
             assert r.status_code == 200
             assert r.json()["status"] == "started"
+            assert all_calls == [["vad", "wake", "stt", "tts"]]  # exactly one shared-deadline call
             assert fakes.stt_instances == 1  # one STT even after start
         finally:
             await _teardown(task, sd)
@@ -403,6 +416,7 @@ class TestShippingAutoStart:
         fakes.install(monkeypatch)
         monkeypatch.delenv("KALI_SKIP_PREWARM", raising=False)  # prewarm parallel with auto-start
 
+        import kernel.model_coordinator as mc
         import kernel.voice.pipeline as pl
 
         starts = {"n": 0}
@@ -413,6 +427,18 @@ class TestShippingAutoStart:
 
         monkeypatch.setattr(pl.VoicePipeline, "start", _fake_start)
 
+        # P2 test-honesty: auto-start must drive exactly ONE ensure_all_ready over
+        # vad/wake/stt/tts. Patch the class method BEFORE lifespan (the bg task is
+        # spawned inside create_app).
+        all_calls: list[list[str]] = []
+        _orig_all = mc.ModelCoordinator.ensure_all_ready
+
+        async def _spy_all(self, names, **kw):  # type: ignore[no-untyped-def]
+            all_calls.append(list(names))
+            return await _orig_all(self, names, **kw)
+
+        monkeypatch.setattr(mc.ModelCoordinator, "ensure_all_ready", _spy_all)
+
         app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
         try:
             await asyncio.wait_for(app.state._voice_bg_task, timeout=8.0)
@@ -421,6 +447,7 @@ class TestShippingAutoStart:
                 assert coord.status(m).state.value == "ready", m
             assert starts["n"] == 1  # pipeline started exactly once
             assert app.state.voice_start_error is None
+            assert all_calls == [["vad", "wake", "stt", "tts"]]  # exactly one shared-deadline call
         finally:
             await _teardown(task, sd)
 
