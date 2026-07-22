@@ -11,11 +11,19 @@
 ## VERIFY STATE (выполни первым делом, не доверяй SHA ниже)
 ```
 git rev-parse --abbrev-ref HEAD                                   # release/phase-a-desktop-alpha
-git rev-parse --short HEAD origin/release/phase-a-desktop-alpha main origin/main
-git log --oneline origin/release/phase-a-desktop-alpha..HEAD      # пусто (всё запушено)
-git status --short | grep -vE '^\?\?'                             # только pre-existing dirty
+git rev-parse --short HEAD
+git rev-parse --short origin/release/phase-a-desktop-alpha
+git rev-parse --short main
+git rev-parse --short origin/main
+git log --oneline origin/release/phase-a-desktop-alpha..HEAD      # unpushed docs/handoff-коммиты (impl уже на origin)
+git status --short | Where-Object { $_ -notmatch '^\?\?' }                             # только pre-existing dirty
 ```
-Зафиксированное на момент этого handoff: HEAD = origin/release = `82bc6ec`; main = origin/main = `e3db43c`.
+Стабильно (значения не volatile):
+- implementation tip `82bc6ec` запушен в `origin/release/phase-a-desktop-alpha`;
+- handoff commit(s) могут находиться ПОВЕРХ implementation tip (локально, до Codex GO), поэтому локальный HEAD
+  двигается с каждым docs-коммитом — НЕ полагаться на записанный SHA;
+- unpushed ВСЕГДА проверять: `git log --oneline origin/release/phase-a-desktop-alpha..HEAD`;
+- main = origin/main = `e3db43c` (protected, нетронут).
 Диапазон реализации OPUS-102: `fbc34e9..82bc6ec` (14 коммитов).
 
 Pre-existing dirty (НЕ ТРОГАТЬ, не мои): `.claude/launch.json`, mobile codegen (5 файлов:
@@ -98,8 +106,10 @@ git diff --check
 ## Контракты, которые НЕЛЬЗЯ ломать
 - `GET /health` на :3005 → 200 + top-level string `desktop_instance_id` (== env `KALI_DESKTOP_INSTANCE_ID`)
   + без auth. Rust-супервизор (`src-tauri/src/lib.rs` RealProbe + `crash.rs` probe_backend_alive) зависит.
-- Дефолт `voice.engine=python`, `auto_start=true`, `stt_model="small"` (kali.yaml не задаёт engine;
-  models.py default python).
+- Voice defaults — РАЗЛИЧАТЬ два источника (не путать):
+  - Shipping config `config/kali.yaml`: `engine` опущен → берётся schema default `"python"`; `auto_start: true`;
+    `stt_model: "small"`.
+  - Schema defaults `VoiceConfig` (`kernel/models.py`): `engine="python"`; `auto_start=false`; `stt_model="base"`.
 - `KALI_SKIP_PREWARM=1` в `tests/conftest.py` (тесты не грузят ML).
 - Порядок регистрации роутеров в `kernel/main.py` «священен».
 
