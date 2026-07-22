@@ -175,11 +175,13 @@ async def test_bounded_dep_blocked_torch_times_out_and_dependent_not_started() -
     torch = _Blocked()
     tts = FakeModel()
     c = ModelCoordinator(default_timeout=5.0)
-    c.register("torch", torch.load, torch.probe, timeout=0.1)  # bounded dep deadline
+    c.register("torch", torch.load, torch.probe)
     c.register("tts", tts.load, tts.probe, deps=("torch",), voice_component=True)
     try:
-        out = await asyncio.wait_for(c.ensure_ready("tts"), timeout=2.0)  # watchdog
-        assert out in (ModelOutcome.FAILED, ModelOutcome.TIMEOUT)
+        # ONE shared absolute deadline (0.1s) covers dep + model; the blocked
+        # torch dep exhausts it → tts is a bounded TIMEOUT, its loader never runs.
+        out = await asyncio.wait_for(c.ensure_ready("tts", timeout=0.1), timeout=2.0)  # watchdog
+        assert out is ModelOutcome.TIMEOUT
         assert tts.calls == 0  # dependent never started
         assert torch.calls == 1  # dep loader started once, no 2nd loader
     finally:
@@ -214,12 +216,120 @@ async def test_wait_timeout_keeps_worker_and_no_second_loader() -> None:
     c.register("stt", slow.load, slow.probe, voice_component=True)
     try:
         assert await c.ensure_ready("stt", timeout=0.1) is ModelOutcome.TIMEOUT
-        assert c.status("stt").state is ModelState.LOADING  # worker still alive
+        assert c.status("stt").state is ModelState.TIMEOUT  # observable TIMEOUT, worker alive
         assert await c.ensure_ready("stt", timeout=0.1) is ModelOutcome.TIMEOUT
         assert slow.calls == 1  # shared load — no 2nd loader
     finally:
         release.set()
         await asyncio.sleep(0.05)
+
+
+# ── P1-1: probe-consistent completion ────────────────────────────────────────
+
+async def test_loader_completes_but_probe_false_is_failed() -> None:
+    # A loader that returns normally without flipping the engine-truth probe
+    # (VAD swallowing a torch.hub failure) is FAILED, not READY.
+    calls = {"n": 0}
+
+    def _swallowed_load() -> None:
+        calls["n"] += 1  # returns without loading
+
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("vad", _swallowed_load, lambda: False, voice_component=True)
+    assert await c.ensure_ready("vad") is ModelOutcome.FAILED
+    st = c.status("vad")
+    assert st.state is ModelState.FAILED
+    assert st.error == "loader_completed_probe_false"
+    assert c.snapshot()["voice"] == "degraded"
+
+
+async def test_late_probe_true_recovers_after_probe_false() -> None:
+    # After a loader-completed-probe-false FAILED, a later true probe recovers to
+    # READY with NO second loader (P1-1.5).
+    state = {"loaded": False, "calls": 0}
+
+    def _load() -> None:
+        state["calls"] += 1  # returns without loading
+
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("stt", _load, lambda: state["loaded"], voice_component=True)
+    assert await c.ensure_ready("stt") is ModelOutcome.FAILED
+    state["loaded"] = True  # engine truth flips later
+    assert c.status("stt").state is ModelState.READY
+    assert await c.ensure_ready("stt") is ModelOutcome.READY
+    assert state["calls"] == 1
+
+
+# ── P1-2: single absolute deadline + observable TIMEOUT ───────────────────────
+
+async def test_shared_deadline_dep_plus_model_times_out_within_budget() -> None:
+    # dep 80ms + model 80ms under a single 100ms deadline → TIMEOUT within the
+    # shared budget (NOT 160ms — the budget is not reset per stage).
+    torch = FakeModel(delay=0.08)
+    tts = FakeModel(delay=0.08)
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("torch", torch.load, torch.probe)
+    c.register("tts", tts.load, tts.probe, deps=("torch",), voice_component=True)
+    t0 = time.monotonic()
+    out = await asyncio.wait_for(c.ensure_ready("tts", timeout=0.1), timeout=3.0)  # watchdog
+    elapsed = time.monotonic() - t0
+    # Primary discriminator: with a SHARED budget the dep (80ms) + the model wait
+    # cannot both fit in 100ms → TIMEOUT. With a reset budget the model would get a
+    # fresh full timeout and reach READY. `elapsed` is a loose sanity bound (well
+    # below the model's 5s default) tolerant of scheduling jitter under load.
+    assert out is ModelOutcome.TIMEOUT
+    assert elapsed < 1.0, f"took {elapsed:.3f}s (model waited its full timeout → budget not shared)"
+    # (whether the dep or the model wait exhausts the shared budget first is a
+    # race; both are a bounded not-ready result. Observable TIMEOUT *status* for a
+    # model's own wait is pinned by test_late_success_after_timeout_recovers.)
+
+
+async def test_late_success_after_timeout_recovers_to_ready() -> None:
+    release = threading.Event()
+    state = {"loaded": False, "calls": 0}
+
+    def _load() -> None:
+        state["calls"] += 1
+        release.wait(5.0)
+        state["loaded"] = True
+
+    c = ModelCoordinator(default_timeout=5.0)
+    c.register("tts", _load, lambda: state["loaded"], voice_component=True)
+    try:
+        assert await c.ensure_ready("tts", timeout=0.1) is ModelOutcome.TIMEOUT
+        assert c.status("tts").state is ModelState.TIMEOUT
+        release.set()  # worker completes late
+        assert await _poll(lambda: c.status("tts").state is ModelState.READY, 3.0)
+        assert await c.ensure_ready("tts") is ModelOutcome.READY
+        assert state["calls"] == 1  # no 2nd loader
+    finally:
+        release.set()
+        await asyncio.sleep(0.02)
+
+
+async def test_concurrent_callers_different_deadlines_single_flight() -> None:
+    fake = FakeModel(delay=0.1)
+    c, _ = _coord(tts=fake)
+    outs = await asyncio.gather(
+        c.ensure_ready("tts", timeout=0.02),  # impatient → TIMEOUT
+        c.ensure_ready("tts", timeout=5.0),   # patient → READY
+    )
+    assert fake.calls == 1  # single-flight across different deadlines
+    assert ModelOutcome.READY in outs
+    assert all(o in (ModelOutcome.READY, ModelOutcome.TIMEOUT) for o in outs)
+
+
+async def test_ensure_all_ready_shares_one_operation_deadline() -> None:
+    models = {n: FakeModel(delay=0.2) for n in ("vad", "wake", "stt", "tts")}
+    c = ModelCoordinator(default_timeout=5.0)
+    for n, f in models.items():
+        c.register(n, f.load, f.probe, voice_component=True)
+    t0 = time.monotonic()
+    outs = await c.ensure_all_ready(["vad", "wake", "stt", "tts"], timeout=0.1)
+    elapsed = time.monotonic() - t0
+    # ONE 0.1s operation deadline, NOT 4×0.2s sequential.
+    assert elapsed < 0.3, f"took {elapsed:.3f}s (per-model timeout, not shared)"
+    assert any(o is ModelOutcome.TIMEOUT for o in outs.values())
 
 
 async def test_stale_finalize_does_not_clobber_current_load() -> None:

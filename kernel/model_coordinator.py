@@ -32,6 +32,11 @@ logger = logging.getLogger("kernel.model_coordinator")
 
 DEFAULT_LOAD_TIMEOUT = 180.0
 
+# Structured error when a loader returns normally but the engine-truth probe is
+# still false (e.g. VAD swallows a torch.hub failure and stays unloaded). Such a
+# model is FAILED, not READY — the pipeline/route must not start on it (P1-1).
+PROBE_FALSE_ERROR = "loader_completed_probe_false"
+
 
 class ModelState(str, Enum):
     """User-facing load state for a single model."""
@@ -89,6 +94,10 @@ class _Model:
     # Concurrent callers AWAIT this same future (bounded) — one loader, one
     # completion — instead of racing on a transient LOADING flag.
     load_future: asyncio.Future | None = None
+    # A bounded wait for this model's load exceeded its deadline while the worker
+    # is still in flight — status reports TIMEOUT (not eternal LOADING) until the
+    # worker concludes (probe→READY on late success, error→FAILED on late error).
+    timed_out: bool = False
 
 
 def _safe_probe(m: _Model) -> bool:
@@ -176,7 +185,11 @@ class ModelCoordinator:
         return bool(m and m.disabled)
 
     def status(self, name: str) -> ModelStatus:
-        """Status derived from the engine-truth probe / live worker thread."""
+        """Status derived from the engine-truth probe / live worker thread.
+
+        A late true probe recovers to READY (P1-2). A worker still in flight after
+        a wait-deadline shows TIMEOUT, not eternal LOADING. `error` is set for a
+        loader exception OR a loader-completed-probe-false (P1-1)."""
         m = self._models[name]
         if _safe_probe(m):
             dur = (
@@ -186,7 +199,8 @@ class ModelCoordinator:
             )
             return ModelStatus(ModelState.READY, None, dur)
         if m.thread is not None and m.thread.is_alive():
-            return ModelStatus(ModelState.LOADING)  # worker running (incl. a wait-timed-out load)
+            state = ModelState.TIMEOUT if m.timed_out else ModelState.LOADING
+            return ModelStatus(state, m.error)
         if m.error is not None:
             return ModelStatus(ModelState.FAILED, m.error)
         if m.disabled:
@@ -196,11 +210,10 @@ class ModelCoordinator:
     def _finalize(self, m: _Model, fut: asyncio.Future) -> None:
         """Done-callback for a load's daemon future: record terminal state once.
 
-        Identity-guarded: a SUPERSEDED load's finalize (its future is no longer
-        the model's current ``load_future`` — e.g. a failed load whose retry has
-        already started) must NOT clobber the current load's bookkeeping, or it
-        would drop a live loader's thread ref and let a 2nd loader start
-        (single-flight violation on the failure path)."""
+        Identity-guarded (a superseded load's finalize must not clobber the current
+        load's bookkeeping). On NORMAL loader return the authoritative probe MUST
+        confirm — a loader that returned without loading (VAD swallowing a failure)
+        is FAILED, not READY (P1-1)."""
         # Always retrieve the exception (mark it retrieved) to suppress asyncio's
         # "exception was never retrieved" warning for a fail-fast kick with no awaiter.
         exc = None if fut.cancelled() else fut.exception()
@@ -209,12 +222,17 @@ class ModelCoordinator:
         m.thread = None
         if fut.cancelled():
             return
-        if exc is None:
+        if exc is not None:
+            m.error = f"{type(exc).__name__}: {exc}"
+            self._emit(m.name, "failed")
+        elif _safe_probe(m):
+            m.error = None
+            m.timed_out = False
             m.ready_at = time.perf_counter()
             dur = int((m.ready_at - m.started_at) * 1000) if m.started_at else None
             self._emit(m.name, "ready", dur)
         else:
-            m.error = f"{type(exc).__name__}: {exc}"
+            m.error = PROBE_FALSE_ERROR  # loader returned but the model is not loaded
             self._emit(m.name, "failed")
 
     async def _acquire_load(self, m: _Model) -> asyncio.Future | None:
@@ -237,17 +255,16 @@ class ModelCoordinator:
             fut.add_done_callback(lambda f: self._finalize(m, f))
             return fut
 
-    async def _resolve_deps(self, m: _Model, *, timeout: float | None = None) -> bool:
-        """Wait each dependency to READY with an absolute per-dep deadline (bounded).
-        On TIMEOUT/FAILED/DISABLED the dependent is NOT started (no bypass, no hang)."""
+    async def _resolve_deps(self, m: _Model, *, deadline_at: float) -> ModelOutcome | None:
+        """Wait each dependency to READY under the SHARED absolute deadline (the
+        remaining budget, never reset). Returns the failing dep's outcome
+        (FAILED/TIMEOUT/DISABLED) or ``None`` when all deps are READY."""
         for dep in m.deps:
-            d = self._models[dep]
-            deadline = timeout if timeout is not None else d.timeout
-            out = await self.ensure_ready(dep, timeout=deadline)
+            out = await self.ensure_ready(dep, deadline_at=deadline_at)
             if out is not ModelOutcome.READY:
                 m.error = f"dependency {dep!r} not ready: {out.value}"
-                return False
-        return True
+                return out
+        return None
 
     async def ensure(self, name: str) -> ModelOutcome:
         """Fail-fast on-demand kick: DISABLED/READY fast; deps waited (bounded);
@@ -258,36 +275,70 @@ class ModelCoordinator:
             return ModelOutcome.DISABLED
         if _safe_probe(m):
             return ModelOutcome.READY
-        if not await self._resolve_deps(m):
+        deadline_at = time.monotonic() + m.timeout
+        if (dep_out := await self._resolve_deps(m, deadline_at=deadline_at)) is not None:
             return ModelOutcome.FAILED
         fut = await self._acquire_load(m)
         return ModelOutcome.READY if fut is None else ModelOutcome.LOADING
 
-    async def ensure_ready(self, name: str, *, timeout: float | None = None) -> ModelOutcome:
-        """WAITING API: join the shared single-flight completion and wait — BOUNDED
-        by an absolute deadline — until READY/FAILED/TIMEOUT/DISABLED. Never starts
-        a 2nd loader; never hangs. Used by auto-start, /voice/start, dependency
-        resolution and the fail-closed HTTP routes."""
+    async def ensure_ready(
+        self, name: str, *, timeout: float | None = None, deadline_at: float | None = None
+    ) -> ModelOutcome:
+        """WAITING API: join the shared single-flight completion and wait until
+        READY/FAILED/TIMEOUT/DISABLED under ONE absolute deadline (P1-2). Deps, the
+        shared future wait and the loader all draw from the same remaining budget —
+        it is never reset. On normal loader return the authoritative probe must
+        confirm READY (P1-1). Never starts a 2nd loader; never hangs.
+
+        Pass ``deadline_at`` (monotonic) to share ONE deadline across several
+        models (see :meth:`ensure_all_ready`); otherwise ``timeout`` (or the
+        model's default) starts a fresh absolute deadline here."""
         m = self._models[name]
         if m.disabled:
             return ModelOutcome.DISABLED
         if _safe_probe(m):
             return ModelOutcome.READY
-        if not await self._resolve_deps(m, timeout=timeout):
-            return ModelOutcome.FAILED
+        if deadline_at is None:
+            budget = timeout if timeout is not None else m.timeout
+            deadline_at = time.monotonic() + budget
+
+        if (dep_out := await self._resolve_deps(m, deadline_at=deadline_at)) is not None:
+            if dep_out is ModelOutcome.TIMEOUT:
+                m.timed_out = True
+            return dep_out
+
         fut = await self._acquire_load(m)
         if fut is None:
             return ModelOutcome.READY
-        deadline = timeout if timeout is not None else m.timeout
+
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            m.timed_out = True
+            return ModelOutcome.TIMEOUT
         try:
-            await asyncio.wait_for(asyncio.shield(fut), deadline)
-            return ModelOutcome.READY
+            await asyncio.wait_for(asyncio.shield(fut), remaining)
         except asyncio.TimeoutError:
+            m.timed_out = True
             return ModelOutcome.TIMEOUT  # worker still running; no 2nd loader
         except asyncio.CancelledError:
             raise
         except Exception:
             return ModelOutcome.FAILED  # loader raised (offline/missing/corrupt)
+        # Loader returned normally — the authoritative probe MUST confirm (P1-1).
+        if _safe_probe(m):
+            m.timed_out = False
+            return ModelOutcome.READY
+        return ModelOutcome.FAILED
+
+    async def ensure_all_ready(
+        self, names: list[str], *, timeout: float | None = None
+    ) -> dict[str, ModelOutcome]:
+        """Wait several models READY under ONE shared bounded operation deadline —
+        the total is bounded by ``timeout`` (or the coordinator default), NOT a
+        full timeout per model (P1-2). Used by auto-start and /voice/start."""
+        budget = timeout if timeout is not None else self._default_timeout
+        deadline_at = time.monotonic() + budget
+        return {n: await self.ensure_ready(n, deadline_at=deadline_at) for n in names}
 
     async def run_blocking(self, fn: Callable[[], Any], *, timeout: float | None = None) -> Any:
         """Run a blocking callable (e.g. a warmup synth) in a daemon thread so it
