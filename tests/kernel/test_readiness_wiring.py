@@ -425,6 +425,35 @@ class TestShippingAutoStart:
             await _teardown(task, sd)
 
 
+class TestWarmup:
+    async def test_warmup_synth_fires_after_tts_ready(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        # Regression for the review MEDIUM: the warmup used the fail-fast ensure()
+        # (returns LOADING) then gated on status==ready → the micro-synth never
+        # fired. With ensure_ready it fires once TTS is genuinely loaded.
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text("voice:\n  engine: python\n  auto_start: false\n", encoding="utf-8")
+        # Slow TTS so the warmup observes LOADING at check time: with the fail-fast
+        # ensure() the synth would be skipped (no-op); ensure_ready waits → fires.
+        fakes = _VoiceFakes(tts_delay=0.3)
+        fakes.install(monkeypatch)
+        import kernel.voice.tts_engine_f5 as f5
+        import kernel.voice.tts_router as tr
+
+        monkeypatch.setattr(tr, "get_provider", lambda: tr.PROVIDER_F5)  # force the F5 warmup branch
+        warmups = {"n": 0}
+        monkeypatch.setattr(f5, "generate_audio", lambda text: warmups.__setitem__("n", warmups["n"] + 1))
+        monkeypatch.delenv("KALI_SKIP_PREWARM", raising=False)
+
+        app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
+        try:
+            await asyncio.wait_for(app.state._tts_warmup_task, timeout=5.0)
+            assert warmups["n"] == 1  # warmup synth fired exactly once after ready
+        finally:
+            await _teardown(task, sd)
+
+
 class TestChatAutoSpeak:
     async def _run_chat(self, monkeypatch, tmp_path, agents_dir, config_path):  # type: ignore[no-untyped-def]
         import kernel.routers.chat as chat_mod

@@ -194,12 +194,21 @@ class ModelCoordinator:
         return ModelStatus(ModelState.NOT_STARTED)
 
     def _finalize(self, m: _Model, fut: asyncio.Future) -> None:
-        """Done-callback for a load's daemon future: record terminal state once."""
-        if fut.cancelled():
-            m.thread = None
-            return
-        exc = fut.exception()
+        """Done-callback for a load's daemon future: record terminal state once.
+
+        Identity-guarded: a SUPERSEDED load's finalize (its future is no longer
+        the model's current ``load_future`` — e.g. a failed load whose retry has
+        already started) must NOT clobber the current load's bookkeeping, or it
+        would drop a live loader's thread ref and let a 2nd loader start
+        (single-flight violation on the failure path)."""
+        # Always retrieve the exception (mark it retrieved) to suppress asyncio's
+        # "exception was never retrieved" warning for a fail-fast kick with no awaiter.
+        exc = None if fut.cancelled() else fut.exception()
+        if m.load_future is not fut:
+            return  # a newer load superseded this one — leave its bookkeeping alone
         m.thread = None
+        if fut.cancelled():
+            return
         if exc is None:
             m.ready_at = time.perf_counter()
             dur = int((m.ready_at - m.started_at) * 1000) if m.started_at else None
@@ -210,12 +219,14 @@ class ModelCoordinator:
 
     async def _acquire_load(self, m: _Model) -> asyncio.Future | None:
         """Return the SHARED in-flight load future (starting one if needed), or
-        ``None`` if already loaded. Never starts a 2nd loader while a worker is
-        alive — the single-flight point (called under the model lock)."""
+        ``None`` if already loaded. Single-flight point (called under the model
+        lock): in-flight is judged by the shared future's own done-state (not
+        OS-thread liveness), so a caller in the post-death/pre-finalize window of
+        a FAILED load starts exactly one retry — never stacks loaders."""
         async with m.lock:
             if _safe_probe(m):
                 return None
-            if m.thread is not None and m.thread.is_alive():
+            if m.load_future is not None and not m.load_future.done():
                 return m.load_future  # in-flight — share the same completion
             m.error = None
             m.started_at = time.perf_counter()

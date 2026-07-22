@@ -615,10 +615,13 @@ def create_app(
             if not _voice_disabled:
                 async def _tts_warmup() -> None:
                     try:
-                        await model_coordinator.ensure("tts")
+                        # Wait the shared completion (not the fail-fast kick, which
+                        # returns LOADING) so the micro-synth actually fires once
+                        # TTS is genuinely loaded.
+                        from kernel.model_coordinator import ModelOutcome as _MO
+                        tts_ready = await model_coordinator.ensure_ready("tts") is _MO.READY
                         from kernel.voice.tts_router import PROVIDER_F5, get_provider
 
-                        tts_ready = model_coordinator.status("tts").state.value == "ready"
                         if get_provider() == PROVIDER_F5 and tts_ready:
                             from kernel.voice import tts_engine_f5
                             # daemon thread (not to_thread) so a hung CUDA synth

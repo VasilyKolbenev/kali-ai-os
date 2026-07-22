@@ -222,6 +222,43 @@ async def test_wait_timeout_keeps_worker_and_no_second_loader() -> None:
         await asyncio.sleep(0.05)
 
 
+async def test_stale_finalize_does_not_clobber_current_load() -> None:
+    # Integrated-review finding (single-flight on the FAILURE path): a superseded
+    # load's finalize (its future is no longer the model's current load_future —
+    # e.g. a failed load whose retry has already started) MUST NOT null the live
+    # retry's thread ref or set FAILED. Deterministic: drive the states directly.
+    c = ModelCoordinator()
+    fake = FakeModel()
+    c.register("tts", fake.load, fake.probe)
+    m = c._models["tts"]
+    loop = asyncio.get_running_loop()
+
+    fut_old = loop.create_future()
+    fut_new = loop.create_future()
+    sentinel_thread = threading.Thread(target=lambda: time.sleep(0.2), daemon=True)
+    sentinel_thread.start()
+    m.load_future = fut_new  # a retry is now the current load
+    m.thread = sentinel_thread
+    m.error = None
+
+    fut_old.set_exception(RuntimeError("old load failed"))
+    c._finalize(m, fut_old)  # stale finalize for the SUPERSEDED old load
+
+    assert m.thread is sentinel_thread  # not clobbered
+    assert m.error is None  # not marked FAILED by the stale load
+    fut_new.cancel()  # cleanup
+    sentinel_thread.join(timeout=1.0)
+
+
+async def test_finalize_records_terminal_state_for_current_load() -> None:
+    # The non-superseded finalize DOES record state (so the guard didn't over-shoot).
+    c = ModelCoordinator()
+    fake = FakeModel(fail=RuntimeError("boom"))
+    c.register("tts", fake.load, fake.probe)
+    assert await c.ensure_ready("tts") is ModelOutcome.FAILED
+    assert await _poll(lambda: c.status("tts").state is ModelState.FAILED)
+
+
 async def test_shutdown_clears_task_wrappers_no_orphan() -> None:
     # prewarm's ensure is a fast background kick (the load runs on a daemon thread,
     # abandoned at shutdown — see the process-level SLA test). shutdown() must
