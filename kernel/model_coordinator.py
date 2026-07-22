@@ -269,9 +269,14 @@ class ModelCoordinator:
                 return m.load_future  # in-flight — share the same completion
             if deadline_at is not None and time.monotonic() >= deadline_at:
                 # Deadline exhausted → do NOT start a new loader (no hidden
-                # warm-through). Honest TIMEOUT; a fresh-deadline retry may start one.
-                m.error = None
-                m.timed_out = True
+                # warm-through). A pre-existing terminal error is PRESERVED
+                # byte-for-byte: a real failure must surface as FAILED, never be
+                # masked as TIMEOUT (the deny path clears nothing). An otherwise
+                # clean model reports an honest TIMEOUT. The error is cleared only
+                # by a fresh-deadline retry below, and only when it actually starts
+                # a loader.
+                if m.error is None:
+                    m.timed_out = True
                 return _DEADLINE_EXPIRED
             m.error = None
             # A brand-new load has not exceeded any deadline — clear a prior
@@ -344,7 +349,10 @@ class ModelCoordinator:
         if fut is None:
             return ModelOutcome.READY
         if fut is _DEADLINE_EXPIRED:
-            return ModelOutcome.TIMEOUT  # no new loader started; m.timed_out set
+            # No new loader started. A preserved terminal error surfaces as FAILED
+            # (a real failure is never masked); an otherwise-clean denial is an
+            # honest TIMEOUT (m.timed_out set in _acquire_load).
+            return ModelOutcome.FAILED if m.error is not None else ModelOutcome.TIMEOUT
 
         remaining = deadline_at - time.monotonic()
         if remaining <= 0:

@@ -314,6 +314,50 @@ async def test_others_not_started_once_shared_deadline_exhausted() -> None:
     assert c.snapshot()["voice"] == "degraded"
 
 
+async def test_expired_deadline_preserves_terminal_error_not_masked_as_timeout() -> None:
+    # P1 (terminal-error preservation): a deadline-denied retry must NOT clear an
+    # existing terminal error nor relabel FAILED→TIMEOUT — that would MASK a real
+    # failure. A pre-existing loader error is preserved byte-for-byte and surfaces
+    # as FAILED; only a fresh (non-expired) retry that actually starts a loader
+    # clears it. Mutation-sensitive: revert the deny branch to an unconditional
+    # `m.error = None` and this test goes RED (step 2 sees TIMEOUT / error wiped).
+    fake = FakeModel(fail=RuntimeError("corrupt weights"))
+    c, _ = _coord(tts=fake)
+
+    # 1) first load fails → FAILED with the original error
+    assert await c.ensure_ready("tts") is ModelOutcome.FAILED
+    assert await _poll(lambda: c.status("tts").state is ModelState.FAILED)
+    assert c.status("tts").error == "RuntimeError: corrupt weights"
+    assert fake.calls == 1
+
+    # 2) deadline-denied retry → error PRESERVED byte-for-byte, still FAILED, no loader
+    out = await c.ensure_ready("tts", deadline_at=time.monotonic() - 1.0)
+    assert out is ModelOutcome.FAILED, "deadline-denial masked a terminal failure as TIMEOUT"
+    assert c.status("tts").state is ModelState.FAILED
+    assert c.status("tts").error == "RuntimeError: corrupt weights"
+    assert fake.calls == 1  # no new heavy loader started past the deadline
+
+    # 3) fresh non-expired retry → clears the error ON loader start, exactly one new load
+    fake.fail = None
+    assert await c.ensure_ready("tts", timeout=5.0) is ModelOutcome.READY
+    assert fake.calls == 2
+    assert c.status("tts").state is ModelState.READY
+
+
+async def test_expired_deadline_clean_model_is_timeout_error_none() -> None:
+    # Companion to the preservation test: an otherwise-clean (never-errored) model
+    # denied at an expired deadline is an honest TIMEOUT with error=None and no
+    # loader — the deny path only preserves a REAL prior error, it never invents one.
+    fake = FakeModel(delay=1.0)
+    c, _ = _coord(tts=fake)
+    out = await c.ensure_ready("tts", deadline_at=time.monotonic() - 1.0)
+    assert out is ModelOutcome.TIMEOUT
+    assert fake.calls == 0
+    st = c.status("tts")
+    assert st.state is ModelState.TIMEOUT
+    assert st.error is None
+
+
 async def test_fresh_deadline_starts_each_loader_exactly_once() -> None:
     # P1.4: a fresh call with a new (non-expired) deadline clears TIMEOUT and
     # starts exactly one loader per still-needed component.
