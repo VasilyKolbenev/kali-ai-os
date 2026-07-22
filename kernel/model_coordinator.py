@@ -85,6 +85,10 @@ class _Model:
     started_at: float | None = None
     ready_at: float | None = None
     thread: threading.Thread | None = None
+    # Shared single-flight completion: the daemon future of the CURRENT load.
+    # Concurrent callers AWAIT this same future (bounded) — one loader, one
+    # completion — instead of racing on a transient LOADING flag.
+    load_future: asyncio.Future | None = None
 
 
 def _safe_probe(m: _Model) -> bool:
@@ -182,69 +186,97 @@ class ModelCoordinator:
             )
             return ModelStatus(ModelState.READY, None, dur)
         if m.thread is not None and m.thread.is_alive():
-            return ModelStatus(ModelState.LOADING)
+            return ModelStatus(ModelState.LOADING)  # worker running (incl. a wait-timed-out load)
         if m.error is not None:
-            state = ModelState.TIMEOUT if "timeout" in m.error else ModelState.FAILED
-            return ModelStatus(state, m.error)
+            return ModelStatus(ModelState.FAILED, m.error)
         if m.disabled:
             return ModelStatus(ModelState.DISABLED)
         return ModelStatus(ModelState.NOT_STARTED)
 
-    async def ensure(self, name: str) -> ModelOutcome:
-        """Single-flight load; returns a typed outcome (never raises on load failure).
+    def _finalize(self, m: _Model, fut: asyncio.Future) -> None:
+        """Done-callback for a load's daemon future: record terminal state once."""
+        if fut.cancelled():
+            m.thread = None
+            return
+        exc = fut.exception()
+        m.thread = None
+        if exc is None:
+            m.ready_at = time.perf_counter()
+            dur = int((m.ready_at - m.started_at) * 1000) if m.started_at else None
+            self._emit(m.name, "ready", dur)
+        else:
+            m.error = f"{type(exc).__name__}: {exc}"
+            self._emit(m.name, "failed")
 
-        Fast-paths DISABLED / already-READY / in-flight-LOADING before the lock so
-        a caller never blocks behind a slow load. Loads ``deps`` to completion
-        first (no bypass). Propagates :class:`asyncio.CancelledError`.
-        """
+    async def _acquire_load(self, m: _Model) -> asyncio.Future | None:
+        """Return the SHARED in-flight load future (starting one if needed), or
+        ``None`` if already loaded. Never starts a 2nd loader while a worker is
+        alive — the single-flight point (called under the model lock)."""
+        async with m.lock:
+            if _safe_probe(m):
+                return None
+            if m.thread is not None and m.thread.is_alive():
+                return m.load_future  # in-flight — share the same completion
+            m.error = None
+            m.started_at = time.perf_counter()
+            self._emit(m.name, "loading")
+            fut, t = _run_in_daemon(m.loader)
+            m.thread = t
+            m.load_future = fut
+            fut.add_done_callback(lambda f: self._finalize(m, f))
+            return fut
+
+    async def _resolve_deps(self, m: _Model, *, timeout: float | None = None) -> bool:
+        """Wait each dependency to READY with an absolute per-dep deadline (bounded).
+        On TIMEOUT/FAILED/DISABLED the dependent is NOT started (no bypass, no hang)."""
+        for dep in m.deps:
+            d = self._models[dep]
+            deadline = timeout if timeout is not None else d.timeout
+            out = await self.ensure_ready(dep, timeout=deadline)
+            if out is not ModelOutcome.READY:
+                m.error = f"dependency {dep!r} not ready: {out.value}"
+                return False
+        return True
+
+    async def ensure(self, name: str) -> ModelOutcome:
+        """Fail-fast on-demand kick: DISABLED/READY fast; deps waited (bounded);
+        then start the load in the BACKGROUND and return LOADING without waiting
+        for it (used by prewarm). Never starts a 2nd loader."""
         m = self._models[name]
         if m.disabled:
             return ModelOutcome.DISABLED
         if _safe_probe(m):
             return ModelOutcome.READY
-        # A prior load (incl. a timed-out one whose worker is still running) is
-        # in flight → do not wait on the lock, do not start a 2nd loader.
-        if m.thread is not None and m.thread.is_alive():
-            return ModelOutcome.LOADING
+        if not await self._resolve_deps(m):
+            return ModelOutcome.FAILED
+        fut = await self._acquire_load(m)
+        return ModelOutcome.READY if fut is None else ModelOutcome.LOADING
 
-        for dep in m.deps:
-            out = await self._ensure_dep(dep)
-            if out is not ModelOutcome.READY:
-                m.error = f"dependency {dep!r} not ready: {out.value}"
-                return ModelOutcome.FAILED
-
-        async with m.lock:
-            if _safe_probe(m):
-                return ModelOutcome.READY
-            if m.thread is not None and m.thread.is_alive():
-                return ModelOutcome.LOADING
-            m.error = None
-            m.started_at = time.perf_counter()
-            self._emit(name, "loading")
-            fut, t = _run_in_daemon(m.loader)
-            m.thread = t
-            try:
-                await asyncio.wait_for(asyncio.shield(fut), m.timeout)
-            except asyncio.CancelledError:
-                self._emit(name, "cancelled")
-                raise
-            except asyncio.TimeoutError:
-                # Worker still running (daemon) → keep m.thread so status reports
-                # LOADING and no 2nd loader starts until it dies or the probe flips.
-                m.error = f"timeout after {m.timeout:.0f}s"
-                self._emit(name, "timeout")
-                return ModelOutcome.TIMEOUT
-            except Exception as e:  # offline/missing/corrupt → degraded, never hang
-                # Concluded (failed): drop the thread ref so status doesn't race on
-                # the daemon thread's not-yet-observed exit and misreport LOADING.
-                m.thread = None
-                m.error = f"{type(e).__name__}: {e}"
-                self._emit(name, "failed")
-                return ModelOutcome.FAILED
-            m.thread = None
-            m.ready_at = time.perf_counter()
-            self._emit(name, "ready", int((m.ready_at - m.started_at) * 1000))
+    async def ensure_ready(self, name: str, *, timeout: float | None = None) -> ModelOutcome:
+        """WAITING API: join the shared single-flight completion and wait — BOUNDED
+        by an absolute deadline — until READY/FAILED/TIMEOUT/DISABLED. Never starts
+        a 2nd loader; never hangs. Used by auto-start, /voice/start, dependency
+        resolution and the fail-closed HTTP routes."""
+        m = self._models[name]
+        if m.disabled:
+            return ModelOutcome.DISABLED
+        if _safe_probe(m):
             return ModelOutcome.READY
+        if not await self._resolve_deps(m, timeout=timeout):
+            return ModelOutcome.FAILED
+        fut = await self._acquire_load(m)
+        if fut is None:
+            return ModelOutcome.READY
+        deadline = timeout if timeout is not None else m.timeout
+        try:
+            await asyncio.wait_for(asyncio.shield(fut), deadline)
+            return ModelOutcome.READY
+        except asyncio.TimeoutError:
+            return ModelOutcome.TIMEOUT  # worker still running; no 2nd loader
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return ModelOutcome.FAILED  # loader raised (offline/missing/corrupt)
 
     async def run_blocking(self, fn: Callable[[], Any], *, timeout: float | None = None) -> Any:
         """Run a blocking callable (e.g. a warmup synth) in a daemon thread so it
@@ -253,21 +285,6 @@ class ModelCoordinator:
         if timeout is not None:
             return await asyncio.wait_for(asyncio.shield(fut), timeout)
         return await asyncio.shield(fut)
-
-    async def _ensure_dep(self, name: str) -> ModelOutcome:
-        """Ensure a dependency, WAITING for an in-flight load to conclude.
-
-        Unlike the top-level `ensure` fast-path (which returns LOADING so an
-        on-demand caller never blocks), a dependency MUST complete before its
-        dependent starts (torch-before-VAD/wake/STT/TTS). When a concurrent load
-        is in flight (e.g. stt and tts prewarm both pulling torch), poll until it
-        settles into READY/FAILED/TIMEOUT/DISABLED rather than treating the
-        transient LOADING as failure (the bug that broke frozen prewarm)."""
-        out = await self.ensure(name)
-        while out is ModelOutcome.LOADING:
-            await asyncio.sleep(0.02)
-            out = await self.ensure(name)
-        return out
 
     def prewarm(self, names: list[str]) -> None:
         """Spawn strong-referenced background loads for active (non-disabled) models."""
