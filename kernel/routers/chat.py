@@ -45,13 +45,17 @@ async def _speak_response(app: Any, text: str) -> None:
 
         # Generate TTS for custom responses — sentence by sentence so the
         # first sentence starts playing while the rest synthesizes (P1).
-        from kernel.voice.tts_router import (
-            generate_audio_by_sentence,
-            is_loaded,
-            load_models,
-        )
-        if not is_loaded():
-            await asyncio.to_thread(load_models)
+        # OPUS-102: load via the coordinator (single owner), never a direct
+        # load_models. engine=rust/DISABLED → return with zero load, zero
+        # generate; FAILED/TIMEOUT → honest no-op; no 2nd loader.
+        from kernel.model_coordinator import ModelOutcome
+        from kernel.voice.tts_router import generate_audio_by_sentence
+
+        coord = getattr(app.state, "model_coordinator", None)
+        if coord is None or not coord.has("tts"):
+            return
+        if await coord.ensure_ready("tts") is not ModelOutcome.READY:
+            return
         async for audio, sr in generate_audio_by_sentence(text):
             await asyncio.to_thread(_play_audio, audio, sr)
     except Exception as e:

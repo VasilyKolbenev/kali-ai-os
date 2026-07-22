@@ -196,14 +196,18 @@ async def voice_start(request: Request) -> Any:
 
     coord = getattr(request.app.state, "model_coordinator", None)
     if coord is not None:
-        outcomes = {m: await coord.ensure(m) for m in ("vad", "wake", "stt", "tts")}
+        outcomes = {m: await coord.ensure_ready(m) for m in ("vad", "wake", "stt", "tts")}
         if not all(o is ModelOutcome.READY for o in outcomes.values()):
+            request.app.state.voice_start_error = (
+                f"components not ready: {{{', '.join(f'{m}:{o.value}' for m, o in outcomes.items())}}}"
+            )
             return JSONResponse(
                 {"status": "error", "reason": "model_unavailable",
                  "states": {m: o.value for m, o in outcomes.items()}},
                 status_code=503,
             )
     await vp.start()
+    request.app.state.voice_start_error = None  # success clears any prior error
     return {"status": "started"}
 
 
@@ -252,7 +256,9 @@ async def _require_voice_model(request: Request, name: str) -> None:
     coord = getattr(request.app.state, "model_coordinator", None)
     if coord is None or not coord.has(name):
         return
-    outcome = await coord.ensure(name)
+    # Waiting API (bounded): shares the single-flight completion — a concurrent
+    # prewarm and this request never start a 2nd loader.
+    outcome = await coord.ensure_ready(name)
     if outcome is not ModelOutcome.READY:
         raise ModelUnavailable(name, outcome)
 

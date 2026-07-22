@@ -1,19 +1,18 @@
 """OPUS-102 #5: a blocked model loader must NOT hold the backend process past
-the shutdown SLA. Cancelling the asyncio wrapper is not enough — the loader runs
-in a daemon thread, so the interpreter abandons it and the process exits ≤2s.
+the shutdown SLA. Loaders run in daemon threads → the interpreter abandons them
+and the process exits ≤2s. Measured at PROCESS level (parent-observed wall time
+from "loaders started" to actual process exit), not only the coroutine shutdown.
 
-Process-level: a child interpreter registers blocked loaders (coordinator prewarm
-+ a simulated auto_start/pipeline load + a warmup), initiates shutdown, and must
-terminate within the SLA. Run as a subprocess so a real interpreter-exit is
-exercised (not just the asyncio layer).
+Actual frozen close-during-load remains a live gate for OPUS-103.
 """
 from __future__ import annotations
 
 import subprocess
 import sys
+import time
 
 _CHILD = r"""
-import asyncio, time
+import asyncio, time, sys
 from kernel.model_coordinator import ModelCoordinator
 
 def _blocked():
@@ -21,15 +20,13 @@ def _blocked():
 
 async def main():
     c = ModelCoordinator(default_timeout=60)
-    # coordinator prewarm loaders
     c.register("tts", _blocked, lambda: False)
     c.register("stt", _blocked, lambda: False)
-    # simulated auto_start pipeline component load (same daemon mechanism)
-    c.register("vad", _blocked, lambda: False)
+    c.register("vad", _blocked, lambda: False)   # simulated auto_start component
     c.prewarm(["tts", "stt", "vad"])
-    # simulated warmup synth via run_blocking
-    warmup = asyncio.create_task(c.run_blocking(_blocked))
+    warmup = asyncio.create_task(c.run_blocking(_blocked))   # simulated warmup synth
     await asyncio.sleep(0.3)  # let the daemon loaders start
+    print("LOADERS_STARTED", flush=True)
     t0 = time.perf_counter()
     warmup.cancel()
     await c.shutdown()
@@ -41,17 +38,34 @@ print("EXITED", flush=True)
 
 
 def test_blocked_loader_does_not_hold_process_after_shutdown() -> None:
-    # If the loader threads were non-daemon, interpreter exit would join them and
-    # hang ~30s → TimeoutExpired. Daemon threads let the process exit immediately.
-    proc = subprocess.run(
+    # daemon loader threads → interpreter abandons them at exit. If they were
+    # non-daemon, interpreter exit would join the 30s loaders and hang.
+    proc = subprocess.Popen(
         [sys.executable, "-c", _CHILD],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=15,  # generous for interpreter + import startup; the 30s loader must NOT gate it
     )
-    assert proc.returncode == 0, f"child failed: {proc.stderr[-2000:]}"
-    assert "EXITED" in proc.stdout, proc.stdout
-    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("SHUTDOWN_SECS=")), "")
-    assert line, proc.stdout
-    shutdown_secs = float(line.split("=", 1)[1])
-    assert shutdown_secs <= 2.0, f"shutdown took {shutdown_secs:.3f}s (> 2s SLA)"
+    # Parent-observed clock starts when the child reports its loaders are running.
+    t_started: float | None = None
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if line.startswith("LOADERS_STARTED"):
+            t_started = time.perf_counter()
+            break
+    assert t_started is not None, "child never reported LOADERS_STARTED"
+
+    try:
+        rest, err = proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise AssertionError("process did not exit after shutdown (blocked loader held it)")
+    exit_secs = time.perf_counter() - t_started
+
+    assert proc.returncode == 0, f"child failed: {err[-2000:]}"
+    assert "EXITED" in rest, rest
+    # Parent-observed: from loaders-started to actual process exit within the SLA.
+    assert exit_secs <= 2.0, f"process took {exit_secs:.3f}s from loaders-started to exit (> 2s SLA)"
+    line = next((ln for ln in rest.splitlines() if ln.startswith("SHUTDOWN_SECS=")), "")
+    assert line, rest
+    assert float(line.split("=", 1)[1]) <= 2.0

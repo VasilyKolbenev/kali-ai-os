@@ -345,13 +345,10 @@ def create_app(
 
         # torch: single worker-thread import; the probe gates on a COMPLETED
         # import flag (never sys.modules membership → no partial-torch race).
-        def _load_torch() -> None:
-            import torch  # noqa: F401
-            app.state._torch_ready = True
+        # Extracted to kernel.torch_dep so tests can inject a deterministic fake.
+        from kernel import torch_dep
 
-        model_coordinator.register(
-            "torch", _load_torch, lambda: getattr(app.state, "_torch_ready", False)
-        )
+        model_coordinator.register("torch", torch_dep.load, torch_dep.is_ready)
 
         _VOICE_MODELS = ("vad", "wake", "stt", "tts")
 
@@ -422,13 +419,16 @@ def create_app(
                 if voice_cfg.auto_start and voice_cfg.mode != "off":
                     async def _voice_bg_start() -> None:
                         try:
-                            # Load through the coordinator (daemon threads, not
-                            # pipeline.load_models) so there is ONE owner, then
-                            # start the realtime loop only once components are up.
-                            outcomes = [await model_coordinator.ensure(m) for m in _VOICE_MODELS]
+                            # Wait each component READY through the coordinator's
+                            # bounded WAITING api (shared single-flight completion,
+                            # not the fail-fast kick) so a parallel prewarm can't
+                            # make us see a transient LOADING. Start the realtime
+                            # loop exactly once, only when all are READY.
                             from kernel.model_coordinator import ModelOutcome as _MO
-                            if all(o is _MO.READY for o in outcomes):
+                            outcomes = {m: await model_coordinator.ensure_ready(m) for m in _VOICE_MODELS}
+                            if all(o is _MO.READY for o in outcomes.values()):
                                 await voice_pipeline.start()
+                                app.state.voice_start_error = None
                                 logger.info("Voice pipeline auto-started (mode=%s)", voice_cfg.mode)
                             else:
                                 app.state.voice_start_error = f"components not ready: {outcomes}"
@@ -651,6 +651,9 @@ def create_app(
             getattr(app.state, _attr, None)
             for _attr in ("_tts_warmup_task", "_voice_bg_task", "_model_download_task")
         ]
+        # Background auto-speak tasks (chat.py) — cancel + await so no auto-speak
+        # survives shutdown (OPUS-102 #3).
+        _bg_tasks += list(getattr(app.state, "_speak_tasks", set()))
         for _t in _bg_tasks:
             if _t is not None and not _t.done():
                 _t.cancel()

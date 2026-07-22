@@ -40,7 +40,13 @@ class _VoiceFakes:
     """Counting fakes for every voice load path (Codex #1 requires counters on
     generate_audio + get_or_create_stt, not only load_models)."""
 
-    def __init__(self, *, tts_delay: float = 0.0, tts_fail: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        tts_delay: float = 0.0,
+        tts_fail: Exception | None = None,
+        torch_timing: float = 0.0,
+    ) -> None:
         self.stt_instances = 0
         self.stt_loads = 0
         self.tts_load_calls = 0
@@ -50,8 +56,13 @@ class _VoiceFakes:
         self._tts_loaded = False
         self._tts_delay = tts_delay
         self._tts_fail = tts_fail
+        self._torch_timing = torch_timing
+        self._torch_ready = False
+        self._vad_wake_delay = 0.0
+        self._stt_delay = 0.0
 
     def install(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        import kernel.torch_dep as torch_dep
         import kernel.voice.stt as stt_mod
         import kernel.voice.transcribe_helper as th
         import kernel.voice.tts_router as tr
@@ -59,6 +70,17 @@ class _VoiceFakes:
         import kernel.voice.wake_word as ww_mod
 
         fakes = self
+
+        # Deterministic torch dep — no real cold import (Codex #4): fast, flagged.
+        self._torch_ready = False
+
+        def _torch_load():  # type: ignore[no-untyped-def]
+            time.sleep(self._torch_timing)
+            self._torch_ready = True
+            self.order.append("torch")
+
+        monkeypatch.setattr(torch_dep, "load", _torch_load)
+        monkeypatch.setattr(torch_dep, "is_ready", lambda: fakes._torch_ready)
 
         # STT: count instances + loads; is_loaded reflects fake load.
         _orig_init = stt_mod.SpeechToText.__init__
@@ -69,6 +91,8 @@ class _VoiceFakes:
 
         def _stt_load(self):  # type: ignore[no-untyped-def]
             fakes.stt_loads += 1
+            if fakes._stt_delay:
+                time.sleep(fakes._stt_delay)
             self._loaded = True
             if "stt" not in fakes.order:
                 fakes.order.append("stt")
@@ -85,9 +109,14 @@ class _VoiceFakes:
 
         monkeypatch.setattr(th, "get_or_create_stt", _goc)
 
-        # VAD / wake: instant fake loads
-        monkeypatch.setattr(vad_mod.VoiceActivityDetector, "load", lambda self: setattr(self, "_loaded", True))
-        monkeypatch.setattr(ww_mod.WakeWordDetector, "load", lambda self: setattr(self, "_loaded", True))
+        # VAD / wake: fake loads with configurable timing
+        def _vw_load(self):  # type: ignore[no-untyped-def]
+            if fakes._vad_wake_delay:
+                time.sleep(fakes._vad_wake_delay)
+            self._loaded = True
+
+        monkeypatch.setattr(vad_mod.VoiceActivityDetector, "load", _vw_load)
+        monkeypatch.setattr(ww_mod.WakeWordDetector, "load", _vw_load)
 
         # TTS
         def _tts_load():  # type: ignore[no-untyped-def]
@@ -237,20 +266,19 @@ class TestFailClosed:
         try:
             coord = app.state.model_coordinator
             calls: list[str] = []
-            _orig = coord.ensure
+            _orig = coord.ensure_ready
 
-            async def _spy(name):  # type: ignore[no-untyped-def]
+            async def _spy(name, **kw):  # type: ignore[no-untyped-def]
                 calls.append(name)
-                return await _orig(name)
+                return await _orig(name, **kw)
 
-            coord.ensure = _spy  # type: ignore[method-assign]
+            coord.ensure_ready = _spy  # type: ignore[method-assign]
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as c:
                 r1 = await c.post("/tts", json={"text": "привет"})
                 r2 = await c.post("/tts", json={"text": "снова"})
             assert r1.status_code == 200 and r2.status_code == 200
-            assert calls.count("tts") == 2  # every request routed via coordinator
-            assert "torch" in calls  # torch dep enforced before tts loads
+            assert calls.count("tts") == 2  # every request routed via the waiting api
             assert fakes.tts_load_calls == 1  # single-flight load
             assert fakes.generate_calls == 2
         finally:
@@ -339,33 +367,107 @@ class TestStartupSLA:
     async def test_torch_loads_before_voice_models(
         self, monkeypatch, tmp_path: Path, sample_agents_dir: Path, sample_config_path: Path
     ) -> None:
-        # deps ordering: torch must complete before tts/stt (frozen race guard).
-        fakes = _VoiceFakes()
+        # deps ordering: torch (deterministic fake, 50ms) must complete before
+        # tts starts (frozen race guard).
+        fakes = _VoiceFakes(torch_timing=0.05)
         fakes.install(monkeypatch)
-        import kernel.main as main_mod  # torch loader is defined inline in lifespan
-
-        # wrap torch import to log ordering without a real (already-cached) import cost
-        order = fakes.order
-
         monkeypatch.setenv("KALI_SKIP_PREWARM", "1")
         app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, sample_config_path)
         try:
+            from kernel.model_coordinator import ModelOutcome
+
             coord = app.state.model_coordinator
-            # patch torch model probe/loader indirectly via a marker: ensure tts,
-            # then assert torch precedes tts in the shared order log.
-            app.state._torch_ready = False
-
-            def _mark_torch():  # type: ignore[no-untyped-def]
-                order.append("torch")
-                app.state._torch_ready = True
-
-            # re-register torch with a marking loader (same probe contract)
-            coord.register("torch", _mark_torch, lambda: app.state._torch_ready)
-            out = await coord.ensure("tts")
-            assert out.value == "ready"
-            assert order.index("torch") < order.index("tts")
+            assert await coord.ensure_ready("tts") is ModelOutcome.READY
+            assert fakes.order.index("torch") < fakes.order.index("tts")
         finally:
             await _teardown(task, sd)
+
+
+class TestShippingAutoStart:
+    async def test_autostart_with_parallel_prewarm_starts_pipeline_once(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        # Codex #1 regression. SHIPPING config (explicit): engine=python,
+        # auto_start=true, mode=wake_word. torch=50ms, vad/wake=80ms, stt/tts=600ms.
+        # auto-start runs and, with a parallel prewarm(stt,tts), must drive ALL
+        # components READY, start the pipeline exactly once, start_error=None —
+        # via the WAITING api (shared completion), not a LOADING fast-path.
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text(
+            "voice:\n  engine: python\n  auto_start: true\n  mode: wake_word\n",
+            encoding="utf-8",
+        )
+        fakes = _VoiceFakes(torch_timing=0.05, tts_delay=0.6)
+        fakes._vad_wake_delay = 0.08
+        fakes._stt_delay = 0.6
+        fakes.install(monkeypatch)
+        monkeypatch.delenv("KALI_SKIP_PREWARM", raising=False)  # prewarm parallel with auto-start
+
+        import kernel.voice.pipeline as pl
+
+        starts = {"n": 0}
+
+        async def _fake_start(self):  # type: ignore[no-untyped-def]
+            starts["n"] += 1
+            self._started = True
+
+        monkeypatch.setattr(pl.VoicePipeline, "start", _fake_start)
+
+        app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
+        try:
+            await asyncio.wait_for(app.state._voice_bg_task, timeout=8.0)
+            coord = app.state.model_coordinator
+            for m in ("torch", "vad", "wake", "stt", "tts"):
+                assert coord.status(m).state.value == "ready", m
+            assert starts["n"] == 1  # pipeline started exactly once
+            assert app.state.voice_start_error is None
+        finally:
+            await _teardown(task, sd)
+
+
+class TestChatAutoSpeak:
+    async def _run_chat(self, monkeypatch, tmp_path, agents_dir, config_path):  # type: ignore[no-untyped-def]
+        import kernel.routers.chat as chat_mod
+        import kernel.voice.jarvis_sounds as js
+        import kernel.voice.tts_router as tr
+
+        calls = {"by_sentence": 0}
+
+        async def _fake_by_sentence(text):  # type: ignore[no-untyped-def]
+            calls["by_sentence"] += 1
+            yield (np.zeros(8, dtype=np.float32), 16000)
+
+        monkeypatch.setattr(js, "should_use_clip", lambda text: None)  # force TTS path
+        monkeypatch.setattr(tr, "generate_audio_by_sentence", _fake_by_sentence)
+        monkeypatch.setattr(chat_mod, "_play_audio", lambda audio, sr: None)
+        # short-circuit the LLM so /chat returns fast with a speakable response
+        monkeypatch.setattr(chat_mod, "_chat_logic", lambda request: _resp())
+        return calls
+
+    async def test_engine_rust_no_python_tts(
+        self, monkeypatch, tmp_path: Path, sample_agents_dir: Path
+    ) -> None:
+        cfg = tmp_path / "kali.yaml"
+        cfg.write_text("voice:\n  engine: rust\n", encoding="utf-8")
+        fakes = _VoiceFakes()
+        fakes.install(monkeypatch)
+        monkeypatch.setenv("KALI_SKIP_PREWARM", "1")
+        calls = await self._run_chat(monkeypatch, tmp_path, sample_agents_dir, cfg)
+        app, task, sd, _ = await _make_app(tmp_path, sample_agents_dir, cfg)
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                await c.post("/chat", json={"message": "привет"})
+            for t in list(app.state._speak_tasks):
+                await asyncio.wait_for(t, timeout=2.0)
+            assert calls["by_sentence"] == 0  # no generation under engine=rust
+            assert fakes.tts_load_calls == 0  # no Python TTS load
+        finally:
+            await _teardown(task, sd)
+
+
+async def _resp():  # type: ignore[no-untyped-def]
+    return {"response": "Готово, сэр, задача выполнена успешно."}
 
 
 # ── fixtures reused from the default lifespan pattern ─────────────────────────
