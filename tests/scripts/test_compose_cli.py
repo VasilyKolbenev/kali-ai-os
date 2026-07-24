@@ -34,11 +34,11 @@ def _layout(tmp_path: Path, *, with_receipts: bool = True) -> tuple[Path, Path, 
     (repo / "scripts" / "install-webview2.ps1").write_bytes(b"PS")
     if with_receipts:
         rc.write_receipt(backend, dist / "kali-backend.BUILD_RECEIPT.json",
-                         git_sha="s" * 40, version="1.0.0-rc3", dirty=False,
+                         git_sha="a" * 40, version="1.0.0-rc3", dirty=False,
                          build_kind="pyinstaller-onedir", toolchain="py3.12")
         rc.write_receipt(tauri / "kali-desktop.exe",
                          tauri / "kali-desktop.exe.BUILD_RECEIPT.json",
-                         git_sha="s" * 40, version="1.0.0-rc3", dirty=False,
+                         git_sha="a" * 40, version="1.0.0-rc3", dirty=False,
                          build_kind="tauri-release", toolchain="rust")
     return repo, dist, tauri
 
@@ -46,7 +46,7 @@ def _layout(tmp_path: Path, *, with_receipts: bool = True) -> tuple[Path, Path, 
 def test_compose_cli_composes_from_assembled_paths(tmp_path: Path) -> None:
     repo, dist, tauri = _layout(tmp_path)
     stage = cc.compose(repo, dist, tauri, mode="internal", version="1.0.0-rc3",
-                       git_sha="s" * 40, materializer=lambda p: None,
+                       git_sha="a" * 40, materializer=lambda p: None,
                        signer=lambda p, m: None, token="1")
     assert stage == dist / "premium_stage"
     assert (stage / "install-webview2.ps1").read_bytes() == b"PS"
@@ -61,6 +61,6 @@ def test_compose_cli_fail_closed_without_receipt(tmp_path: Path) -> None:
     repo, dist, tauri = _layout(tmp_path, with_receipts=False)
     with pytest.raises(rc.ReceiptError) as exc:
         cc.compose(repo, dist, tauri, mode="internal", version="1.0.0-rc3",
-                   git_sha="s" * 40, materializer=lambda p: None,
+                   git_sha="a" * 40, materializer=lambda p: None,
                    signer=lambda p, m: None, token="1")
     assert "RECEIPT_MISSING" in str(exc.value)

@@ -92,6 +92,33 @@ def test_bootstrap_verifies_sot_reparse_free(tmp_path: Path) -> None:
     assert (dist / "models").exists()  # non-destructive on failure
 
 
+# ── F1: crash-safe switch completion + physical re-verify + CLI ─────────────
+def test_bootstrap_completes_switch_after_crash(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)  # normal: SoT+manifest written, junction removed
+    # simulate a crash that left the legacy junction in place after the switch
+    _make_junction(dist / "models", dist / "premium_stage" / "models")
+    result = ab.bootstrap_premium_assets(dist)  # re-run must safely finish the switch
+    assert result == "completed_switch"
+    assert not (dist / "models").exists()  # junction removed
+    assert (dist / "premium_assets" / "models" / "model.bin").read_bytes() == b"WEIGHTS"
+
+
+def test_bootstrap_idempotent_rejects_reparse_in_verified_sot(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    _make_junction(dist / "premium_assets" / "models" / "sneaky", dist / "premium_stage")
+    with pytest.raises(ab.BootstrapError):
+        ab.bootstrap_premium_assets(dist)  # physical-only re-verify catches the reparse
+
+
+def test_bootstrap_cli_runs(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    rc_code = ab.main([str(dist)])
+    assert rc_code == 0
+    assert (dist / "premium_assets" / "models" / "model.bin").read_bytes() == b"WEIGHTS"
+
+
 # ── external-writer lockdown: fetch_lgpl_ffmpeg --stage forbidden ───────────
 def test_fetch_lgpl_stage_is_forbidden(monkeypatch, tmp_path: Path) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl

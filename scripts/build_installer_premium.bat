@@ -84,6 +84,15 @@ REM SoT + install-webview2.ps1 into a clean premium_stage.next-*, drops declared
 REM dead weight, materializes HF links, signs inner EXEs (signed) or leaves them
 REM unsigned (internal), seals STAGE_MANIFEST.json LAST, verifies it, then swaps
 REM it into premium_stage rollback-safely. Stale/deleted files cannot survive.
+REM ---- Build receipts (F1: git-computed provenance; caller cannot fake dirty) --
+REM The receipt writer derives git_sha (HEAD) + dirty (git status) itself, so a
+REM build from a dirty worktree is honestly marked dirty and later refused.
+echo Writing build receipts...
+"%PY%" -m scripts.release.receipts write "dist_premium\kali-backend" "dist_premium\kali-backend.BUILD_RECEIPT.json" "%APPVER%" "pyinstaller-onedir" "python-3.12"
+if errorlevel 1 ( echo ERROR: backend receipt generation failed. & exit /b 1 )
+"%PY%" -m scripts.release.receipts write "src-tauri\target\release\kali-desktop.exe" "src-tauri\target\release\kali-desktop.exe.BUILD_RECEIPT.json" "%APPVER%" "tauri-release" "rust-stable"
+if errorlevel 1 ( echo ERROR: desktop receipt generation failed. & exit /b 1 )
+
 echo Composing sealed premium_stage ^(%MODE%^)...
 "%PY%" -m scripts.release.compose_cli "%MODE%" "%APPVER%" "%GIT_SHA%"
 if errorlevel 1 (

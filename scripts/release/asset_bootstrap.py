@@ -21,12 +21,14 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
 from scripts.release import stage_policy
 
 _MANIFEST_NAME = "PREMIUM_ASSETS.sha256.json"
+_DEFAULT_DIST = Path(__file__).resolve().parents[2] / "dist_premium"
 
 Copier = Callable[[Path, Path], None]
 
@@ -105,13 +107,20 @@ def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None
     sot = assets_dir / "models"
     manifest = assets_dir / _MANIFEST_NAME
 
+    legacy = dist_premium / "models"
+
     if sot.is_dir() and manifest.is_file():
         stored: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
-        if _dir_hashes(sot) == stored.get("entries"):
-            return "already"
-        raise BootstrapError("premium_assets SoT drifted from its integrity manifest")
+        if _dir_hashes(sot) != stored.get("entries"):
+            raise BootstrapError("premium_assets SoT drifted from its integrity manifest")
+        _assert_physical(sot)  # re-verify the SoT is a physical-only copy (no reparse)
+        # crash-safe: a verified SoT with the legacy junction still present means a
+        # prior run died between the manifest write and the switch — finish it now.
+        if legacy.exists() and stage_policy.is_reparse_point(legacy):
+            _remove_legacy_junction(legacy)
+            return "completed_switch"
+        return "already"
 
-    legacy = dist_premium / "models"
     if not legacy.exists():
         raise BootstrapError(f"legacy assets junction not found: {legacy}")
     source = legacy.resolve()
@@ -139,3 +148,16 @@ def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None
     )
     _remove_legacy_junction(legacy)  # switch: only AFTER a verified copy
     return "bootstrapped"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI (build protocol): bootstrap the premium_assets SoT for a dist_premium dir."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    dist = Path(args[0]) if args else _DEFAULT_DIST
+    result = bootstrap_premium_assets(dist)
+    print(f"premium_assets bootstrap: {result} ({dist})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

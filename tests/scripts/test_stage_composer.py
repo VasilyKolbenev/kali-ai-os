@@ -144,10 +144,10 @@ def _mk_receipts(tmp_path: Path, inputs: dict, version: str) -> dict:
     rd = tmp_path / "receipts"
     rd.mkdir()
     be = rd / "backend.receipt.json"
-    rc.write_receipt(inputs["backend"], be, git_sha="s" * 40, version=version,
+    rc.write_receipt(inputs["backend"], be, git_sha="a" * 40, version=version,
                      dirty=False, build_kind="pyinstaller-onedir", toolchain="py3.12")
     dt = rd / "desktop.receipt.json"
-    rc.write_receipt(inputs["desktop_exe"], dt, git_sha="s" * 40, version=version,
+    rc.write_receipt(inputs["desktop_exe"], dt, git_sha="a" * 40, version=version,
                      dirty=False, build_kind="tauri-release", toolchain="rust")
     return {"backend": be, "desktop": dt}
 
@@ -156,7 +156,7 @@ def _compose(tmp_path: Path, dist: Path, **over) -> Path:
     inputs = _mk_inputs(tmp_path)
     receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
     kwargs = dict(inputs=inputs, receipts=receipts, version="1.0.0-rc3",
-                  git_sha="s" * 40, mode="internal",
+                  git_sha="a" * 40, mode="internal",
                   exclusions=["models/ggml-base.bin"],
                   materializer=lambda p: None, signer=lambda p, m: None, token="1")
     kwargs.update(over)
@@ -188,10 +188,30 @@ def test_compose_rejects_artifact_without_receipt(tmp_path: Path) -> None:
     receipts["backend"] = tmp_path / "nonexistent.receipt.json"  # missing receipt
     with pytest.raises(rc.ReceiptError) as exc:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
-                         git_sha="s" * 40, mode="internal",
+                         git_sha="a" * 40, mode="internal",
                          exclusions=[], materializer=lambda p: None,
                          signer=lambda p, m: None, token="1")
     assert "RECEIPT_MISSING" in str(exc.value)
+
+
+def test_compose_rejects_git_sha_mismatch(tmp_path: Path) -> None:
+    # F1: both receipts' git_sha must equal the composer's planned git SHA (and each
+    # other, and manifest.git_sha). A receipt from a different commit is refused.
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")  # receipts git_sha = "s"*40
+    with pytest.raises(rc.ReceiptError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="d" * 40, mode="internal", exclusions=[],  # planned != "s"*40
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "GIT_SHA_MISMATCH" in str(exc.value)
+
+
+def test_compose_manifest_git_sha_matches_planned(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    stage = _compose(tmp_path, dist)  # planned git_sha = "s"*40, receipts too
+    manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["git_sha"] == "a" * 40
 
 
 def test_compose_rejects_reparse_after_materialize(tmp_path: Path) -> None:

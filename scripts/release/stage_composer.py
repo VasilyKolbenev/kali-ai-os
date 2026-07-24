@@ -145,9 +145,17 @@ def _copy_inputs(nxt: Path, inputs: dict[str, Path]) -> None:
     shutil.copy2(inputs["webview2"], nxt / "install-webview2.ps1")
 
 
-def _verify_receipts(nxt: Path, receipts: dict[str, Path], version: str) -> None:
-    rc.require_receipt(nxt / "kali-backend", receipts["backend"], expected_version=version)
-    rc.require_receipt(nxt / "kali-desktop.exe", receipts["desktop"], expected_version=version)
+def _verify_receipts(nxt: Path, receipts: dict[str, Path], version: str,
+                     git_sha: str) -> None:
+    """Both artifacts' receipts must pin the composer's planned commit (== each
+    other, == manifest.git_sha) — no cross-commit backend/desktop mix ships."""
+    be = rc.require_receipt(nxt / "kali-backend", receipts["backend"],
+                            expected_version=version, expected_git_sha=git_sha)
+    dt = rc.require_receipt(nxt / "kali-desktop.exe", receipts["desktop"],
+                            expected_version=version, expected_git_sha=git_sha)
+    if be["git_sha"] != dt["git_sha"]:
+        raise rc.ReceiptError(
+            f"GIT_SHA_MISMATCH: backend {be['git_sha']} != desktop {dt['git_sha']}")
 
 
 def _apply_exclusions(nxt: Path, exclusions: list[str]) -> None:
@@ -183,7 +191,7 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
     nxt.mkdir(parents=True)
 
     _copy_inputs(nxt, inputs)
-    _verify_receipts(nxt, receipts, version)
+    _verify_receipts(nxt, receipts, version, git_sha)
     _apply_exclusions(nxt, exclusions)
     materializer(nxt)
     stage_policy.assert_tree_reparse_free(nxt)  # zero reparse points after materialize
