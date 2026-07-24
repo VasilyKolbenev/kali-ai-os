@@ -34,8 +34,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
+import re
+import secrets
+import socket
 import subprocess
 import sys
 import tempfile
@@ -46,12 +50,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))  # `import kernel` for the version cross-check
+sys.path.insert(0, str(ROOT))
 
 from scripts.release import stage_policy  # noqa: E402
 
 _CACHE_VARS = ("HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE",
                "TORCH_HOME", "XDG_CACHE_HOME")
+_UNINS_RE = re.compile(r"^unins\d*\.(exe|dat)$", re.IGNORECASE)  # Inno-generated uninstaller
 _OFFLINE_FLAGS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
 _PROXY_SINK = "http://127.0.0.1:1"  # closed port → external HTTP fails fast
 _NO_PROXY = "127.0.0.1,localhost,::1"
@@ -91,19 +96,91 @@ def assert_offline_env(env: dict[str, str]) -> None:
         raise SmokeError(f"OFFLINE_ENV incomplete (global cache could mask): {missing}")
 
 
-# ── args ────────────────────────────────────────────────────────────────────
+# ── args: exactly one of --stage-root / --installed-root + --manifest ───────
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Cache-isolated offline-env frozen smoke")
-    parser.add_argument("--bundle", required=True, help="path to the bundle (kali-backend dir)")
+    parser = argparse.ArgumentParser(description="Production-shaped cache-isolated offline smoke")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--stage-root", help="the exact clean premium_stage root")
+    group.add_argument("--installed-root", help="the installed {app} root")
     parser.add_argument("--manifest", required=True, help="path to STAGE_MANIFEST.json")
     parser.add_argument("--port", type=int, default=3007)
     return parser.parse_args(argv)
 
 
-def verify_bundle_matches_manifest(bundle: Path, manifest_path: Path) -> None:
-    """Prove the bundle is the EXACT stage its manifest pins (no drift)."""
+def bundle_under_root(root: Path) -> Path:
+    """The backend bundle is the contained ``<root>/kali-backend`` — never elsewhere."""
+    bundle = (root / "kali-backend").resolve()
+    if not bundle.is_relative_to(root.resolve()):
+        raise SmokeError(f"bundle escapes root: {bundle} !< {root}")
+    return root / "kali-backend"
+
+
+def _root_entry_hashes(root: Path) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        base = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if not stage_policy.is_reparse_point(base / d)]
+        for fn in filenames:
+            fp = base / fn
+            if stage_policy.is_reparse_point(fp):
+                continue
+            rel = fp.relative_to(root).as_posix()
+            if rel == stage_policy.MANIFEST_NAME:
+                continue
+            h = hashlib.sha256()
+            with fp.open("rb") as fh:
+                for block in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(block)
+            entries[rel] = h.hexdigest()
+    return entries
+
+
+def verify_root_matches_manifest(root: Path, manifest_path: Path) -> None:
+    """Prove the WHOLE stage root is the exact stage its manifest pins (no drift)."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    stage_policy.verify_manifest(bundle, manifest)
+    stage_policy.verify_manifest(root, manifest)
+
+
+def verify_installed_root(root: Path, manifest_path: Path) -> None:
+    """Installed root: every stage-owned file matches the manifest; the only extras
+    allowed are Inno-generated uninstaller files (never arbitrary strays)."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stage_policy.validate_manifest_schema(manifest)
+    expected: dict[str, str] = manifest["entries"]
+    actual = _root_entry_hashes(root)
+    for rel, digest in expected.items():
+        if rel not in actual:
+            raise stage_policy.ManifestError(f"installed root missing stage file: {rel}")
+        if actual[rel] != digest:
+            raise stage_policy.ManifestError(f"installed root content mismatch: {rel}")
+    for rel in actual:
+        if rel not in expected and not _UNINS_RE.match(rel.rsplit("/", 1)[-1]):
+            raise stage_policy.ManifestError(f"unexpected file in installed root: {rel}")
+
+
+def new_instance_id() -> str:
+    """A fresh nonce we require the child /health to echo (foreign listeners fail)."""
+    return secrets.token_hex(16)
+
+
+def assert_port_free(port: int, host: str = "127.0.0.1") -> None:
+    """Fail-closed if anything already listens on ``port`` (a foreign server would
+    otherwise be mistaken for our freshly-launched bundle)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        if s.connect_ex((host, port)) == 0:
+            raise SmokeError(f"port {port} already in use — refusing to run the smoke")
+
+
+def check_health(health: dict, *, expected_instance_id: str, manifest_version: str) -> None:
+    """The child must echo OUR instance id and the MANIFEST version (not a dev import)."""
+    if health.get("desktop_instance_id") != expected_instance_id:
+        raise SmokeError(
+            f"desktop_instance_id {health.get('desktop_instance_id')!r} != ours "
+            f"{expected_instance_id!r} (foreign listener?)")
+    if health.get("version") != manifest_version:
+        raise SmokeError(
+            f"version {health.get('version')!r} != manifest {manifest_version!r}")
 
 
 # ── /live SLA ───────────────────────────────────────────────────────────────
@@ -149,15 +226,16 @@ def _post(url: str, body: dict, timeout: float = 180) -> tuple[int, bytes, str]:
         return e.code, e.read(), e.headers.get("Content-Type", "")
 
 
-def run_checks(base: str, bundle: Path) -> list[tuple[str, bool, str]]:
-    """Exercise the voice-critical paths against a running bundle."""
+def run_checks(base: str, bundle: Path, *, expected_instance_id: str,
+               manifest_version: str) -> list[tuple[str, bool, str]]:
+    """Exercise the voice-critical paths against OUR running bundle."""
     results: list[tuple[str, bool, str]] = []
     try:
         import numpy as np
         h = _get(f"{base}/health")
-        import kernel
-        ok = h.get("status") == "ok" and h.get("version") == kernel.__version__
-        check(results, "health", ok, f"status={h.get('status')} version={h.get('version')}")
+        check_health(h, expected_instance_id=expected_instance_id,
+                     manifest_version=manifest_version)  # our id + manifest version
+        check(results, "health", True, f"status={h.get('status')} version={h.get('version')}")
     except Exception as e:
         check(results, "health", False, repr(e))
     try:
@@ -195,21 +273,36 @@ def run_checks(base: str, bundle: Path) -> list[tuple[str, bool, str]]:
 
 def main(argv: list[str] | None = None) -> int:
     ns = parse_args(argv)
-    bundle = Path(ns.bundle).resolve()
     manifest = Path(ns.manifest).resolve()
+    manifest_version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+    root = Path(ns.stage_root or ns.installed_root).resolve()
     base = f"http://127.0.0.1:{ns.port}"
-    print(f"=== Frozen smoke (offline-env) vs {base} — bundle {bundle} ===")
-    verify_bundle_matches_manifest(bundle, manifest)  # exact stage before we launch it
+    print(f"=== Production-shaped frozen smoke vs {base} — root {root} ===")
+    # verify the WHOLE root against its manifest (stage = exact; installed = manifest
+    # files + Inno allowlist) BEFORE we launch anything.
+    if ns.installed_root:
+        verify_installed_root(root, manifest)
+    else:
+        verify_root_matches_manifest(root, manifest)
+    bundle = bundle_under_root(root)
+
+    assert_port_free(ns.port)  # a foreign listener must never be mistaken for us
+    instance_id = new_instance_id()
+    _out, _err = b"", b""
 
     with tempfile.TemporaryDirectory() as cache:
         env = build_offline_env(cache_root=Path(cache), base=dict(os.environ))
         env["KALI_PORT"] = str(ns.port)
+        env["KALI_DESKTOP_INSTANCE_ID"] = instance_id  # child must echo this in /health
         assert_offline_env(env)
         exe = bundle / "kali-backend.exe"
         t0 = time.monotonic()  # SLA origin — just before launch
-        proc = subprocess.Popen([str(exe)], env=env)
+        proc = subprocess.Popen([str(exe)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         def _poll() -> tuple[int, float]:
+            if proc.poll() is not None:  # our child died → never accept a foreign 200
+                return -1, 0.0
             start = time.monotonic()
             try:
                 with urllib.request.urlopen(f"{base}/live", timeout=2) as r:
@@ -221,20 +314,32 @@ def main(argv: list[str] | None = None) -> int:
         try:
             elapsed, latency = measure_live_sla(poller=_poll, deadline_s=1.0,
                                                 clock=time.monotonic, sleep=time.sleep, t0=t0)
+            if proc.poll() is not None:
+                raise SmokeError("backend process exited before /health — foreign listener")
             check(results, "live", True, f"200 in {elapsed:.3f}s (req {latency * 1000:.0f}ms)")
-            results += run_checks(base, bundle)
+            results += run_checks(base, bundle, expected_instance_id=instance_id,
+                                  manifest_version=manifest_version)
         except SmokeError as e:
             check(results, "live", False, str(e))
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _out, _err = _terminate_owned(proc)
 
     failed = [n for n, ok, _ in results if not ok]
+    if failed:
+        print(f"--- backend stdout ---\n{_out.decode(errors='replace')[-4000:]}", flush=True)
+        print(f"--- backend stderr ---\n{_err.decode(errors='replace')[-4000:]}", flush=True)
     print(f"\n{'ALL PASS' if not failed else 'FAILED: ' + ', '.join(failed)}")
     return 1 if failed else 0
+
+
+def _terminate_owned(proc: subprocess.Popen) -> tuple[bytes, bytes]:
+    """Terminate ONLY our own child and return its captured stdout/stderr."""
+    proc.terminate()
+    try:
+        return proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return proc.communicate()
 
 
 if __name__ == "__main__":

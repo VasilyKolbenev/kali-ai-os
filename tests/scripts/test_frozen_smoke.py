@@ -52,40 +52,118 @@ def test_assert_offline_env_accepts_complete(tmp_path: Path) -> None:
     fs.assert_offline_env(env)  # не поднимает
 
 
-# ── mandatory --bundle / --manifest ─────────────────────────────────────────
-def test_parse_args_requires_bundle_and_manifest() -> None:
+# ── F3: mandatory stage-root XOR installed-root + manifest ──────────────────
+def test_parse_args_requires_root_and_manifest() -> None:
     with pytest.raises(SystemExit):
-        fs.parse_args(["--port", "3007"])  # ни bundle, ни manifest
+        fs.parse_args(["--port", "3007"])  # no root, no manifest
 
 
-def test_parse_args_ok_with_bundle_and_manifest() -> None:
-    ns = fs.parse_args(["--bundle", "b", "--manifest", "m"])
-    assert ns.bundle == "b" and ns.manifest == "m"
+def test_parse_args_stage_root_ok() -> None:
+    ns = fs.parse_args(["--stage-root", "r", "--manifest", "m"])
+    assert ns.stage_root == "r" and ns.manifest == "m"
 
 
-# ── bundle content must match its STAGE_MANIFEST ────────────────────────────
-def _sealed_bundle(tmp_path: Path) -> tuple[Path, Path]:
-    bundle = tmp_path / "kali-backend"
-    (bundle / "_internal").mkdir(parents=True)
-    (bundle / "kali-backend.exe").write_bytes(b"BE")
-    (bundle / "_internal" / "lib.zip").write_bytes(b"L")
-    manifest = stage_policy.build_manifest(bundle, version="1.0.0-rc3",
-                                           git_sha="s", mode="internal", receipts=[])
-    mpath = tmp_path / "STAGE_MANIFEST.json"
+def test_parse_args_installed_root_ok() -> None:
+    ns = fs.parse_args(["--installed-root", "i", "--manifest", "m"])
+    assert ns.installed_root == "i"
+
+
+def test_parse_args_rejects_both_roots() -> None:
+    with pytest.raises(SystemExit):
+        fs.parse_args(["--stage-root", "r", "--installed-root", "i", "--manifest", "m"])
+
+
+# ── F3: production-shaped manifest of the WHOLE stage/install root ───────────
+def _sealed_stage_root(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "premium_stage"
+    (root / "kali-backend" / "_internal").mkdir(parents=True)
+    (root / "kali-backend" / "kali-backend.exe").write_bytes(b"BE")
+    (root / "kali-backend" / "_internal" / "lib.zip").write_bytes(b"L")
+    (root / "kali-desktop.exe").write_bytes(b"DT")
+    (root / "models").mkdir()
+    (root / "models" / "model.bin").write_bytes(b"W")
+    (root / "install-webview2.ps1").write_bytes(b"PS")
+    manifest = stage_policy.build_manifest(root, version="1.0.0-rc3", git_sha="a" * 40,
+                                           mode="internal", receipts=[])
+    mpath = root / stage_policy.MANIFEST_NAME
     mpath.write_text(json.dumps(manifest), encoding="utf-8")
-    return bundle, mpath
+    return root, mpath
 
 
-def test_bundle_manifest_match_ok(tmp_path: Path) -> None:
-    bundle, mpath = _sealed_bundle(tmp_path)
-    fs.verify_bundle_matches_manifest(bundle, mpath)  # не поднимает
+def test_verify_stage_root_matches_manifest_ok(tmp_path: Path) -> None:
+    root, mpath = _sealed_stage_root(tmp_path)
+    fs.verify_root_matches_manifest(root, mpath)  # whole root, not just the bundle
 
 
-def test_bundle_manifest_mismatch_fails(tmp_path: Path) -> None:
-    bundle, mpath = _sealed_bundle(tmp_path)
-    (bundle / "kali-backend.exe").write_bytes(b"DRIFTED")  # bundle разошёлся
+def test_verify_stage_root_detects_drift_outside_bundle(tmp_path: Path) -> None:
+    # F3#10: a drift in a stage-owned file OUTSIDE kali-backend (models/) — which the
+    # old bundle-only manifest missed — is now caught by the whole-root manifest.
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / "models" / "model.bin").write_bytes(b"TAMPERED")
     with pytest.raises(stage_policy.ManifestError):
-        fs.verify_bundle_matches_manifest(bundle, mpath)
+        fs.verify_root_matches_manifest(root, mpath)
+
+
+def test_verify_installed_root_allows_inno_generated(tmp_path: Path) -> None:
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / "unins000.exe").write_bytes(b"UNINST")  # Inno-generated uninstaller
+    (root / "unins000.dat").write_bytes(b"DAT")
+    fs.verify_installed_root(root, mpath)  # allowlisted → ok
+
+
+def test_verify_installed_root_rejects_unknown_extra(tmp_path: Path) -> None:
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / "stray.dll").write_bytes(b"X")  # neither manifest-owned nor Inno-generated
+    with pytest.raises(stage_policy.ManifestError):
+        fs.verify_installed_root(root, mpath)
+
+
+def test_bundle_is_contained_under_root(tmp_path: Path) -> None:
+    root, _ = _sealed_stage_root(tmp_path)
+    bundle = fs.bundle_under_root(root)
+    assert bundle == root / "kali-backend" and bundle.is_dir()
+
+
+# ── F3: port-free, instance-id, version-vs-manifest (foreign listener guard) ─
+def test_assert_port_free_ok_when_free() -> None:
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    fs.assert_port_free(port)  # nothing listening → ok
+
+
+def test_assert_port_free_raises_when_occupied() -> None:
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)
+    port = s.getsockname()[1]
+    try:
+        with pytest.raises(fs.SmokeError):
+            fs.assert_port_free(port)
+    finally:
+        s.close()
+
+
+def test_check_health_ok() -> None:
+    fs.check_health({"status": "ok", "version": "1.0.0-rc3", "desktop_instance_id": "ABC"},
+                    expected_instance_id="ABC", manifest_version="1.0.0-rc3")
+
+
+def test_check_health_foreign_instance_id_fails() -> None:
+    # a foreign listener that doesn't echo OUR instance id must never count
+    with pytest.raises(fs.SmokeError):
+        fs.check_health({"version": "1.0.0-rc3", "desktop_instance_id": "OTHER"},
+                        expected_instance_id="ABC", manifest_version="1.0.0-rc3")
+
+
+def test_check_health_version_mismatch_fails() -> None:
+    # version is compared to the manifest, not a dev-imported kernel
+    with pytest.raises(fs.SmokeError):
+        fs.check_health({"version": "9.9.9", "desktop_instance_id": "ABC"},
+                        expected_instance_id="ABC", manifest_version="1.0.0-rc3")
+
+
+def test_new_instance_id_is_unique_hex() -> None:
+    a, b = fs.new_instance_id(), fs.new_instance_id()
+    assert a != b and len(a) >= 16 and all(c in "0123456789abcdef" for c in a)
 
 
 # ── /live SLA: t0 → first HTTP 200 /live ≤ 1.0s ─────────────────────────────
