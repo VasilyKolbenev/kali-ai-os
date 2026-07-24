@@ -68,13 +68,32 @@ def _install(build_dir: Path, target: Path) -> None:
     print(f"Installed {len(EXPECTED_DLLS)} LGPL DLLs + LICENSE.txt -> {target}")
 
 
+def stage_write_forbidden(*, staged: bool) -> bool:
+    """External writes into the sealed premium_stage are forbidden (C2 lockdown).
+
+    The sealed stage is composed only by scripts/release/stage_composer.py, which
+    stages models/ffmpeg from the premium_assets source-of-truth. This installer
+    may refresh that SoT (no ``--stage``) but must never write the stage directly.
+    """
+    return bool(staged)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Install LGPL FFmpeg into models/ffmpeg/")
     parser.add_argument(
         "--stage", action="store_true",
-        help="also refresh dist_premium/premium_stage/models/ffmpeg (the shipped copy)",
+        help="DISABLED (C2): the sealed premium_stage is composed only by the stage composer",
     )
     args = parser.parse_args()
+
+    if stage_write_forbidden(staged=args.stage):
+        print(
+            "ERROR: --stage is disabled. The sealed premium_stage is composed only by "
+            "scripts/release/stage_composer.py; run without --stage to refresh the "
+            "models/ffmpeg source-of-truth.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -88,12 +107,6 @@ def main() -> None:
         print("Verified LICENSE is LGPL (not GPL).")
 
         _install(build_dir, ROOT / "models" / "ffmpeg")
-        if args.stage:
-            staged = ROOT / "dist_premium" / "premium_stage" / "models" / "ffmpeg"
-            if staged.parent.parent.exists():
-                _install(build_dir, staged)
-            else:
-                print("premium_stage not present — skipping --stage", file=sys.stderr)
 
     print("Done. Re-run with the F5 engine to confirm torchcodec loads the LGPL DLLs.")
 

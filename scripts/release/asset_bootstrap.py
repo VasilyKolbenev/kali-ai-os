@@ -1,0 +1,141 @@
+"""Non-destructive premium_assets bootstrap (C2, OPUS-103).
+
+The heavy voice assets currently live under ``dist_premium/premium_stage/models``
+and are reached through a legacy junction ``dist_premium/models``. The clean
+immutable stage needs a single canonical source-of-truth:
+
+    dist_premium/premium_assets/models/   (a PHYSICAL copy — never a junction)
+
+This module performs the one-time migration SAFELY:
+
+    copy assets -> count/hash verify -> write integrity manifest -> switch
+    (remove the legacy junction) -- and ONLY in that order.
+
+If the verify fails (or the copy sneaks in a reparse point) the migration ABORTS
+without deleting the legacy junction: the old assets stay reachable, nothing is
+moved destructively, and a re-run is safe (idempotent).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Callable
+
+from scripts.release import stage_policy
+
+_MANIFEST_NAME = "PREMIUM_ASSETS.sha256.json"
+
+Copier = Callable[[Path, Path], None]
+
+
+class BootstrapError(Exception):
+    """A premium_assets bootstrap could not complete safely (fail-closed)."""
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _dir_hashes(root: Path) -> dict[str, str]:
+    """``{relpath: sha256}`` for every regular file under ``root`` (no reparse)."""
+    out: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        base = Path(dirpath)
+        # never descend into a junction/symlinked dir (would follow a reparse)
+        dirnames[:] = [d for d in dirnames if not stage_policy.is_reparse_point(base / d)]
+        for fn in filenames:
+            fp = base / fn
+            if stage_policy.is_reparse_point(fp):
+                continue
+            out[fp.relative_to(root).as_posix()] = _sha256_file(fp)
+    return out
+
+
+def _default_copier(src: Path, dst: Path) -> None:
+    shutil.copytree(src, dst)  # symlinks=False → physical copy of content
+
+
+def _verify_copy(source: Path, sot: Path) -> None:
+    """Hash-gate: the SoT must reproduce ``source`` file-for-file, byte-for-byte."""
+    src_h = _dir_hashes(source)
+    dst_h = _dir_hashes(sot)
+    if src_h != dst_h:
+        missing = sorted(set(src_h) - set(dst_h))
+        extra = sorted(set(dst_h) - set(src_h))
+        changed = sorted(k for k in src_h if k in dst_h and src_h[k] != dst_h[k])
+        raise BootstrapError(
+            f"asset copy verify failed (missing={missing} extra={extra} changed={changed})"
+        )
+
+
+def _assert_physical(sot: Path) -> None:
+    """Physical-copy-only: a reparse point in the SoT is a migration error."""
+    try:
+        stage_policy.assert_tree_reparse_free(sot)
+    except stage_policy.ReparseError as e:
+        raise BootstrapError(f"SoT is not a physical copy: {e}") from e
+
+
+def _remove_legacy_junction(legacy: Path) -> None:
+    """Remove the legacy junction link only (never its target's content)."""
+    if stage_policy.is_reparse_point(legacy):
+        os.rmdir(legacy)  # drops the reparse point; the real target survives
+
+
+def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None) -> str:
+    """Migrate heavy assets to dist_premium/premium_assets/models, safely.
+
+    Returns ``"already"`` when the SoT already exists and verifies against its
+    integrity manifest (idempotent no-op), else ``"bootstrapped"``.
+
+    Raises:
+        BootstrapError: on a failed copy verify, a non-physical copy, a missing
+            legacy source, or a drifted existing SoT. The legacy junction is left
+            intact on every failure path.
+    """
+    copier = copier or _default_copier
+    assets_dir = dist_premium / "premium_assets"
+    sot = assets_dir / "models"
+    manifest = assets_dir / _MANIFEST_NAME
+
+    if sot.is_dir() and manifest.is_file():
+        stored: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
+        if _dir_hashes(sot) == stored.get("entries"):
+            return "already"
+        raise BootstrapError("premium_assets SoT drifted from its integrity manifest")
+
+    legacy = dist_premium / "models"
+    if not legacy.exists():
+        raise BootstrapError(f"legacy assets junction not found: {legacy}")
+    source = legacy.resolve()
+    if not source.is_dir():
+        raise BootstrapError(f"legacy assets source is not a directory: {source}")
+
+    stage_policy.assert_safe_dest(dist_premium, sot)
+    stage_policy.assert_distinct(source, sot)
+
+    if sot.exists():
+        shutil.rmtree(sot)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    copier(source, sot)
+
+    try:
+        _assert_physical(sot)
+        _verify_copy(source, sot)  # the hash-gate — must pass BEFORE the switch
+    except BootstrapError:
+        shutil.rmtree(sot, ignore_errors=True)  # non-destructive: drop partial SoT
+        raise  # legacy junction untouched
+
+    manifest.write_text(
+        json.dumps({"entries": _dir_hashes(sot)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _remove_legacy_junction(legacy)  # switch: only AFTER a verified copy
+    return "bootstrapped"
