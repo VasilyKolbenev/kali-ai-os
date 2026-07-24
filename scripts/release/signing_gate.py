@@ -91,14 +91,21 @@ def build_sign_command(file: Path, *, selector: dict[str, Any], timestamp_url: s
 
 
 def _inspect_command(file: Path, *, powershell: str = "powershell") -> list[str]:
-    """PowerShell Get-AuthenticodeSignature as STRUCTURED JSON (no substring parsing)."""
+    """PowerShell Get-AuthenticodeSignature as STRUCTURED JSON (no substring parsing).
+
+    The path is embedded in a single-quoted PS literal with apostrophes doubled
+    (so ``C:\\O'Malley\\app.exe`` is safe), and the whole script is passed via
+    ``-EncodedCommand`` (base64 UTF-16LE) so no shell/cmd quoting can mangle it."""
+    import base64
+    ps_path = str(file).replace("'", "''")  # escape for a PS single-quoted literal
     script = (
-        f"$s = Get-AuthenticodeSignature -LiteralPath '{file}'; "
+        f"$s = Get-AuthenticodeSignature -LiteralPath '{ps_path}'; "
         "[pscustomobject]@{ Status = [string]$s.Status; "
         "Thumbprint = if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint } else { '' }; "
         "Timestamped = [bool]$s.TimeStamperCertificate } | ConvertTo-Json -Compress"
     )
-    return [powershell, "-NoProfile", "-NonInteractive", "-Command", script]
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
 
 
 def inspect_signature(file: Path, *, runner: Runner) -> dict[str, Any]:
@@ -130,7 +137,10 @@ def verify_signed(file: Path, *, expected_thumbprint: str, inspector: Inspector)
         raise SigningGateError(
             f"WRONG_SIGNER: thumbprint {report.get('thumbprint')!r} != expected")
     if not report.get("timestamped"):
-        raise SigningGateError("NO_TIMESTAMP: signature is not RFC3161-timestamped")
+        # The inspector proves a countersignature (TimeStamperCertificate) exists; the
+        # sign path requests an RFC3161 /tr timestamp, but the inspector does not
+        # structurally distinguish RFC3161 from a legacy Authenticode timestamp.
+        raise SigningGateError("NO_TIMESTAMP: signature has no timestamp countersignature")
 
 
 def powershell_inspector(file: Path) -> dict[str, Any]:

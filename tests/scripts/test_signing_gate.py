@@ -179,3 +179,31 @@ def test_write_internal_marker(tmp_path: Path) -> None:
 def test_mark_internal_unsigned_removed() -> None:
     # F4#7: post-build EXE rename is gone — naming is done by ISCC OutputBaseFilename
     assert not hasattr(sg, "mark_internal_unsigned")
+
+
+# ── G7: apostrophe-safe inspection (EncodedCommand + doubled PS quote) ───────
+def test_inspect_command_apostrophe_path_is_safe(tmp_path: Path) -> None:
+    import base64
+    p = tmp_path / "O'Malley" / "app.exe"
+    cmd = sg._inspect_command(p)
+    assert cmd[-2] == "-EncodedCommand"
+    decoded = base64.b64decode(cmd[-1]).decode("utf-16-le")
+    assert "O''Malley" in decoded  # the apostrophe is doubled in the PS single-quoted literal
+    assert "Get-AuthenticodeSignature -LiteralPath" in decoded
+
+
+def test_powershell_inspector_reads_apostrophe_path_end_to_end(tmp_path: Path) -> None:
+    # G7: the REAL PowerShell inspector must read a signature from a path containing an
+    # apostrophe without a quoting failure (a real signed EXE is copied in).
+    import shutil
+    import sys as _sys
+    if _sys.platform != "win32":
+        pytest.skip("Authenticode inspection is Windows-only")
+    d = tmp_path / "O'Malley Corp"; d.mkdir()
+    exe = d / "app.exe"
+    shutil.copy2(_sys.executable, exe)  # a real (often embedded-signed) Windows exe
+    try:
+        report = sg.powershell_inspector(exe)
+    except sg.SigningGateError:
+        pytest.skip("PowerShell inspection unavailable")
+    assert set(report) == {"status", "thumbprint", "timestamped"}  # structured, no quoting break

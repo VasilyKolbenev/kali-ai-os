@@ -198,6 +198,22 @@ def test_new_instance_id_is_unique_hex() -> None:
     assert a != b and len(a) >= 16 and all(c in "0123456789abcdef" for c in a)
 
 
+# ── G8: drain child output to log files (no undrained PIPE deadlock) ─────────
+def test_tail_bounded(tmp_path: Path) -> None:
+    p = tmp_path / "log.txt"
+    p.write_bytes(b"A" * 10000)
+    assert fs._tail(p, n_bytes=100) == "A" * 100
+
+
+def test_tail_missing_file(tmp_path: Path) -> None:
+    assert fs._tail(tmp_path / "nope.log") == ""
+
+
+def test_main_does_not_use_undrained_pipe() -> None:
+    src = Path(fs.__file__).read_text(encoding="utf-8")
+    assert "stdout=subprocess.PIPE" not in src and "stderr=subprocess.PIPE" not in src
+
+
 # ── /live SLA: t0 → first HTTP 200 /live ≤ 1.0s ─────────────────────────────
 def test_measure_sla_ok_under_deadline() -> None:
     clock = iter([0.0, 0.3])

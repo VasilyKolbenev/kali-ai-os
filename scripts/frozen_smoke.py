@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
 import re
@@ -283,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
 
     assert_port_free(ns.port)  # a foreign listener must never be mistaken for us
     instance_id = new_instance_id()
-    _out, _err = b"", b""
+    results: list[tuple[str, bool, str]] = []
 
     with tempfile.TemporaryDirectory() as cache:
         env = build_offline_env(cache_root=Path(cache), base=dict(os.environ))
@@ -291,50 +290,59 @@ def main(argv: list[str] | None = None) -> int:
         env["KALI_DESKTOP_INSTANCE_ID"] = instance_id  # child must echo this in /health
         assert_offline_env(env)
         exe = bundle / "kali-backend.exe"
+        # G8: stream the child's stdout/stderr to log FILES, never to an undrained
+        # PIPE (a full PIPE buffer would deadlock the child mid-run).
+        out_log, err_log = Path(cache) / "backend.out.log", Path(cache) / "backend.err.log"
         t0 = time.monotonic()  # SLA origin — just before launch
-        proc = subprocess.Popen([str(exe)], env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with out_log.open("wb") as fo, err_log.open("wb") as fe:
+            proc = subprocess.Popen([str(exe)], env=env, stdout=fo, stderr=fe)
 
-        def _poll() -> tuple[int, float]:
-            if proc.poll() is not None:  # our child died → never accept a foreign 200
-                return -1, 0.0
-            start = time.monotonic()
+            def _poll() -> tuple[int, float]:
+                if proc.poll() is not None:  # our child died → never accept a foreign 200
+                    return -1, 0.0
+                start = time.monotonic()
+                try:
+                    with urllib.request.urlopen(f"{base}/live", timeout=2) as r:
+                        return r.status, time.monotonic() - start
+                except Exception:
+                    return 0, time.monotonic() - start
+
             try:
-                with urllib.request.urlopen(f"{base}/live", timeout=2) as r:
-                    return r.status, time.monotonic() - start
-            except Exception:
-                return 0, time.monotonic() - start
+                elapsed, latency = measure_live_sla(poller=_poll, deadline_s=1.0,
+                                                    clock=time.monotonic, sleep=time.sleep, t0=t0)
+                if proc.poll() is not None:
+                    raise SmokeError("backend exited before /health — foreign listener")
+                check(results, "live", True, f"200 in {elapsed:.3f}s (req {latency * 1000:.0f}ms)")
+                results += run_checks(base, bundle, expected_instance_id=instance_id,
+                                      manifest_version=manifest_version)
+            except SmokeError as e:
+                check(results, "live", False, str(e))
+            finally:
+                _terminate_owned(proc)  # terminate ONLY our child (output already on disk)
 
-        results: list[tuple[str, bool, str]] = []
-        try:
-            elapsed, latency = measure_live_sla(poller=_poll, deadline_s=1.0,
-                                                clock=time.monotonic, sleep=time.sleep, t0=t0)
-            if proc.poll() is not None:
-                raise SmokeError("backend process exited before /health — foreign listener")
-            check(results, "live", True, f"200 in {elapsed:.3f}s (req {latency * 1000:.0f}ms)")
-            results += run_checks(base, bundle, expected_instance_id=instance_id,
-                                  manifest_version=manifest_version)
-        except SmokeError as e:
-            check(results, "live", False, str(e))
-        finally:
-            _out, _err = _terminate_owned(proc)
+        if any(not ok for _, ok, _ in results):  # read tails BEFORE the temp dir is removed
+            print(f"--- backend stdout (tail) ---\n{_tail(out_log)}", flush=True)
+            print(f"--- backend stderr (tail) ---\n{_tail(err_log)}", flush=True)
 
     failed = [n for n, ok, _ in results if not ok]
-    if failed:
-        print(f"--- backend stdout ---\n{_out.decode(errors='replace')[-4000:]}", flush=True)
-        print(f"--- backend stderr ---\n{_err.decode(errors='replace')[-4000:]}", flush=True)
     print(f"\n{'ALL PASS' if not failed else 'FAILED: ' + ', '.join(failed)}")
     return 1 if failed else 0
 
 
-def _terminate_owned(proc: subprocess.Popen) -> tuple[bytes, bytes]:
-    """Terminate ONLY our own child and return its captured stdout/stderr."""
+def _terminate_owned(proc: subprocess.Popen) -> None:
+    """Terminate ONLY our own child (its output is already streamed to log files)."""
     proc.terminate()
     try:
-        return proc.communicate(timeout=10)
+        proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
-        return proc.communicate()
+        proc.wait()
+
+
+def _tail(path: Path, n_bytes: int = 4000) -> str:
+    """Last ``n_bytes`` of a log file, decoded leniently (bounded output on error)."""
+    data = path.read_bytes() if path.is_file() else b""
+    return data[-n_bytes:].decode(errors="replace")
 
 
 if __name__ == "__main__":
