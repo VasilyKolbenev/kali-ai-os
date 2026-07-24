@@ -171,6 +171,40 @@ def write_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, versi
     return receipt
 
 
+def capture_head_state(repo: Path) -> tuple[str, bool]:
+    """Snapshot (HEAD sha, is_clean) — taken BEFORE a build and re-checked after."""
+    return _git(repo, "rev-parse", "HEAD"), not bool(_git(repo, "status", "--porcelain"))
+
+
+def collect_toolchain(commands: list[tuple[str, list[str]]]) -> str:
+    """Toolchain string from the ACTUALLY-executed version commands (no hardcoded
+    labels): e.g. ``python=Python 3.12.1; pyinstaller=6.3.0``."""
+    parts: list[str] = []
+    for name, cmd in commands:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+            parts.append(f"{name}={lines[0].strip() if lines else 'unknown'}")
+        except OSError:
+            parts.append(f"{name}=unavailable")
+    return "; ".join(parts)
+
+
+def finalize_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, version: str,
+                           build_kind: str, toolchain: str, head_before: str) -> dict[str, Any]:
+    """Write a BUILD_RECEIPT after a successful build, refusing if HEAD moved during
+    it (the artifact then would not match the committed source)."""
+    head_after, clean_after = capture_head_state(repo)
+    if head_after != head_before:
+        raise ReceiptError(f"HEAD_MOVED: {head_before} -> {head_after} during the build")
+    receipt = create_receipt(artifact, git_sha=head_after, version=version,
+                             dirty=not clean_after, build_kind=build_kind, toolchain=toolchain)
+    receipt_path.write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return receipt
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI (build protocol): write <artifact> <receipt> <version> <kind> <toolchain> [--repo R]."""
     args = list(sys.argv[1:] if argv is None else argv)

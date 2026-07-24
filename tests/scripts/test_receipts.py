@@ -212,3 +212,60 @@ def test_write_build_receipt_cli_writes_real_git_sha(tmp_path: Path) -> None:
     written = json.loads(rp.read_text(encoding="utf-8"))
     assert written["git_sha"] == _head(repo)
     assert written["dirty"] is False
+
+
+# ── G2: build-wrapper provenance (HEAD before/after + real toolchain) ────────
+def test_capture_head_state_clean_then_dirty(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path)
+    sha, clean = rc.capture_head_state(repo)
+    assert sha == _head(repo) and clean is True
+    (repo / "seed.txt").write_text("changed", encoding="utf-8")
+    _, clean2 = rc.capture_head_state(repo)
+    assert clean2 is False
+
+
+def test_collect_toolchain_uses_real_command_output() -> None:
+    import sys as _sys
+    tc = rc.collect_toolchain([("python", [_sys.executable, "--version"])])
+    assert tc.startswith("python=") and "Python" in tc  # real output, not a label
+
+
+def test_finalize_build_receipt_rejects_head_move(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path)
+    head_before = _head(repo)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    # HEAD moves during the "build"
+    (repo / "seed.txt").write_text("y", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "commit", "-am", "moved"], check=True, capture_output=True)
+    with pytest.raises(rc.ReceiptError) as exc:
+        rc.finalize_build_receipt(art, tmp_path / "r.json", repo=repo, version="v1",
+                                  build_kind="pyinstaller", toolchain="python=x", head_before=head_before)
+    assert "HEAD_MOVED" in str(exc.value)
+
+
+def test_finalize_build_receipt_writes_current_head(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path)
+    head_before = _head(repo)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    rp = tmp_path / "r.json"
+    rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="pyinstaller",
+                              toolchain="python=Python 3.12", head_before=head_before)
+    written = json.loads(rp.read_text(encoding="utf-8"))
+    assert written["git_sha"] == head_before and written["dirty"] is False
+    assert written["toolchain"] == "python=Python 3.12"
+
+
+def test_stale_receipt_from_other_commit_rejected(tmp_path: Path) -> None:
+    # G2 regression: a receipt built at commit A must be refused when composing at B.
+    repo = _git_repo(tmp_path)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    rp = tmp_path / "r.json"
+    head_a = _head(repo)
+    rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="k",
+                              toolchain="t", head_before=head_a)
+    (repo / "seed.txt").write_text("b", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "commit", "-am", "B"], check=True, capture_output=True)
+    head_b = _head(repo)
+    with pytest.raises(rc.ReceiptError) as exc:
+        rc.require_receipt(art, rp, expected_git_sha=head_b)  # composing at B
+    assert "GIT_SHA_MISMATCH" in str(exc.value)

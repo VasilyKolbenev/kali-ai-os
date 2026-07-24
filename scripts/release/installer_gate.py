@@ -79,6 +79,14 @@ def assert_iss_internal_naming(iss_text: str) -> None:
         raise InstallerGateError("NO_INTERNAL_GUARD: #ifdef Internal guard missing")
 
 
+def verify_iss(iss_text: str) -> None:
+    """Full .iss wiring gate (run by the .bat before compose): stage-only Sources,
+    Setup + uninstaller signing, and INTERNAL-at-compile naming."""
+    assert_iss_stage_only(iss_text)
+    assert_iss_signs_setup_and_uninstaller(iss_text)
+    assert_iss_internal_naming(iss_text)
+
+
 def _die(msg: str) -> None:
     print(f"installer_gate: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -103,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             signing_gate.verify_signed(Path(args[1]), expected_thumbprint=args[2],
                                        inspector=signing_gate.powershell_inspector)
             print("verified")
+            return 0
+        if args[0] == "verify-iss":
+            verify_iss(Path(args[1]).read_text(encoding="utf-8"))
+            print("ok")
             return 0
     except (InstallerGateError, signing_gate.SigningGateError) as e:
         _die(str(e))

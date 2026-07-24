@@ -151,6 +151,18 @@ def test_bat_cmd_invocation_rejects_unknown_mode() -> None:
     assert "was unexpected" not in out and "syntax" not in out
 
 
+def test_bat_cmd_invocation_accepts_valid_mode_past_gate() -> None:
+    # G1: a VALID mode (internal, release-status distributable=false) must parse and
+    # PASS the mode gate — the for/f that runs installer_gate must actually execute.
+    # Execution then reaches the backend-not-built check, NOT "rejected build mode".
+    if sys.platform != "win32":
+        pytest.skip("cmd.exe only on Windows")
+    proc = _run_bat("internal")
+    out = (proc.stdout + proc.stderr).lower()
+    assert "rejected build mode" not in out       # the gate parsed + accepted it
+    assert "build mode: internal" in out          # the validated mode was set (for/f ran)
+
+
 def test_main_write_marker(tmp_path: Path) -> None:
     # F4#7: naming is done by ISCC OutputBaseFilename — the CLI only drops the marker
     rc = ig.main(["write-marker", str(tmp_path), "1.0.0-rc3"])
@@ -160,3 +172,11 @@ def test_main_write_marker(tmp_path: Path) -> None:
 
 def test_real_iss_internal_naming() -> None:
     ig.assert_iss_internal_naming(ISS.read_text(encoding="utf-8"))
+
+
+def test_real_iss_passes_verify_iss() -> None:
+    ig.verify_iss(ISS.read_text(encoding="utf-8"))
+
+
+def test_main_verify_iss_ok() -> None:
+    assert ig.main(["verify-iss", str(ISS)]) == 0

@@ -12,6 +12,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.release import receipts as rc  # noqa: E402
+
 ROOT = Path(__file__).parent.parent
 ENTRY = ROOT / "kernel" / "entry.py"
 DIST = ROOT / "dist_premium"
@@ -297,6 +300,10 @@ def main() -> None:
 
     cmd.append(str(ENTRY))
 
+    # G2: HEAD + clean-state captured BEFORE the build; the receipt (written only on
+    # success, below) re-checks HEAD didn't move and derives dirty from git itself.
+    head_before, _clean_before = rc.capture_head_state(ROOT)
+
     print(f"Building Premium {NAME} (F5 + CUDA torch)...")
     result = subprocess.run(cmd, cwd=str(ROOT))
 
@@ -310,6 +317,17 @@ def main() -> None:
             total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
             print(f"\nSuccess! Built Premium backend at {out_dir}")
             print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
+            # BUILD_RECEIPT — real build-time provenance (toolchain from actual cmds).
+            toolchain = rc.collect_toolchain([
+                ("python", [sys.executable, "--version"]),
+                ("pyinstaller", [sys.executable, "-m", "PyInstaller", "--version"]),
+            ])
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            receipt_path = DIST / f"{NAME}.BUILD_RECEIPT.json"
+            rc.finalize_build_receipt(out_dir, receipt_path, repo=ROOT, version=version,
+                                      build_kind="pyinstaller-onedir", toolchain=toolchain,
+                                      head_before=head_before)
+            print(f"BUILD_RECEIPT written: {receipt_path}")
     else:
         print(f"\nBuild failed with exit code {result.returncode}")
         sys.exit(1)
