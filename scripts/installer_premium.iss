@@ -22,7 +22,13 @@ DefaultGroupName=KALI
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName} {#AppVersion}
 OutputDir=..\dist_premium\installer
+; INTERNAL build (/DInternal): name the Setup AND every DiskSpanning .bin slice
+; INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE at compile time — never a post-build rename.
+#ifdef Internal
+OutputBaseFilename=KALI-Premium-Setup-{#AppVersion}-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE
+#else
 OutputBaseFilename=KALI-Premium-Setup-{#AppVersion}
+#endif
 Compression=lzma2/ultra64
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4

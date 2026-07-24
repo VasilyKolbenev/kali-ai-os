@@ -70,6 +70,15 @@ def assert_iss_signs_setup_and_uninstaller(iss_text: str) -> None:
         raise InstallerGateError("NO_SETUP_SIGN: SignTool= directive missing")
 
 
+def assert_iss_internal_naming(iss_text: str) -> None:
+    """An internal build must name Setup AND every slice INTERNAL at ISCC time
+    (a conditional OutputBaseFilename), never by a post-build EXE rename."""
+    if "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE" not in iss_text:
+        raise InstallerGateError("NO_INTERNAL_NAMING: conditional INTERNAL OutputBaseFilename missing")
+    if "#ifdef Internal" not in iss_text:
+        raise InstallerGateError("NO_INTERNAL_GUARD: #ifdef Internal guard missing")
+
+
 def _die(msg: str) -> None:
     print(f"installer_gate: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -79,18 +88,21 @@ def main(argv: list[str] | None = None) -> int:
     """CLI consumed by build_installer_premium.bat."""
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
-        _die("usage: installer_gate <resolve-mode|mark-internal> ...")
+        _die("usage: installer_gate <resolve-mode|write-marker> ...")
     try:
         if args[0] == "resolve-mode":
             mode_arg, status = args[1], Path(args[2])
             mode = resolve_build_mode(mode_arg, distributable=read_distributable(status))
             print(mode)
             return 0
-        if args[0] == "mark-internal":
-            renamed, _marker = signing_gate.mark_internal_unsigned(
-                Path(args[1]), version=args[2]
-            )
-            print(renamed)
+        if args[0] == "write-marker":
+            marker = signing_gate.write_internal_marker(Path(args[1]), version=args[2])
+            print(marker)
+            return 0
+        if args[0] == "verify-setup":
+            signing_gate.verify_signed(Path(args[1]), expected_thumbprint=args[2],
+                                       inspector=signing_gate.powershell_inspector)
+            print("verified")
             return 0
     except (InstallerGateError, signing_gate.SigningGateError) as e:
         _die(str(e))

@@ -18,6 +18,9 @@ from pathlib import Path
 
 # Канонический VERSION блока (spec 2026-07-17, owner-gate).
 VERSION = "1.0.0-rc3"
+# Тестовый expected-signer thumbprint (40-hex, SHA-1 cert thumbprint form).
+SIGNER_THUMBPRINT = "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"
+_UNSET = object()  # sentinel: "thumbprint not specified" (default it for distributable)
 BURNED_VERSIONS = ["1.0.0-rc1", "1.0.0-rc2"]
 # Реальный frozen rc2 (release-status.json) — не совпадёт с крошечными тест-байтами.
 FROZEN_RC2_SHA = "E0A0B2A395DD5C1D6A42ED82E235AD6A7CB9768409D71F70ED0CC91E5C5B5C1A"
@@ -217,7 +220,7 @@ def write_all_desktop(repo: Path, version: str, mobile_version: str = "0.1.0+1")
 def write_status(repo: Path, *, distributable=True, frozen=None,
                  burned=None, canonical: str | None = None,
                  drop_frozen: bool = False, raw: str | None = None,
-                 expected_signer: str | None = None) -> None:
+                 expected_signer_thumbprint=_UNSET) -> None:
     if raw is not None:
         (repo / "release-status.json").write_text(raw, encoding="utf-8")
         return
@@ -228,8 +231,13 @@ def write_status(repo: Path, *, distributable=True, frozen=None,
     }
     if distributable is not _ABSENT:
         data["distributable"] = distributable
-    if expected_signer is not None:
-        data["expected_signer"] = expected_signer
+    # Default: a distributable=true status carries a valid signer thumbprint (so
+    # unrelated-axis overrides pass the schema). Pass None to omit it, or a value.
+    if expected_signer_thumbprint is _UNSET:
+        if distributable is True:
+            data["expected_signer_thumbprint"] = SIGNER_THUMBPRINT
+    elif expected_signer_thumbprint is not None:
+        data["expected_signer_thumbprint"] = expected_signer_thumbprint
     if not drop_frozen:
         default_frozen = [{"name": "old.exe", "sha256": FROZEN_RC2_SHA, "why": "dnd"}]
         data["frozen_artifacts"] = default_frozen if frozen is None else frozen

@@ -11,10 +11,11 @@ EXE signing in signed mode).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from scripts.release import installer_gate, signing_gate, stage_composer
 
@@ -60,21 +61,37 @@ def _real_materializer(stage: Path) -> None:
     materialize_symlinks(stage)
 
 
-def _real_signer(mode: str, *, signtool: str, selector: dict[str, Any],
-                 expected_signer: str, timestamp_url: str) -> Signer:
+def _resolve_signtool(env: dict[str, str]) -> str | None:
+    import shutil
+    return env.get("KALI_SIGN_SIGNTOOL") or shutil.which("signtool") or shutil.which("signtool.exe")
+
+
+def build_signing(mode: str, *, env: dict[str, str]) -> Signer:
+    """Build the inner-EXE signer from a VALIDATED, owner-supplied env contract.
+
+    For a signed build this runs the fail-closed preflight up front (so it aborts
+    BEFORE any stage mutation): exactly one selector (PFX xor store/HSM thumbprint),
+    a signtool, and an expected signer thumbprint. Internal builds get a no-op."""
+    if mode != "signed":
+        return lambda stage, m: None
+    selector = signing_gate.resolve_selector(
+        pfx=env.get("KALI_SIGN_PFX"), pfx_pass=env.get("KALI_SIGN_PFX_PASS"),
+        thumbprint=env.get("KALI_SIGN_THUMBPRINT"))
+    signtool = _resolve_signtool(env)
+    expected_thumbprint = env.get("KALI_SIGN_EXPECTED_THUMBPRINT", "")
+    timestamp_url = env.get("KALI_SIGN_TR_URL", "http://timestamp.digicert.com")
+    signing_gate.preflight("signed", selector=selector, signtool=signtool,
+                           expected_thumbprint=expected_thumbprint)
+
     def _sign(stage: Path, m: str) -> None:
-        if m != "signed":
-            return  # internal build: inner EXEs stay unsigned by design
-        def _run(cmd: list[str]) -> tuple[int, str]:
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-            return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
         for exe in (stage / "kali-desktop.exe", stage / "kali-backend" / "kali-backend.exe"):
-            rc_code, out = _run(signing_gate.build_sign_command(
-                exe, selector=selector, timestamp_url=timestamp_url, signtool=signtool))
-            if rc_code != 0:
-                raise signing_gate.SigningGateError(f"inner sign failed: {exe}: {out[:200]}")
-            signing_gate.verify_signed(exe, signtool=signtool,
-                                       expected_signer=expected_signer, runner=_run)
+            proc = subprocess.run(signing_gate.build_sign_command(
+                exe, selector=selector, timestamp_url=timestamp_url, signtool=signtool),
+                capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise signing_gate.SigningGateError(f"inner sign failed: {exe}: {proc.stderr[:200]}")
+            signing_gate.verify_signed(exe, expected_thumbprint=expected_thumbprint,
+                                       inspector=signing_gate.powershell_inspector)
     return _sign
 
 
@@ -92,13 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = installer_gate.resolve_build_mode(
         mode, distributable=installer_gate.read_distributable(status)
     )
-    signer: Signer = lambda stage, m: None
-    if mode == "signed":
-        selector = signing_gate.resolve_selector(
-            pfx=None, pfx_pass=None, thumbprint="__owner_thumbprint__")  # owner-provided
-        signer = _real_signer(mode, signtool="signtool.exe", selector=selector,
-                              expected_signer="__owner_signer__",
-                              timestamp_url="http://timestamp.digicert.com")
+    signer = build_signing(mode, env=dict(os.environ))  # preflight BEFORE compose
     stage = compose(repo, dist, tauri, mode=mode, version=version, git_sha=git_sha,
                     materializer=_real_materializer, signer=signer)
     print(stage)

@@ -12,6 +12,7 @@ import pytest
 from scripts.release import signing_gate as sg
 
 SIGNER = "KALI Labs LLC"
+THUMB = "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"  # expected signer thumbprint
 TS = "http://timestamp.digicert.com"
 
 
@@ -57,35 +58,35 @@ def test_require_signing_by_mode() -> None:
     assert sg.require_signing("internal") is False
 
 
-# ── preflight (fail-closed in signed mode) ──────────────────────────────────
+# ── preflight (fail-closed in signed mode; expects a signer THUMBPRINT) ──────
 def test_preflight_internal_ok_without_anything() -> None:
-    sg.preflight("internal", selector=None, signtool=None, expected_signer=None)  # ok
+    sg.preflight("internal", selector=None, signtool=None, expected_thumbprint=None)  # ok
 
 
 def test_preflight_signed_fails_without_selector() -> None:
     with pytest.raises(sg.SigningGateError) as exc:
         sg.preflight("signed", selector=None, signtool="signtool.exe",
-                     expected_signer=SIGNER)
+                     expected_thumbprint=THUMB)
     assert "SELECTOR" in str(exc.value)
 
 
 def test_preflight_signed_fails_without_signtool() -> None:
     sel = sg.resolve_selector(pfx="c.pfx", pfx_pass=None, thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool=None, expected_signer=SIGNER)
+        sg.preflight("signed", selector=sel, signtool=None, expected_thumbprint=THUMB)
     assert "SIGNTOOL" in str(exc.value)
 
 
-def test_preflight_signed_fails_without_expected_signer() -> None:
+def test_preflight_signed_fails_without_expected_thumbprint() -> None:
     sel = sg.resolve_selector(pfx="c.pfx", pfx_pass=None, thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_signer="")
+        sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_thumbprint="")
     assert "SIGNER" in str(exc.value)
 
 
 def test_preflight_signed_ok_when_complete() -> None:
     sel = sg.resolve_selector(pfx="c.pfx", pfx_pass="p", thumbprint=None)
-    sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_signer=SIGNER)
+    sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_thumbprint=THUMB)
 
 
 # ── sign command: SHA256 digest + RFC3161 SHA256 timestamp ──────────────────
@@ -111,55 +112,70 @@ def test_sign_command_thumbprint_selector(tmp_path: Path) -> None:
     assert "/f" not in cmd
 
 
-# ── verify_signed: Authenticode chain + expected signer + timestamp ─────────
-_GOOD_OUT = (
-    "Verifying: app.exe\n"
-    "Signing Certificate Chain:\n"
-    f"    Issued to: {SIGNER}\n"
-    "The signature is timestamped: Fri Jul 24 10:00:00 2026\n"
-    "Successfully verified: app.exe\n"
-)
+# ── structured Authenticode inspection (no free-substring parsing) ──────────
+def _report(status="Valid", thumbprint=THUMB, timestamped=True) -> dict:
+    return {"status": status, "thumbprint": thumbprint, "timestamped": timestamped}
 
 
-def test_verify_signed_ok_when_chain_signer_timestamp_present(tmp_path: Path) -> None:
+def test_inspect_signature_parses_structured_json(tmp_path: Path) -> None:
+    import json
     f = tmp_path / "app.exe"; f.write_bytes(b"x")
-    sg.verify_signed(f, signtool="st.exe", expected_signer=SIGNER,
-                     runner=lambda cmd: (0, _GOOD_OUT))  # не поднимает
+    out = json.dumps({"Status": "Valid", "Thumbprint": "a1b2c3", "Timestamped": True})
+    report = sg.inspect_signature(f, runner=lambda cmd: (0, out))
+    assert report["status"] == "Valid"
+    assert report["thumbprint"] == "A1B2C3"       # normalized upper
+    assert report["timestamped"] is True
 
 
-def test_verify_signed_raises_on_nonzero(tmp_path: Path) -> None:
+def test_inspect_signature_nonzero_raises(tmp_path: Path) -> None:
+    f = tmp_path / "app.exe"; f.write_bytes(b"x")
+    with pytest.raises(sg.SigningGateError):
+        sg.inspect_signature(f, runner=lambda cmd: (1, ""))
+
+
+def test_verify_signed_ok(tmp_path: Path) -> None:
+    f = tmp_path / "app.exe"; f.write_bytes(b"x")
+    sg.verify_signed(f, expected_thumbprint=THUMB, inspector=lambda p: _report())
+
+
+def test_verify_signed_rejects_invalid_status(tmp_path: Path) -> None:
     f = tmp_path / "app.exe"; f.write_bytes(b"x")
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.verify_signed(f, signtool="st.exe", expected_signer=SIGNER,
-                         runner=lambda cmd: (1, "No signature found."))
+        sg.verify_signed(f, expected_thumbprint=THUMB,
+                         inspector=lambda p: _report(status="HashMismatch"))
     assert "SIGN_VERIFY_FAILED" in str(exc.value)
 
 
-def test_verify_signed_raises_on_wrong_signer(tmp_path: Path) -> None:
+def test_verify_signed_rejects_wrong_thumbprint(tmp_path: Path) -> None:
     f = tmp_path / "app.exe"; f.write_bytes(b"x")
-    wrong = _GOOD_OUT.replace(SIGNER, "Somebody Else Inc")
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.verify_signed(f, signtool="st.exe", expected_signer=SIGNER,
-                         runner=lambda cmd: (0, wrong))
+        sg.verify_signed(f, expected_thumbprint=THUMB,
+                         inspector=lambda p: _report(thumbprint="DEADBEEF"))
     assert "WRONG_SIGNER" in str(exc.value)
 
 
-def test_verify_signed_raises_on_missing_timestamp(tmp_path: Path) -> None:
+def test_verify_signed_rejects_not_timestamped(tmp_path: Path) -> None:
+    # F4#9: "The signature is not timestamped" must FAIL
     f = tmp_path / "app.exe"; f.write_bytes(b"x")
-    no_ts = _GOOD_OUT.replace("The signature is timestamped: Fri Jul 24 10:00:00 2026\n", "")
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.verify_signed(f, signtool="st.exe", expected_signer=SIGNER,
-                         runner=lambda cmd: (0, no_ts))
+        sg.verify_signed(f, expected_thumbprint=THUMB,
+                         inspector=lambda p: _report(timestamped=False))
     assert "NO_TIMESTAMP" in str(exc.value)
 
 
-# ── internal marker ─────────────────────────────────────────────────────────
-def test_mark_internal_unsigned_renames_and_writes_marker(tmp_path: Path) -> None:
-    setup = tmp_path / "KALI-Premium-Setup-1.0.0-rc3.exe"
-    setup.write_bytes(b"SETUP")
-    renamed, marker = sg.mark_internal_unsigned(setup, version="1.0.0-rc3")
-    assert renamed.name == "KALI-Premium-Setup-1.0.0-rc3-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
-    assert renamed.is_file() and renamed.read_bytes() == b"SETUP"
-    assert not setup.exists()  # original distributable name gone
+def test_verify_signed_thumbprint_case_insensitive(tmp_path: Path) -> None:
+    f = tmp_path / "app.exe"; f.write_bytes(b"x")
+    sg.verify_signed(f, expected_thumbprint=THUMB.lower(),
+                     inspector=lambda p: _report(thumbprint=THUMB.upper()))
+
+
+# ── internal marker: written in place (naming happens at ISCC, no post-rename) ─
+def test_write_internal_marker(tmp_path: Path) -> None:
+    marker = sg.write_internal_marker(tmp_path, version="1.0.0-rc3")
     assert marker.name == "INTERNAL-UNSIGNED.txt"
     assert marker.is_file() and "DO-NOT-DISTRIBUTE" in marker.read_text(encoding="utf-8")
+
+
+def test_mark_internal_unsigned_removed() -> None:
+    # F4#7: post-build EXE rename is gone — naming is done by ISCC OutputBaseFilename
+    assert not hasattr(sg, "mark_internal_unsigned")

@@ -8,6 +8,8 @@ scripts/build_installer_premium.bat (правки этих файлов тест
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -123,10 +125,38 @@ def test_main_resolve_mode_forbidden_exits_nonzero(tmp_path: Path) -> None:
     assert exc.value.code != 0
 
 
-def test_main_mark_internal_renames(tmp_path: Path) -> None:
-    setup = tmp_path / "KALI-Premium-Setup-1.0.0-rc3.exe"
-    setup.write_bytes(b"SETUP")
-    rc = ig.main(["mark-internal", str(setup), "1.0.0-rc3"])
+# ── F4#5: real cmd.exe invocation — bad mode = clean nonzero reason (no syntax err) ─
+def _run_bat(*extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["cmd", "/c", str(BAT), *extra],
+                          capture_output=True, text=True, cwd=str(ROOT))
+
+
+def test_bat_cmd_invocation_rejects_missing_mode() -> None:
+    if sys.platform != "win32":
+        pytest.skip("cmd.exe only on Windows")
+    proc = _run_bat()
+    out = (proc.stdout + proc.stderr).lower()
+    assert proc.returncode != 0
+    assert "mode required" in out
+    assert "was unexpected" not in out and "syntax" not in out  # not a batch syntax error
+
+
+def test_bat_cmd_invocation_rejects_unknown_mode() -> None:
+    if sys.platform != "win32":
+        pytest.skip("cmd.exe only on Windows")
+    proc = _run_bat("bogusmode")
+    out = (proc.stdout + proc.stderr).lower()
+    assert proc.returncode != 0
+    assert "mode" in out
+    assert "was unexpected" not in out and "syntax" not in out
+
+
+def test_main_write_marker(tmp_path: Path) -> None:
+    # F4#7: naming is done by ISCC OutputBaseFilename — the CLI only drops the marker
+    rc = ig.main(["write-marker", str(tmp_path), "1.0.0-rc3"])
     assert rc == 0
-    assert (tmp_path / "KALI-Premium-Setup-1.0.0-rc3-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe").is_file()
     assert (tmp_path / "INTERNAL-UNSIGNED.txt").is_file()
+
+
+def test_real_iss_internal_naming() -> None:
+    ig.assert_iss_internal_naming(ISS.read_text(encoding="utf-8"))

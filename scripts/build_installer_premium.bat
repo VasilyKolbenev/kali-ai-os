@@ -109,20 +109,29 @@ echo Output:  %SETUP_EXE% ^(+ .bin slices — DiskSpanning^)
 echo This takes ~15-30 minutes for ~9 GB content. Be patient.
 echo.
 
-REM signed → sign Setup + uninstaller at compile via a named Inno SignTool.
-REM ($q = an embedded quote, $f = the file to sign — Inno's SignTool syntax.)
-set "SIGN_DEFINE="
+REM ISCC defines: signed → sign Setup+uninstaller via a named SignTool (PFX xor
+REM store/HSM thumbprint); internal → INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE naming
+REM for the Setup AND every slice. ($q = embedded quote, $f = file — Inno syntax.)
+set "DEFINES="
 if /I "%MODE%"=="signed" (
-    if not defined KALI_SIGN_CERT ( echo ERROR: signed build requires KALI_SIGN_CERT. & exit /b 1 )
     if not defined SIGNTOOL ( echo ERROR: signed build requires signtool.exe. & exit /b 1 )
-    if defined KALI_SIGN_PASS (
-        set SIGN_DEFINE=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_CERT%$q /p $q%KALI_SIGN_PASS%$q $f"
+    if defined KALI_SIGN_THUMBPRINT (
+        set DEFINES=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /sha1 %KALI_SIGN_THUMBPRINT% $f"
     ) else (
-        set SIGN_DEFINE=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_CERT%$q $f"
+        if not defined KALI_SIGN_PFX ( echo ERROR: signed build requires KALI_SIGN_THUMBPRINT or KALI_SIGN_PFX. & exit /b 1 )
+        if defined KALI_SIGN_PFX_PASS (
+            set DEFINES=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_PFX%$q /p $q%KALI_SIGN_PFX_PASS%$q $f"
+        ) else (
+            set DEFINES=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_PFX%$q $f"
+        )
     )
 )
+if /I "%MODE%"=="internal" (
+    set "DEFINES=/DInternal"
+    set "SETUP_EXE=dist_premium\installer\KALI-Premium-Setup-%APPVER%-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
+)
 
-"%ISCC%" %SIGN_DEFINE% scripts\installer_premium.iss
+"%ISCC%" %DEFINES% scripts\installer_premium.iss
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Build FAILED with exit code %ERRORLEVEL%.
@@ -136,15 +145,16 @@ if not exist "%SETUP_EXE%" (
 )
 
 if /I "%MODE%"=="signed" (
-    REM ISCC already signed Setup + uninstaller; verify the chain fail-closed.
-    "%SIGNTOOL%" verify /pa /v "%SETUP_EXE%"
-    if errorlevel 1 ( echo ERROR: signtool verify /pa failed for the Setup. & exit /b 1 )
-    echo [sign] Setup + uninstaller signed and verified.
+    REM ISCC signed Setup + uninstaller; the FINAL Setup passes the same structured
+    REM Authenticode gate (exact thumbprint + valid chain + RFC3161 timestamp).
+    "%PY%" -m scripts.release.installer_gate verify-setup "%SETUP_EXE%" "%KALI_SIGN_EXPECTED_THUMBPRINT%"
+    if errorlevel 1 ( echo ERROR: structured signature verify failed for the Setup. & exit /b 1 )
+    echo [sign] Setup + uninstaller signed and structurally verified.
 ) else (
-    REM INTERNAL: rename to the explicit DO-NOT-DISTRIBUTE artifact + marker.
-    "%PY%" -m scripts.release.installer_gate mark-internal "%SETUP_EXE%" "%APPVER%"
-    if errorlevel 1 ( echo ERROR: internal-marking failed. & exit /b 1 )
-    echo [internal] output renamed to ...-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
+    REM INTERNAL: naming already done by ISCC OutputBaseFilename; just drop the marker.
+    "%PY%" -m scripts.release.installer_gate write-marker "dist_premium\installer" "%APPVER%"
+    if errorlevel 1 ( echo ERROR: internal marker write failed. & exit /b 1 )
+    echo [internal] Setup + slices named INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
 )
 
 echo.

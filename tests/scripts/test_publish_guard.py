@@ -28,18 +28,26 @@ DEFAULT_EXE = b"fresh-exe"
 
 
 # ── green baseline: всё зелёное, каждый тест ломает одну ось ─────────────────
+@pytest.fixture(autouse=True)
+def _stub_signature_verifier(monkeypatch):
+    """The structured Authenticode verify needs a real signed Setup — default it to a
+    no-op so the non-signature axes test in isolation. Signature-specific tests
+    re-monkeypatch pr.verify_release_signature with their own spy/failing stub."""
+    monkeypatch.setattr(pr, "verify_release_signature", lambda *a, **k: None)
+
+
 def _green_baseline(tmp_path: Path, *, version: str = fx.VERSION,
                     mobile: str = "0.1.0+1", distributable=True,
                     frozen=None, burned=None, committer_date: str | None = None,
                     exe_bytes: bytes = DEFAULT_EXE,
-                    expected_signer: str | None = None) -> SimpleNamespace:
+                    expected_signer_thumbprint: str | None = fx.SIGNER_THUMBPRINT) -> SimpleNamespace:
     """Полностью проходящий репо+dist: synced-версии, clean git, свежий артефакт,
-    distributable=true, валидный release-manifest, non-empty frozen (не совпад.)."""
+    distributable=true+signer thumbprint, валидный release-manifest, non-empty frozen."""
     repo = tmp_path
     fx.write_all_desktop(repo, version, mobile)
     fx.write_version_file(repo, (version + "\n").encode("utf-8"))
-    fx.write_status(repo, distributable=distributable, frozen=frozen,
-                    burned=burned, canonical=version, expected_signer=expected_signer)
+    fx.write_status(repo, distributable=distributable, frozen=frozen, burned=burned,
+                    canonical=version, expected_signer_thumbprint=expected_signer_thumbprint)
     (repo / ".gitignore").write_text("dist_premium/\n", encoding="utf-8")
     fx.init_git(repo)
     fx.commit_all(repo, "baseline", date=committer_date)
@@ -525,35 +533,34 @@ def test_unprotected_rebuilt_rc2_is_blocked(tmp_path: Path) -> None:
     assert "BURNED_VERSION" in str(exc.value)
 
 
-# ── C8 (OPUS-201): signature / internal-artifact guard, freeze-first preserved ─
+# ── F4 (OPUS-201): structured signature / internal guard, freeze-first preserved ─
 def test_signature_checker_not_called_when_not_distributable(monkeypatch, tmp_path: Path) -> None:
-    # freeze-first: NOT_DISTRIBUTABLE refuses BEFORE the signature runner. Mutation
-    # (moving the signature check above the freeze gate) makes this go red.
-    b = _green_baseline(tmp_path, distributable=False, expected_signer="KALI Labs LLC")
+    # freeze-first: NOT_DISTRIBUTABLE refuses BEFORE the signature runner (F4#13).
+    b = _green_baseline(tmp_path, distributable=False)
     calls: list = []
     monkeypatch.setattr(pr, "verify_release_signature", lambda *a, **k: calls.append(1))
     with pytest.raises(SystemExit) as exc:
         _guard(b)
     assert "NOT_DISTRIBUTABLE" in str(exc.value)
-    assert calls == []  # signature checker NEVER ran on a frozen release
+    assert calls == []  # neither signtool nor the inspector ran on a frozen release
 
 
 def test_distributable_verifies_setup_signature_exe_only(monkeypatch, tmp_path: Path) -> None:
-    b = _green_baseline(tmp_path, expected_signer="KALI Labs LLC")
+    b = _green_baseline(tmp_path)
     seen: list = []
     monkeypatch.setattr(pr, "verify_release_signature",
-                        lambda setup, *, expected_signer: seen.append((setup.name, expected_signer)))
-    _guard(b)  # проходит (verifier застабан «успешным»)
-    assert len(seen) == 1  # ровно один вызов — final Setup EXE
-    assert seen[0][1] == "KALI Labs LLC"
-    assert seen[0][0].endswith(".exe") and ".bin" not in seen[0][0]  # .bin НЕ проверяются
+                        lambda setup, *, expected_thumbprint: seen.append((setup.name, expected_thumbprint)))
+    _guard(b)
+    assert len(seen) == 1  # exactly one call — the final Setup EXE
+    assert seen[0][1] == fx.SIGNER_THUMBPRINT
+    assert seen[0][0].endswith(".exe") and ".bin" not in seen[0][0]  # .bin NOT signature-checked
 
 
 def test_refuses_when_signature_verification_fails(monkeypatch, tmp_path: Path) -> None:
-    b = _green_baseline(tmp_path, expected_signer="KALI Labs LLC")
+    b = _green_baseline(tmp_path)
 
-    def _boom(setup, *, expected_signer):  # noqa: ANN001
-        pr._refuse("SIGN_VERIFY_FAILED", "expected signer/timestamp absent")
+    def _boom(setup, *, expected_thumbprint):  # noqa: ANN001
+        pr._refuse("SIGN_VERIFY_FAILED", "thumbprint/timestamp mismatch")
 
     monkeypatch.setattr(pr, "verify_release_signature", _boom)
     with pytest.raises(SystemExit) as exc:
@@ -562,7 +569,6 @@ def test_refuses_when_signature_verification_fails(monkeypatch, tmp_path: Path) 
 
 
 def test_refuses_internal_marked_artifact(tmp_path: Path) -> None:
-    # an internal (unsigned) artifact must never publish as distributable.
     b = _green_baseline(tmp_path)
     (b.dist / "INTERNAL-UNSIGNED.txt").write_text("do not distribute", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
@@ -570,10 +576,18 @@ def test_refuses_internal_marked_artifact(tmp_path: Path) -> None:
     assert "INTERNAL_ARTIFACT" in str(exc.value)
 
 
-def test_no_expected_signer_skips_signature_check(monkeypatch, tmp_path: Path) -> None:
-    # backward-compatible: without expected_signer the signature runner is not invoked.
-    b = _green_baseline(tmp_path)  # no expected_signer
-    calls: list = []
-    monkeypatch.setattr(pr, "verify_release_signature", lambda *a, **k: calls.append(1))
-    _guard(b)
-    assert calls == []
+def test_distributable_requires_signer_thumbprint(tmp_path: Path) -> None:
+    # F4#10/#11: a distributable=true release with NO expected signer thumbprint is a
+    # schema violation — it never silently skips the signature gate.
+    b = _green_baseline(tmp_path, expected_signer_thumbprint=None)
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "STATUS_SCHEMA" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", "not-hex", "A1B2"])  # empty / non-hex / too short
+def test_distributable_rejects_malformed_thumbprint(tmp_path: Path, bad: str) -> None:
+    b = _green_baseline(tmp_path, expected_signer_thumbprint=bad)
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "STATUS_SCHEMA" in str(exc.value)

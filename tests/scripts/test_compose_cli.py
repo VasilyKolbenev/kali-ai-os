@@ -64,3 +64,29 @@ def test_compose_cli_fail_closed_without_receipt(tmp_path: Path) -> None:
                    git_sha="a" * 40, materializer=lambda p: None,
                    signer=lambda p, m: None, token="1")
     assert "RECEIPT_MISSING" in str(exc.value)
+
+
+# ── F4: no owner placeholders + signed preflight BEFORE compose ─────────────
+def test_compose_cli_has_no_owner_literals() -> None:
+    src = Path(cc.__file__).read_text(encoding="utf-8")
+    assert "__owner" not in src
+
+
+def test_build_signing_internal_is_noop() -> None:
+    signer = cc.build_signing("internal", env={})
+    signer(Path("."), "internal")  # no-op, no raise
+
+
+def test_build_signing_signed_fail_closed_without_contract() -> None:
+    from scripts.release import signing_gate
+    with pytest.raises(signing_gate.SigningGateError):
+        cc.build_signing("signed", env={})  # fail-closed BEFORE any compose/stage mutation
+
+
+def test_build_signing_signed_ok_with_full_contract() -> None:
+    signer = cc.build_signing("signed", env={
+        "KALI_SIGN_THUMBPRINT": "ABCD1234",
+        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
+        "KALI_SIGN_SIGNTOOL": "signtool.exe",
+    })
+    assert callable(signer)

@@ -257,6 +257,7 @@ def _load_status(repo: Path) -> dict:
 
 
 _HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_THUMB_RE = re.compile(r"^[0-9a-fA-F]{40}$")  # SHA-1 cert thumbprint
 
 
 def _validate_status_schema(status: dict) -> None:
@@ -277,9 +278,11 @@ def _validate_status_schema(status: dict) -> None:
     if not isinstance(status.get("distributable"), bool):
         _refuse("STATUS_SCHEMA", "distributable обязан быть bool")
 
-    signer = status.get("expected_signer")
-    if signer is not None and not (isinstance(signer, str) and signer.strip()):
-        _refuse("STATUS_SCHEMA", "expected_signer, если задан, обязан быть непустой строкой")
+    if status.get("distributable") is True:
+        thumb = status.get("expected_signer_thumbprint")
+        if not (isinstance(thumb, str) and _THUMB_RE.match(thumb)):
+            _refuse("STATUS_SCHEMA",
+                    "distributable=true обязан задать expected_signer_thumbprint (40-hex)")
 
     if not relver.is_valid_semver(status.get("canonical_version")):
         _refuse("STATUS_SCHEMA",
@@ -398,25 +401,12 @@ def _check_manifest(repo: Path, dist: Path, version: str,
             _refuse("MANIFEST_MISMATCH", f"asset sha256 расходится: {name}")
 
 
-def _resolve_signtool() -> str | None:
-    import shutil
-    return shutil.which("signtool") or shutil.which("signtool.exe")
-
-
-def verify_release_signature(setup: Path, *, expected_signer: str) -> None:
-    """Проверить Authenticode-подпись финального Setup.exe (chain + expected signer
-    + timestamp) через ``signtool verify /pa``. Fail-closed при любом провале."""
-    signtool = _resolve_signtool()
-    if not signtool:
-        _refuse("SIGN_NO_SIGNTOOL", "signtool не найден для проверки подписи релиза")
-
-    def _runner(cmd: list[str]) -> tuple[int, str]:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
-
+def verify_release_signature(setup: Path, *, expected_thumbprint: str) -> None:
+    """Structured Authenticode gate on the final Setup: exact signer thumbprint +
+    valid chain + RFC3161 timestamp (PowerShell inspector). Fail-closed."""
     try:
-        signing_gate.verify_signed(setup, signtool=signtool,
-                                   expected_signer=expected_signer, runner=_runner)
+        signing_gate.verify_signed(setup, expected_thumbprint=expected_thumbprint,
+                                   inspector=signing_gate.powershell_inspector)
     except signing_gate.SigningGateError as exc:
         _refuse("SIGN_VERIFY_FAILED", str(exc))
 
@@ -431,13 +421,11 @@ def _check_internal_marker(dist: Path) -> None:
 
 
 def _check_signature(status: dict, dist: Path, version: str) -> None:
-    """Проверить подпись финального Setup.exe, если задан expected_signer (.bin
-    слайсы защищены подписанным Setup, отдельно НЕ проверяются)."""
-    expected = status.get("expected_signer")
-    if not expected:
-        return
+    """Verify the final Setup.exe signature. The schema guarantees a thumbprint at
+    distributable=true, so a missing signer never silently skips this gate. The .bin
+    slices are protected by the signed Setup and are NOT checked separately."""
     verify_release_signature(dist / f"KALI-Premium-Setup-{version}.exe",
-                             expected_signer=expected)
+                             expected_thumbprint=status["expected_signer_thumbprint"])
 
 
 def enforce_release_guard(repo: Path, dist: Path) -> None:

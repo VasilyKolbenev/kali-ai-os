@@ -63,17 +63,17 @@ def resolve_selector(*, pfx: str | None, pfx_pass: str | None,
 
 
 def preflight(mode: str, *, selector: dict[str, Any] | None, signtool: str | None,
-              expected_signer: str | None) -> None:
-    """Fail-closed pre-build check: an internal build needs nothing; a signed
-    build refuses unless selector + signtool + expected signer are all present."""
+              expected_thumbprint: str | None) -> None:
+    """Fail-closed pre-build check: an internal build needs nothing; a signed build
+    refuses unless selector + signtool + expected signer THUMBPRINT are all present."""
     if not require_signing(mode):
         return
     if selector is None:
         raise SigningGateError("SELECTOR: signed build requires a signing selector")
     if not signtool:
         raise SigningGateError("SIGNTOOL: signed build requires signtool.exe")
-    if not expected_signer:
-        raise SigningGateError("SIGNER: signed build requires an expected signer identity")
+    if not expected_thumbprint:
+        raise SigningGateError("SIGNER: signed build requires an expected signer thumbprint")
 
 
 def build_sign_command(file: Path, *, selector: dict[str, Any], timestamp_url: str,
@@ -90,32 +90,68 @@ def build_sign_command(file: Path, *, selector: dict[str, Any], timestamp_url: s
     return cmd
 
 
-def build_verify_command(file: Path, *, signtool: str) -> list[str]:
-    return [signtool, "verify", "/pa", "/v", str(file)]
+def _inspect_command(file: Path, *, powershell: str = "powershell") -> list[str]:
+    """PowerShell Get-AuthenticodeSignature as STRUCTURED JSON (no substring parsing)."""
+    script = (
+        f"$s = Get-AuthenticodeSignature -LiteralPath '{file}'; "
+        "[pscustomobject]@{ Status = [string]$s.Status; "
+        "Thumbprint = if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint } else { '' }; "
+        "Timestamped = [bool]$s.TimeStamperCertificate } | ConvertTo-Json -Compress"
+    )
+    return [powershell, "-NoProfile", "-NonInteractive", "-Command", script]
 
 
-def verify_signed(file: Path, *, signtool: str, expected_signer: str,
-                  runner: Runner) -> None:
-    """Refuse unless signtool verifies the chain, the expected signer and a timestamp."""
-    rc, out = runner(build_verify_command(file, signtool=signtool))
+def inspect_signature(file: Path, *, runner: Runner) -> dict[str, Any]:
+    """Structured Authenticode report: {status, thumbprint (upper), timestamped}."""
+    import json
+    rc, out = runner(_inspect_command(file))
     if rc != 0:
-        raise SigningGateError(f"SIGN_VERIFY_FAILED: signtool verify /pa rc={rc}: {out[:200]}")
-    if expected_signer not in out:
-        raise SigningGateError(f"WRONG_SIGNER: expected {expected_signer!r} not in signature")
-    if "timestamp" not in out.lower():
+        raise SigningGateError(f"SIGN_INSPECT_FAILED: rc={rc}: {out[:200]}")
+    try:
+        data = json.loads(out)
+    except (ValueError, TypeError) as e:
+        raise SigningGateError(f"SIGN_INSPECT_MALFORMED: {out[:120]!r}") from e
+    return {
+        "status": str(data.get("Status", "")),
+        "thumbprint": str(data.get("Thumbprint") or "").upper(),
+        "timestamped": bool(data.get("Timestamped")),
+    }
+
+
+Inspector = Callable[[Path], "dict[str, Any]"]
+
+
+def verify_signed(file: Path, *, expected_thumbprint: str, inspector: Inspector) -> None:
+    """Fail-closed structured verify: Status==Valid, EXACT signer thumbprint, timestamp."""
+    report = inspector(file)
+    if report.get("status") != "Valid":
+        raise SigningGateError(f"SIGN_VERIFY_FAILED: Authenticode status={report.get('status')!r}")
+    if report.get("thumbprint", "").upper() != expected_thumbprint.upper():
+        raise SigningGateError(
+            f"WRONG_SIGNER: thumbprint {report.get('thumbprint')!r} != expected")
+    if not report.get("timestamped"):
         raise SigningGateError("NO_TIMESTAMP: signature is not RFC3161-timestamped")
 
 
-def mark_internal_unsigned(setup_path: Path, *, version: str) -> tuple[Path, Path]:
-    """Rename an unsigned Setup to the explicit DO-NOT-DISTRIBUTE name + marker file."""
-    renamed = setup_path.with_name(setup_path.stem + INTERNAL_SUFFIX + setup_path.suffix)
-    setup_path.rename(renamed)
-    marker = setup_path.parent / INTERNAL_MARKER
+def powershell_inspector(file: Path) -> dict[str, Any]:
+    """Production inspector — runs PowerShell Get-AuthenticodeSignature."""
+    import subprocess
+
+    def _runner(cmd: list[str]) -> tuple[int, str]:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        return proc.returncode, proc.stdout
+    return inspect_signature(file, runner=_runner)
+
+
+def write_internal_marker(directory: Path, *, version: str) -> Path:
+    """Drop the INTERNAL-UNSIGNED marker (naming is done by ISCC OutputBaseFilename;
+    there is no post-build EXE rename)."""
+    marker = directory / INTERNAL_MARKER
     marker.write_text(
         f"INTERNAL-UNSIGNED build of KALI Premium {version}.\n"
         "DO-NOT-DISTRIBUTE: this artifact is UNSIGNED and is for local, "
         "trusted-alpha verification only. A public release requires a trusted "
-        "Authenticode signature (signtool verify /pa).\n",
+        "Authenticode code-signing identity.\n",
         encoding="utf-8",
     )
-    return renamed, marker
+    return marker
