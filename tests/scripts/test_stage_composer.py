@@ -75,49 +75,103 @@ def test_swap_failure_preserves_last_good(tmp_path: Path) -> None:
     assert not (dist / "premium_stage.swap-journal.json").exists()  # rolled back
 
 
-# ── recovery: crash point 1 (backed_up, no handler ran) restores last-good ───
+# ── recovery: journal stores only a versioned schema + token; paths DERIVED ──
+def _journal(dist: Path, phase: str, token: str = "1") -> Path:
+    j = dist / "premium_stage.swap-journal.json"
+    j.write_text(json.dumps({"schema": 1, "phase": phase, "token": token}),
+                 encoding="utf-8")
+    return j
+
+
 def test_recover_restores_last_good_after_backup_crash(tmp_path: Path) -> None:
     dist = _dist(tmp_path)
-    # simulate a process crash right after old->backup, before next->stage
+    # crash right after old->backup, before next->stage (phase still backed_up)
     backup = dist / "premium_stage.backup-1"; backup.mkdir()
     (backup / "marker.txt").write_bytes(b"OLD")
     nxt = dist / "premium_stage.next-1"; nxt.mkdir()
     (nxt / "marker.txt").write_bytes(b"NEW")
-    journal = dist / "premium_stage.swap-journal.json"
-    journal.write_text(json.dumps({
-        "phase": "backed_up",
-        "stage": str(dist / "premium_stage"),
-        "backup": str(backup),
-        "next": str(nxt),
-    }), encoding="utf-8")
-    result = sc.recover_swap(dist)
-    assert result == "restored_backup"
+    journal = _journal(dist, "backed_up")
+    assert sc.recover_swap(dist) == "restored_backup"
     assert (dist / "premium_stage" / "marker.txt").read_bytes() == b"OLD"  # last-good
     assert not nxt.exists() and not journal.exists()
 
 
-# ── recovery: crash point 2 (promoted) keeps NEW stage (mutation-c target) ───
-def test_recover_keeps_new_stage_after_promote_crash(tmp_path: Path) -> None:
+def test_recover_backed_up_keeps_new_when_already_promoted(tmp_path: Path) -> None:
+    # crash after next->stage but before the journal moved to 'promoted'
     dist = _dist(tmp_path)
-    # after next->stage but before cleanup: stage=NEW, backup=OLD, journal=promoted
     stage = dist / "premium_stage"; stage.mkdir()
     (stage / "marker.txt").write_bytes(b"NEW")
     backup = dist / "premium_stage.backup-1"; backup.mkdir()
     (backup / "marker.txt").write_bytes(b"OLD")
-    journal = dist / "premium_stage.swap-journal.json"
-    journal.write_text(json.dumps({
-        "phase": "promoted",
-        "stage": str(stage),
-        "backup": str(backup),
-        "next": str(dist / "premium_stage.next-1"),
-    }), encoding="utf-8")
-    result = sc.recover_swap(dist)
-    assert result == "kept_new"
-    assert (stage / "marker.txt").read_bytes() == b"NEW"  # new verified stage survives
+    journal = _journal(dist, "backed_up")
+    assert sc.recover_swap(dist) == "kept_new"
+    assert (stage / "marker.txt").read_bytes() == b"NEW"  # verified new stage kept
     assert not backup.exists() and not journal.exists()
 
 
-def test_recover_nothing_without_journal(tmp_path: Path) -> None:
+def test_recover_keeps_new_stage_after_promote_crash(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    stage = dist / "premium_stage"; stage.mkdir()
+    (stage / "marker.txt").write_bytes(b"NEW")
+    backup = dist / "premium_stage.backup-1"; backup.mkdir()
+    (backup / "marker.txt").write_bytes(b"OLD")
+    journal = _journal(dist, "promoted")
+    assert sc.recover_swap(dist) == "kept_new"
+    assert (stage / "marker.txt").read_bytes() == b"NEW"
+    assert not backup.exists() and not journal.exists()
+
+
+def test_recover_prepare_after_backup_restores_canonical(tmp_path: Path) -> None:
+    # crash between old->backup and the journal advancing to backed_up (still prepare)
+    dist = _dist(tmp_path)
+    backup = dist / "premium_stage.backup-1"; backup.mkdir()
+    (backup / "marker.txt").write_bytes(b"CANON")
+    journal = _journal(dist, "prepare")
+    assert sc.recover_swap(dist) == "restored_backup"
+    assert (dist / "premium_stage" / "marker.txt").read_bytes() == b"CANON"
+    assert not journal.exists()
+
+
+def test_recover_malformed_journal_fail_closed_no_delete(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    stage = dist / "premium_stage"; stage.mkdir()
+    (stage / "marker.txt").write_bytes(b"LIVE")
+    (dist / "premium_stage.swap-journal.json").write_text("{ not json", encoding="utf-8")
+    with pytest.raises(sc.SwapError):
+        sc.recover_swap(dist)
+    assert (stage / "marker.txt").read_bytes() == b"LIVE"  # nothing deleted
+
+
+def test_recover_unknown_phase_fail_closed_no_delete(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    stage = dist / "premium_stage"; stage.mkdir()
+    (stage / "marker.txt").write_bytes(b"LIVE")
+    _journal(dist, "WAT")
+    with pytest.raises(sc.SwapError):
+        sc.recover_swap(dist)
+    assert (stage / "marker.txt").read_bytes() == b"LIVE"
+
+
+def test_recover_malicious_token_refuses_and_preserves_outside(tmp_path: Path) -> None:
+    # a journal token that would escape dist_premium must never drive an rmtree
+    dist = _dist(tmp_path)
+    outside = tmp_path / "precious"; outside.mkdir()
+    (outside / "keep.txt").write_bytes(b"KEEP")
+    _journal(dist, "promoted", token="..\\..\\precious")
+    with pytest.raises(sc.SwapError):
+        sc.recover_swap(dist)
+    assert (outside / "keep.txt").read_bytes() == b"KEEP"  # sibling untouched
+
+
+def test_recover_releases_stale_lock_without_journal(tmp_path: Path) -> None:
+    # crash after acquiring the lock but before writing the journal → lock is stale
+    dist = _dist(tmp_path)
+    (dist / "premium_stage.swap.lock").write_text("nonce", encoding="utf-8")
+    assert sc.recover_swap(dist) == "released_stale_lock"
+    assert not (dist / "premium_stage.swap.lock").exists()
+
+
+def test_recover_nothing_without_journal_or_lock(tmp_path: Path) -> None:
     dist = _dist(tmp_path)
     assert sc.recover_swap(dist) == "nothing"
 
@@ -212,6 +266,26 @@ def test_compose_manifest_git_sha_matches_planned(tmp_path: Path) -> None:
     stage = _compose(tmp_path, dist)  # planned git_sha = "s"*40, receipts too
     manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["git_sha"] == "a" * 40
+
+
+def test_compose_rejects_junction_in_source_before_copy(tmp_path: Path) -> None:
+    # F2: source-containment runs BEFORE copy — a junction in the assets input is
+    # refused (only contained HF file-symlinks are tolerated).
+    import subprocess, sys
+    if sys.platform != "win32":
+        pytest.skip("junctions are Windows-only")
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    proc = subprocess.run(["cmd", "/c", "mklink", "/J",
+                           str(inputs["assets"] / "sneaky"), str(tmp_path)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip("mklink /J unavailable")
+    with pytest.raises(stage_policy.ReparseError):
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
 
 
 def test_compose_rejects_reparse_after_materialize(tmp_path: Path) -> None:

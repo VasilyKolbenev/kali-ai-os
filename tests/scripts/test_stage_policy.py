@@ -112,6 +112,13 @@ def test_assert_distinct_ok_for_different(tmp_path: Path) -> None:
     sp.assert_distinct(a, b)  # не поднимает
 
 
+def test_assert_safe_dest_rejects_dest_equals_dist(tmp_path: Path) -> None:
+    # F2: swapping/mutating dist_premium itself is a destructive footgun → reject
+    dist = _dist(tmp_path)
+    with pytest.raises(sp.PathSafetyError):
+        sp.assert_safe_dest(dist, dist)
+
+
 # ── HF symlinks в approved source: только внутрь source, не dangling ─────────
 def test_source_symlink_escaping_source_rejected(tmp_path: Path) -> None:
     source = tmp_path / "source"
@@ -152,6 +159,43 @@ def test_source_symlink_contained_ok(tmp_path: Path) -> None:
     except OSError:
         pytest.skip("symlink creation not permitted")
     sp.assert_source_symlinks_contained(source)  # target внутри source → ok
+
+
+def test_source_junction_rejected_even_when_contained(tmp_path: Path) -> None:
+    # F2: junctions (dir reparse) are never allowed in an input source — even one
+    # pointing INSIDE the source. Only contained HF FILE-symlinks are tolerated.
+    source = tmp_path / "source"
+    (source / "sub").mkdir(parents=True)
+    (source / "realdir").mkdir()
+    _make_junction(source / "sub" / "j", source / "realdir")  # target CONTAINED
+    with pytest.raises(sp.ReparseError):
+        sp.assert_source_symlinks_contained(source)
+
+
+# ── F2: strict STAGE_MANIFEST schema ─────────────────────────────────────────
+def _good_manifest() -> dict:
+    return {"version": "1.0.0-rc3", "git_sha": "a" * 40, "mode": "internal",
+            "receipts": [], "entries": {"a.txt": "b" * 64}}
+
+
+def test_validate_manifest_schema_ok() -> None:
+    sp.validate_manifest_schema(_good_manifest())  # не поднимает
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda m: m.pop("version"),
+    lambda m: m.update(mode="weird"),
+    lambda m: m.update(entries={"a.txt": "z" * 64}),   # non-hex
+    lambda m: m.update(entries={"a.txt": "b" * 63}),   # short hash
+    lambda m: m.update(entries=["not", "a", "dict"]),
+    lambda m: m.update(receipts="not-a-list"),
+    lambda m: m.update(git_sha=""),
+])
+def test_validate_manifest_schema_rejects_malformed(mutate) -> None:
+    m = _good_manifest()
+    mutate(m)
+    with pytest.raises(sp.ManifestError):
+        sp.validate_manifest_schema(m)
 
 
 # ── STAGE_MANIFEST schema ────────────────────────────────────────────────────

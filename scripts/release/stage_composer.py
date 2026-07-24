@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Callable
@@ -40,7 +41,11 @@ class SwapError(Exception):
     """A transactional stage swap could not proceed safely (fail-closed)."""
 
 
-# ── journal / lock ──────────────────────────────────────────────────────────
+# ── journal / lock (paths DERIVED from a validated dist_premium + token) ─────
+_SCHEMA = 1
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 def _journal_path(dist: Path) -> Path:
     return dist / _JOURNAL
 
@@ -49,19 +54,48 @@ def _lock_path(dist: Path) -> Path:
     return dist / _LOCK
 
 
-def _acquire_lock(lock: Path) -> None:
+def _derive_paths(dist: Path, token: str) -> tuple[Path, Path, Path]:
+    """Derive (stage, backup, next) from the token — NEVER trust stored paths.
+
+    A token that could escape dist_premium (path separators / ``..``) is refused,
+    and each derived path is safe-dest validated before any rename/rmtree runs."""
+    if not (isinstance(token, str) and _TOKEN_RE.match(token) and ".." not in token):
+        raise SwapError(f"UNSAFE_TOKEN: {token!r}")
+    stage = dist / "premium_stage"
+    backup = dist / f"premium_stage.backup-{token}"
+    nxt = dist / f"premium_stage.next-{token}"
+    for p in (stage, backup, nxt):
+        stage_policy.assert_safe_dest(dist, p)
+    return stage, backup, nxt
+
+
+def _acquire_lock(lock: Path, token: str) -> None:
     try:
-        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        with open(lock, "x", encoding="utf-8") as fh:  # O_CREAT|O_EXCL
+            fh.write(token)
     except FileExistsError as e:
         raise SwapError(f"SWAP_LOCKED: {lock} exists (another swap in progress?)") from e
 
 
-def _write_journal(journal: Path, phase: str, nxt: Path, stage: Path, backup: Path) -> None:
-    journal.write_text(
-        json.dumps({"phase": phase, "next": str(nxt), "stage": str(stage),
-                    "backup": str(backup)}),
-        encoding="utf-8",
-    )
+def _write_journal(journal: Path, phase: str, token: str) -> None:
+    """Atomic journal write: temp → flush/fsync → os.replace (crash-consistent)."""
+    tmp = journal.with_suffix(journal.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"schema": _SCHEMA, "phase": phase, "token": token}))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, journal)
+
+
+def _load_journal(journal: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(journal.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SwapError(f"MALFORMED_JOURNAL: {e}") from e
+    if not (isinstance(data, dict) and data.get("schema") == _SCHEMA
+            and isinstance(data.get("phase"), str) and "token" in data):
+        raise SwapError(f"MALFORMED_JOURNAL: {data!r}")
+    return data
 
 
 def _clear_swap(journal: Path, lock: Path) -> None:
@@ -73,23 +107,22 @@ def _clear_swap(journal: Path, lock: Path) -> None:
 # ── transactional swap ──────────────────────────────────────────────────────
 def transactional_swap(dist_premium: Path, next_stage: Path, *, token: str) -> Path:
     """Promote ``next_stage`` to premium_stage, preserving the last-good stage."""
-    stage = dist_premium / "premium_stage"
-    backup = dist_premium / f"premium_stage.backup-{token}"
+    stage, backup, nxt = _derive_paths(dist_premium, token)
+    if next_stage.resolve() != nxt.resolve():
+        raise SwapError(f"NEXT_MISMATCH: {next_stage} != derived {nxt}")
+    stage_policy.assert_distinct(nxt, stage)
     journal, lock = _journal_path(dist_premium), _lock_path(dist_premium)
-    stage_policy.assert_safe_dest(dist_premium, stage)
-    stage_policy.assert_safe_dest(dist_premium, backup)
-    stage_policy.assert_distinct(next_stage, stage)
 
-    _acquire_lock(lock)
+    _acquire_lock(lock, token)
     try:
-        _write_journal(journal, "prepare", next_stage, stage, backup)
+        _write_journal(journal, "prepare", token)
         if stage.exists():
             os.rename(stage, backup)  # old -> backup: a RENAME, never a destroy
-            _write_journal(journal, "backed_up", next_stage, stage, backup)
-        os.rename(next_stage, stage)  # next -> stage
-        _write_journal(journal, "promoted", next_stage, stage, backup)
+            _write_journal(journal, "backed_up", token)
+        os.rename(nxt, stage)  # next -> stage
+        _write_journal(journal, "promoted", token)
     except Exception:
-        _rollback(stage, backup, next_stage)
+        _rollback(stage, backup, nxt)
         _clear_swap(journal, lock)
         raise
     if backup.exists():
@@ -109,28 +142,49 @@ def _rollback(stage: Path, backup: Path, next_stage: Path) -> None:
 
 
 def recover_swap(dist_premium: Path) -> str:
-    """Finish an interrupted swap from its journal (run before a new compose)."""
+    """Finish an interrupted swap from its journal (run before a new compose).
+
+    Malformed/unknown journals fail closed WITHOUT deleting anything. Paths are
+    derived from the validated dist_premium + token, never from stored strings."""
     journal, lock = _journal_path(dist_premium), _lock_path(dist_premium)
     if not journal.exists():
+        if lock.exists():
+            lock.unlink()  # crash after acquiring the lock, before the journal → stale
+            return "released_stale_lock"
         return "nothing"
-    data = json.loads(journal.read_text(encoding="utf-8"))
-    stage, backup, nxt = (Path(data["stage"]), Path(data["backup"]), Path(data["next"]))
-    if data["phase"] == "promoted":
+    data = _load_journal(journal)  # malformed → SwapError before any deletion
+    stage, backup, nxt = _derive_paths(dist_premium, data["token"])  # unsafe token → SwapError
+    phase = data["phase"]
+    if phase == "promoted":
         if backup.exists():
             shutil.rmtree(backup)
         _clear_swap(journal, lock)
         return "kept_new"
-    if data["phase"] == "backed_up":
-        if not stage.exists() and backup.exists():
+    if phase == "backed_up":
+        if stage.exists():  # next already promoted before the journal advanced
+            if backup.exists():
+                shutil.rmtree(backup)
+            result = "kept_new"
+        elif backup.exists():
             os.rename(backup, stage)
+            result = "restored_backup"
+        else:
+            result = "discarded_next"
         if nxt.exists():
             shutil.rmtree(nxt)
         _clear_swap(journal, lock)
-        return "restored_backup"
-    if nxt.exists():  # prepare — nothing was moved yet
-        shutil.rmtree(nxt)
-    _clear_swap(journal, lock)
-    return "discarded_next"
+        return result
+    if phase == "prepare":
+        if not stage.exists() and backup.exists():
+            os.rename(backup, stage)  # backup happened before the journal advanced
+            result = "restored_backup"
+        else:
+            result = "discarded_next"
+        if nxt.exists():
+            shutil.rmtree(nxt)
+        _clear_swap(journal, lock)
+        return result
+    raise SwapError(f"UNKNOWN_PHASE: {phase!r}")  # fail-closed, delete nothing
 
 
 # ── compose pipeline ────────────────────────────────────────────────────────
@@ -190,6 +244,10 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
         shutil.rmtree(nxt)
     nxt.mkdir(parents=True)
 
+    # F2: source-containment BEFORE copy — junction/escaping/dangling reject,
+    # only contained HF file-symlinks tolerated.
+    for key in ("assets", "backend"):
+        stage_policy.assert_source_symlinks_contained(inputs[key])
     _copy_inputs(nxt, inputs)
     _verify_receipts(nxt, receipts, version, git_sha)
     _apply_exclusions(nxt, exclusions)

@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterator
 
 MANIFEST_NAME = "STAGE_MANIFEST.json"
+_MANIFEST_MODES = ("signed", "internal")
+_SHA64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class StagePolicyError(Exception):
@@ -83,25 +86,36 @@ def assert_tree_reparse_free(root: Path) -> None:
 
 
 def assert_source_symlinks_contained(source: Path) -> None:
-    """Every reparse under ``source`` must resolve inside ``source``, not dangle."""
+    """Only contained HF FILE-symlinks are tolerated in an input source.
+
+    Junctions (dir reparse) are rejected outright, even when they point inside the
+    source; a symlink must resolve to a FILE inside ``source`` and must not dangle."""
     source_resolved = source.resolve()
     for child in _scandir_no_follow(source):
         if not is_reparse_point(child):
             continue
+        if os.path.isjunction(child):
+            raise ReparseError(f"junction not allowed in source: {child}")
         if not child.exists():  # follows the link → missing target = dangling
             raise ReparseError(f"dangling link in source: {child}")
         target = child.resolve()
         if not target.is_relative_to(source_resolved):
             raise ReparseError(f"link escapes source: {child} -> {target}")
+        if not target.is_file():
+            raise ReparseError(f"only contained file-symlinks allowed in source: {child}")
 
 
 # ── path safety ─────────────────────────────────────────────────────────────
 def assert_safe_dest(dist_root: Path, dest: Path) -> None:
-    """``dest`` must be inside ``dist_root``, not a root/drive, not a reparse."""
+    """``dest`` must be strictly INSIDE ``dist_root``, not a root/drive, not
+    ``dist_root`` itself, and not a reparse point."""
     dest_resolved = dest.resolve()
+    dist_resolved = dist_root.resolve()
     if dest_resolved == Path(dest_resolved.anchor):
         raise PathSafetyError(f"refusing a drive/filesystem root as dest: {dest}")
-    if not dest_resolved.is_relative_to(dist_root.resolve()):
+    if dest_resolved == dist_resolved:
+        raise PathSafetyError(f"dest must not be dist_premium itself: {dest}")
+    if not dest_resolved.is_relative_to(dist_resolved):
         raise PathSafetyError(f"dest escapes dist_premium: {dest} !< {dist_root}")
     if dest.exists() and is_reparse_point(dest):
         raise PathSafetyError(f"dest is a reparse point: {dest}")
@@ -147,8 +161,29 @@ def build_manifest(stage: Path, *, version: str, git_sha: str, mode: str,
     }
 
 
+def validate_manifest_schema(manifest: dict[str, Any]) -> None:
+    """Strict fail-closed STAGE_MANIFEST schema (before trusting any entry)."""
+    for field in ("version", "git_sha", "mode"):
+        val = manifest.get(field)
+        if not (isinstance(val, str) and val.strip()):
+            raise ManifestError(f"manifest schema: {field} must be a non-empty string")
+    if manifest["mode"] not in _MANIFEST_MODES:
+        raise ManifestError(f"manifest schema: mode must be one of {_MANIFEST_MODES}")
+    if not isinstance(manifest.get("receipts"), list):
+        raise ManifestError("manifest schema: receipts must be a list")
+    entries = manifest.get("entries")
+    if not isinstance(entries, dict):
+        raise ManifestError("manifest schema: entries must be a dict")
+    for rel, digest in entries.items():
+        if not (isinstance(rel, str) and rel):
+            raise ManifestError("manifest schema: entry path must be a non-empty string")
+        if not (isinstance(digest, str) and _SHA64_RE.match(digest)):
+            raise ManifestError(f"manifest schema: entry sha256 must be 64 hex: {rel}")
+
+
 def verify_manifest(stage: Path, manifest: dict[str, Any]) -> None:
     """Raise ManifestError if the on-disk stage drifts from ``manifest`` entries."""
+    validate_manifest_schema(manifest)
     expected: dict[str, str] = manifest["entries"]
     actual = _entry_hashes(stage)
     extraneous = sorted(set(actual) - set(expected))
