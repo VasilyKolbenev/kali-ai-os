@@ -30,6 +30,10 @@ def _layout(tmp_path: Path, *, with_receipts: bool = True) -> tuple[Path, Path, 
     (sot / "ffmpeg").mkdir(parents=True)
     (sot / "model.bin").write_bytes(b"W")
     (sot / "ggml-base.bin").write_bytes(b"DEAD")
+    # G5: the SoT integrity manifest the composer verifies before copy
+    _mpath = dist / "premium_assets" / "PREMIUM_ASSETS.sha256.json"
+    _mpath.write_text(json.dumps({"entries": stage_policy.file_content_hashes(sot)}),
+                      encoding="utf-8")
     (repo / "scripts").mkdir(parents=True)
     (repo / "scripts" / "install-webview2.ps1").write_bytes(b"PS")
     if with_receipts:
@@ -90,3 +94,15 @@ def test_build_signing_signed_ok_with_full_contract() -> None:
         "KALI_SIGN_SIGNTOOL": "signtool.exe",
     })
     assert callable(signer)
+
+
+# ── G5: premium_assets SoT integrity is load-bearing (drift stops compose) ──
+def test_compose_cli_stops_on_sot_drift(tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as ab
+    repo, dist, tauri = _layout(tmp_path)
+    (dist / "premium_assets" / "models" / "model.bin").write_bytes(b"DRIFTED")  # after bootstrap
+    with pytest.raises(ab.BootstrapError) as exc:
+        cc.compose(repo, dist, tauri, mode="internal", version="1.0.0-rc3",
+                   git_sha="a" * 40, materializer=lambda p: None,
+                   signer=lambda p, m: None, token="1")
+    assert "SOT_DRIFT" in str(exc.value)

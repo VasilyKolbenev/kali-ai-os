@@ -116,23 +116,7 @@ def bundle_under_root(root: Path) -> Path:
 
 
 def _root_entry_hashes(root: Path) -> dict[str, str]:
-    entries: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(root):
-        base = Path(dirpath)
-        dirnames[:] = [d for d in dirnames if not stage_policy.is_reparse_point(base / d)]
-        for fn in filenames:
-            fp = base / fn
-            if stage_policy.is_reparse_point(fp):
-                continue
-            rel = fp.relative_to(root).as_posix()
-            if rel == stage_policy.MANIFEST_NAME:
-                continue
-            h = hashlib.sha256()
-            with fp.open("rb") as fh:
-                for block in iter(lambda: fh.read(1 << 20), b""):
-                    h.update(block)
-            entries[rel] = h.hexdigest()
-    return entries
+    return stage_policy.file_content_hashes(root, exclude=frozenset({stage_policy.MANIFEST_NAME}))
 
 
 def verify_root_matches_manifest(root: Path, manifest_path: Path) -> None:
@@ -141,11 +125,22 @@ def verify_root_matches_manifest(root: Path, manifest_path: Path) -> None:
     stage_policy.verify_manifest(root, manifest)
 
 
+def _is_inno_root_extra(rel: str) -> bool:
+    """An Inno-generated extra is allowed ONLY at the root (no nesting) and only by
+    an exact uninsNNN.exe/dat name — nested models/unins999.exe is never allowed."""
+    return "/" not in rel and bool(_UNINS_RE.match(rel))
+
+
 def verify_installed_root(root: Path, manifest_path: Path) -> None:
-    """Installed root: every stage-owned file matches the manifest; the only extras
-    allowed are Inno-generated uninstaller files (never arbitrary strays)."""
+    """Installed root: zero reparse first, the shipped STAGE_MANIFEST must equal the
+    passed manifest, every stage-owned file matches, and the only extras allowed are
+    Inno-generated uninstaller files AT THE ROOT (never nested, never arbitrary)."""
+    stage_policy.assert_tree_reparse_free(root)  # G6: no reparse may hide files
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     stage_policy.validate_manifest_schema(manifest)
+    installed = root / stage_policy.MANIFEST_NAME
+    if installed.is_file() and json.loads(installed.read_text(encoding="utf-8")) != manifest:
+        raise stage_policy.ManifestError("installed STAGE_MANIFEST differs from the passed manifest")
     expected: dict[str, str] = manifest["entries"]
     actual = _root_entry_hashes(root)
     for rel, digest in expected.items():
@@ -154,7 +149,7 @@ def verify_installed_root(root: Path, manifest_path: Path) -> None:
         if actual[rel] != digest:
             raise stage_policy.ManifestError(f"installed root content mismatch: {rel}")
     for rel in actual:
-        if rel not in expected and not _UNINS_RE.match(rel.rsplit("/", 1)[-1]):
+        if rel not in expected and not _is_inno_root_extra(rel):
             raise stage_policy.ManifestError(f"unexpected file in installed root: {rel}")
 
 

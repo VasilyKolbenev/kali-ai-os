@@ -119,6 +119,44 @@ def test_bootstrap_cli_runs(tmp_path: Path) -> None:
     assert (dist / "premium_assets" / "models" / "model.bin").read_bytes() == b"WEIGHTS"
 
 
+# ── G5: SoT integrity is load-bearing + fetch is pinned/verified ────────────
+def test_verify_sot_integrity_ok_then_drift(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    ab.verify_sot_integrity(sot, manifest)  # matches → ok
+    (sot / "model.bin").write_bytes(b"DRIFTED")
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.verify_sot_integrity(sot, manifest)
+    assert "SOT_DRIFT" in str(exc.value)
+
+
+def test_ffmpeg_url_is_pinned_not_latest() -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    assert "/latest/" not in fl.ASSET_URL and "-latest-" not in fl.ASSET_URL
+
+
+def test_ffmpeg_verify_download_refuses_unpinned(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    f = tmp_path / "a.zip"; f.write_bytes(b"x")
+    with pytest.raises(SystemExit):
+        fl.verify_download_sha256(f, "")  # empty pin → fail-closed
+
+
+def test_ffmpeg_verify_download_rejects_mismatch(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    f = tmp_path / "a.zip"; f.write_bytes(b"x")
+    with pytest.raises(SystemExit):
+        fl.verify_download_sha256(f, "00" * 32)
+
+
+def test_ffmpeg_verify_download_accepts_match(tmp_path: Path) -> None:
+    import hashlib
+    import scripts.fetch_lgpl_ffmpeg as fl
+    f = tmp_path / "a.zip"; f.write_bytes(b"payload")
+    fl.verify_download_sha256(f, hashlib.sha256(b"payload").hexdigest())  # matches → ok
+
+
 # ── external-writer lockdown: fetch_lgpl_ffmpeg --stage forbidden ───────────
 def test_fetch_lgpl_stage_is_forbidden(monkeypatch, tmp_path: Path) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl

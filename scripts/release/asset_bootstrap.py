@@ -46,18 +46,8 @@ def _sha256_file(path: Path) -> str:
 
 
 def _dir_hashes(root: Path) -> dict[str, str]:
-    """``{relpath: sha256}`` for every regular file under ``root`` (no reparse)."""
-    out: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(root):
-        base = Path(dirpath)
-        # never descend into a junction/symlinked dir (would follow a reparse)
-        dirnames[:] = [d for d in dirnames if not stage_policy.is_reparse_point(base / d)]
-        for fn in filenames:
-            fp = base / fn
-            if stage_policy.is_reparse_point(fp):
-                continue
-            out[fp.relative_to(root).as_posix()] = _sha256_file(fp)
-    return out
+    """``{relpath: sha256}`` for every file under ``root`` (shared content hashing)."""
+    return stage_policy.file_content_hashes(root)
 
 
 def _default_copier(src: Path, dst: Path) -> None:
@@ -89,6 +79,29 @@ def _remove_legacy_junction(legacy: Path) -> None:
     """Remove the legacy junction link only (never its target's content)."""
     if stage_policy.is_reparse_point(legacy):
         os.rmdir(legacy)  # drops the reparse point; the real target survives
+
+
+def sot_paths(dist_premium: Path) -> tuple[Path, Path]:
+    """(SoT models dir, integrity manifest) for a dist_premium."""
+    assets = dist_premium / "premium_assets"
+    return assets / "models", assets / _MANIFEST_NAME
+
+
+def verify_sot_integrity(sot: Path, manifest_path: Path) -> None:
+    """Fail-closed: the premium_assets SoT must be physical-only and byte-identical
+    to its integrity manifest. The composer runs this BEFORE copying the assets, so
+    any drift after bootstrap stops the build."""
+    if not sot.is_dir() or not manifest_path.is_file():
+        raise BootstrapError(f"SOT_MISSING: {sot} / {manifest_path}")
+    _assert_physical(sot)
+    stored: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if _dir_hashes(sot) != stored.get("entries"):
+        raise BootstrapError("SOT_DRIFT: premium_assets drifted from its integrity manifest")
+
+
+def asset_manifest_digest(manifest_path: Path) -> str:
+    """A digest of the SoT integrity manifest, pinned into STAGE_MANIFEST provenance."""
+    return _sha256_file(manifest_path)
 
 
 def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None) -> str:

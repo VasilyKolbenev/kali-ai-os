@@ -46,21 +46,29 @@ def test_swap_promotes_next_to_stage_and_cleans_up(tmp_path: Path) -> None:
     result = sc.transactional_swap(dist, dist / "premium_stage.next-1", token="1")
     assert result == dist / "premium_stage"
     assert (dist / "premium_stage" / "marker.txt").read_bytes() == b"NEW"
-    # no leftovers
+    # no leftovers (the lock FILE persists as an anchor; its OS lock is released)
     assert not (dist / "premium_stage.next-1").exists()
     assert not (dist / "premium_stage.backup-1").exists()
     assert not (dist / "premium_stage.swap-journal.json").exists()
-    assert not (dist / "premium_stage.swap.lock").exists()
 
 
-def test_swap_refuses_when_locked(tmp_path: Path) -> None:
+def test_swap_refuses_when_lock_held(tmp_path: Path) -> None:
+    # G4: a LIVE OS lock blocks a second flow (a mere leftover file does not).
     dist = _dist(tmp_path)
     _stage_with(dist, "m", b"OLD")
     _next_with(dist, "1", "m", b"NEW")
-    (dist / "premium_stage.swap.lock").write_text("held", encoding="utf-8")
-    with pytest.raises(sc.SwapError) as exc:
-        sc.transactional_swap(dist, dist / "premium_stage.next-1", token="1")
-    assert "SWAP_LOCKED" in str(exc.value)
+    with sc.swap_lock(dist):  # hold the OS lock
+        with pytest.raises(sc.SwapError) as exc:
+            sc.transactional_swap(dist, dist / "premium_stage.next-1", token="1")
+        assert "SWAP_LOCKED" in str(exc.value)
+
+
+def test_two_flows_cannot_run_concurrently(tmp_path: Path) -> None:
+    # G4: two concurrent composes cannot proceed under one held lock.
+    dist = _dist(tmp_path)
+    with sc.swap_lock(dist):
+        with pytest.raises(sc.SwapError):
+            sc.recover_swap(dist)
 
 
 # ── failure mid-swap auto-rolls-back to last-good (mutation-a target) ────────
@@ -163,12 +171,23 @@ def test_recover_malicious_token_refuses_and_preserves_outside(tmp_path: Path) -
     assert (outside / "keep.txt").read_bytes() == b"KEEP"  # sibling untouched
 
 
-def test_recover_releases_stale_lock_without_journal(tmp_path: Path) -> None:
-    # crash after acquiring the lock but before writing the journal → lock is stale
+def test_recover_ignores_leftover_lock_file(tmp_path: Path) -> None:
+    # G4: a leftover lock FILE with no live holder does not block — the OS lock is
+    # free once the crashed process died, so recovery acquires it and proceeds.
     dist = _dist(tmp_path)
     (dist / "premium_stage.swap.lock").write_text("nonce", encoding="utf-8")
-    assert sc.recover_swap(dist) == "released_stale_lock"
-    assert not (dist / "premium_stage.swap.lock").exists()
+    assert sc.recover_swap(dist) == "nothing"
+
+
+def test_recover_under_new_lock_after_crash(tmp_path: Path) -> None:
+    # G4: a crash leaves a journal + a stale lock file; recovery runs under a NEW lock.
+    dist = _dist(tmp_path)
+    backup = dist / "premium_stage.backup-1"; backup.mkdir()
+    (backup / "marker.txt").write_bytes(b"OLD")
+    (dist / "premium_stage.swap.lock").write_text("stale", encoding="utf-8")
+    _journal(dist, "backed_up")
+    assert sc.recover_swap(dist) == "restored_backup"
+    assert (dist / "premium_stage" / "marker.txt").read_bytes() == b"OLD"
 
 
 def test_recover_nothing_without_journal_or_lock(tmp_path: Path) -> None:
@@ -266,6 +285,28 @@ def test_compose_manifest_git_sha_matches_planned(tmp_path: Path) -> None:
     stage = _compose(tmp_path, dist)  # planned git_sha = "s"*40, receipts too
     manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["git_sha"] == "a" * 40
+
+
+def test_compose_receipt_survives_contained_symlink(tmp_path: Path) -> None:
+    # G3: a contained HF FILE-symlink in the backend is hashed by CONTENT, so the
+    # receipt still matches after copy/materialize dereferences it to a real file.
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    be = inputs["backend"]
+    (be / "hf" / "blobs").mkdir(parents=True)
+    (be / "hf" / "blobs" / "b").write_bytes(b"MODELDATA")
+    (be / "hf" / "snapshots").mkdir(parents=True)
+    try:
+        (be / "hf" / "snapshots" / "model.bin").symlink_to(Path("..") / "blobs" / "b")
+    except OSError:
+        pytest.skip("no symlink privilege")
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")  # hashes the symlink by content
+    stage = sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                             git_sha="a" * 40, mode="internal", exclusions=[],
+                             materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
+    stage_policy.verify_manifest(stage, manifest)
+    assert (stage / "kali-backend" / "hf" / "snapshots" / "model.bin").read_bytes() == b"MODELDATA"
 
 
 def test_compose_rejects_junction_in_source_before_copy(tmp_path: Path) -> None:

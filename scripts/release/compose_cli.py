@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from scripts.release import installer_gate, signing_gate, stage_composer
+from scripts.release import asset_bootstrap, installer_gate, signing_gate, stage_composer
 
 # Declarative dead weight dropped from every stage (leftover whisper.cpp model
 # from the abandoned Rust-native STT path — referenced nowhere in shipped code).
@@ -28,10 +28,12 @@ Signer = Callable[[Path, str], None]
 
 
 def input_paths(repo: Path, dist_premium: Path, tauri_release: Path) -> dict[str, Path]:
+    sot, assets_manifest = asset_bootstrap.sot_paths(dist_premium)
     return {
         "backend": dist_premium / "kali-backend",
         "desktop_exe": tauri_release / "kali-desktop.exe",
-        "assets": dist_premium / "premium_assets" / "models",
+        "assets": sot,
+        "assets_manifest": assets_manifest,  # G5: SoT integrity verified before copy
         "webview2": repo / "scripts" / "install-webview2.ps1",
     }
 

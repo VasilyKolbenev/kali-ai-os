@@ -118,6 +118,38 @@ def test_verify_installed_root_rejects_unknown_extra(tmp_path: Path) -> None:
         fs.verify_installed_root(root, mpath)
 
 
+def test_verify_installed_root_rejects_nested_inno(tmp_path: Path) -> None:
+    # G6: an Inno-named file is only tolerated at the ROOT; a nested one is a bypass.
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / "models" / "unins999.exe").write_bytes(b"NESTED")
+    with pytest.raises(stage_policy.ManifestError):
+        fs.verify_installed_root(root, mpath)
+
+
+def test_verify_installed_root_rejects_divergent_installed_manifest(tmp_path: Path) -> None:
+    # G6: the shipped STAGE_MANIFEST must equal the passed manifest.
+    root, mpath = _sealed_stage_root(tmp_path)
+    other = tmp_path / "other.json"
+    m = json.loads(mpath.read_text(encoding="utf-8")); m["version"] = "9.9.9"
+    other.write_text(json.dumps(m), encoding="utf-8")
+    with pytest.raises(stage_policy.ManifestError):
+        fs.verify_installed_root(root, other)
+
+
+def test_verify_installed_root_requires_reparse_free(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+    if _sys.platform != "win32":
+        pytest.skip("junctions are Windows-only")
+    root, mpath = _sealed_stage_root(tmp_path)
+    proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(root / "j"), str(tmp_path)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip("mklink /J unavailable")
+    with pytest.raises(stage_policy.ReparseError):
+        fs.verify_installed_root(root, mpath)
+
+
 def test_bundle_is_contained_under_root(tmp_path: Path) -> None:
     root, _ = _sealed_stage_root(tmp_path)
     bundle = fs.bundle_under_root(root)

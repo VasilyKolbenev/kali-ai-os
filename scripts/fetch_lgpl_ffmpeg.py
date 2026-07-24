@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -28,10 +29,30 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# G5: pin the release to an immutable, dated autobuild tag (NOT the mutable "latest"
+# tag) and verify the download against a pinned SHA256. The tag + SHA256 are owner-
+# pinned values; an empty ASSET_SHA256 fails closed (refuses to install unverified
+# bytes). Update both together when bumping the FFmpeg build.
+FFMPEG_TAG = "autobuild-2025-01-01-12-30"  # owner-pinned immutable tag (placeholder)
 ASSET_URL = (
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-    "ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+    f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{FFMPEG_TAG}/"
+    "ffmpeg-n8.1-win64-lgpl-shared-8.1.zip"
 )
+ASSET_SHA256 = ""  # owner-pinned SHA256 of the exact asset; empty => fail closed
+
+
+def verify_download_sha256(path: Path, expected: str) -> None:
+    """Fail-closed integrity gate for the downloaded asset (no mutable trust)."""
+    if not expected:
+        raise SystemExit(
+            "ASSET_SHA256 is not pinned — refusing to install unverified FFmpeg bytes")
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    actual = h.hexdigest()
+    if actual != expected.lower():
+        raise SystemExit(f"FFmpeg SHA256 mismatch: {actual} != pinned {expected}")
 # The exact soname set the bundle (and torchcodec) expects — FFmpeg 8.x.
 EXPECTED_DLLS = {
     "avcodec-62.dll",
@@ -100,6 +121,7 @@ def main() -> None:
         zip_path = tmp_path / "ffmpeg-lgpl.zip"
         print(f"Downloading {ASSET_URL} ...")
         urllib.request.urlretrieve(ASSET_URL, zip_path)  # noqa: S310 — trusted release host
+        verify_download_sha256(zip_path, ASSET_SHA256)  # G5: fail-closed integrity pin
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(tmp_path)
         build_dir = next(tmp_path.glob("ffmpeg-*-win64-lgpl-shared-*"))

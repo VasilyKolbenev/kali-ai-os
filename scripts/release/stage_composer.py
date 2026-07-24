@@ -27,11 +27,19 @@ import json
 import os
 import re
 import shutil
+import sys
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
+from scripts.release import asset_bootstrap
 from scripts.release import receipts as rc
 from scripts.release import stage_policy
+
+if sys.platform == "win32":
+    import msvcrt
+else:  # pragma: no cover - build tooling is Windows; POSIX kept for CI/dev
+    import fcntl
 
 _JOURNAL = "premium_stage.swap-journal.json"
 _LOCK = "premium_stage.swap.lock"
@@ -69,12 +77,44 @@ def _derive_paths(dist: Path, token: str) -> tuple[Path, Path, Path]:
     return stage, backup, nxt
 
 
-def _acquire_lock(lock: Path, token: str) -> None:
+def _acquire_os_lock(lock_path: Path) -> int:
+    """Acquire an OWNERSHIP-safe OS lock (held by the returned fd). A live holder's
+    lock cannot be taken by another process; the OS releases it if that process
+    dies — so a leftover lock FILE never blocks, only a live lock does."""
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
     try:
-        with open(lock, "x", encoding="utf-8") as fh:  # O_CREAT|O_EXCL
-            fh.write(token)
-    except FileExistsError as e:
-        raise SwapError(f"SWAP_LOCKED: {lock} exists (another swap in progress?)") from e
+        os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        raise SwapError(f"SWAP_LOCKED: {lock_path} held by another process") from e
+    return fd
+
+
+def _release_os_lock(fd: int) -> None:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    os.close(fd)
+
+
+@contextmanager
+def swap_lock(dist: Path) -> Iterator[int]:
+    """Hold the OS swap lock across a whole recover -> compose -> seal -> swap flow."""
+    fd = _acquire_os_lock(_lock_path(dist))
+    try:
+        yield fd
+    finally:
+        _release_os_lock(fd)
 
 
 def _write_journal(journal: Path, phase: str, token: str) -> None:
@@ -98,36 +138,38 @@ def _load_journal(journal: Path) -> dict[str, Any]:
     return data
 
 
-def _clear_swap(journal: Path, lock: Path) -> None:
-    for p in (journal, lock):
-        if p.exists():
-            p.unlink()
+def _clear_journal(journal: Path) -> None:
+    if journal.exists():
+        journal.unlink()  # the OS lock is released by closing its fd, not by deletion
 
 
 # ── transactional swap ──────────────────────────────────────────────────────
-def transactional_swap(dist_premium: Path, next_stage: Path, *, token: str) -> Path:
-    """Promote ``next_stage`` to premium_stage, preserving the last-good stage."""
+def transactional_swap(dist_premium: Path, next_stage: Path, *, token: str,
+                       _held: bool = False) -> Path:
+    """Promote ``next_stage`` to premium_stage, preserving the last-good stage.
+
+    ``_held`` means the caller (compose) already holds the OS lock across the flow."""
     stage, backup, nxt = _derive_paths(dist_premium, token)
     if next_stage.resolve() != nxt.resolve():
         raise SwapError(f"NEXT_MISMATCH: {next_stage} != derived {nxt}")
     stage_policy.assert_distinct(nxt, stage)
-    journal, lock = _journal_path(dist_premium), _lock_path(dist_premium)
+    journal = _journal_path(dist_premium)
 
-    _acquire_lock(lock, token)
-    try:
-        _write_journal(journal, "prepare", token)
-        if stage.exists():
-            os.rename(stage, backup)  # old -> backup: a RENAME, never a destroy
-            _write_journal(journal, "backed_up", token)
-        os.rename(nxt, stage)  # next -> stage
-        _write_journal(journal, "promoted", token)
-    except Exception:
-        _rollback(stage, backup, nxt)
-        _clear_swap(journal, lock)
-        raise
-    if backup.exists():
-        shutil.rmtree(backup)
-    _clear_swap(journal, lock)
+    with (nullcontext() if _held else swap_lock(dist_premium)):
+        try:
+            _write_journal(journal, "prepare", token)
+            if stage.exists():
+                os.rename(stage, backup)  # old -> backup: a RENAME, never a destroy
+                _write_journal(journal, "backed_up", token)
+            os.rename(nxt, stage)  # next -> stage
+            _write_journal(journal, "promoted", token)
+        except Exception:
+            _rollback(stage, backup, nxt)
+            _clear_journal(journal)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+        _clear_journal(journal)
     return stage
 
 
@@ -141,50 +183,49 @@ def _rollback(stage: Path, backup: Path, next_stage: Path) -> None:
         shutil.rmtree(next_stage)
 
 
-def recover_swap(dist_premium: Path) -> str:
-    """Finish an interrupted swap from its journal (run before a new compose).
+def recover_swap(dist_premium: Path, *, _held: bool = False) -> str:
+    """Finish an interrupted swap from its journal, UNDER the OS lock.
 
-    Malformed/unknown journals fail closed WITHOUT deleting anything. Paths are
-    derived from the validated dist_premium + token, never from stored strings."""
-    journal, lock = _journal_path(dist_premium), _lock_path(dist_premium)
-    if not journal.exists():
-        if lock.exists():
-            lock.unlink()  # crash after acquiring the lock, before the journal → stale
-            return "released_stale_lock"
-        return "nothing"
-    data = _load_journal(journal)  # malformed → SwapError before any deletion
-    stage, backup, nxt = _derive_paths(dist_premium, data["token"])  # unsafe token → SwapError
-    phase = data["phase"]
-    if phase == "promoted":
-        if backup.exists():
-            shutil.rmtree(backup)
-        _clear_swap(journal, lock)
-        return "kept_new"
-    if phase == "backed_up":
-        if stage.exists():  # next already promoted before the journal advanced
+    A live lock blocks recovery (SWAP_LOCKED); a leftover lock file from a dead
+    process does not. Malformed/unknown journals fail closed without deleting
+    anything. Paths are derived from the validated dist_premium + token."""
+    journal = _journal_path(dist_premium)
+    with (nullcontext() if _held else swap_lock(dist_premium)):
+        if not journal.exists():
+            return "nothing"
+        data = _load_journal(journal)  # malformed → SwapError before any deletion
+        stage, backup, nxt = _derive_paths(dist_premium, data["token"])  # unsafe token → SwapError
+        phase = data["phase"]
+        if phase == "promoted":
             if backup.exists():
                 shutil.rmtree(backup)
-            result = "kept_new"
-        elif backup.exists():
-            os.rename(backup, stage)
-            result = "restored_backup"
-        else:
-            result = "discarded_next"
-        if nxt.exists():
-            shutil.rmtree(nxt)
-        _clear_swap(journal, lock)
-        return result
-    if phase == "prepare":
-        if not stage.exists() and backup.exists():
-            os.rename(backup, stage)  # backup happened before the journal advanced
-            result = "restored_backup"
-        else:
-            result = "discarded_next"
-        if nxt.exists():
-            shutil.rmtree(nxt)
-        _clear_swap(journal, lock)
-        return result
-    raise SwapError(f"UNKNOWN_PHASE: {phase!r}")  # fail-closed, delete nothing
+            _clear_journal(journal)
+            return "kept_new"
+        if phase == "backed_up":
+            if stage.exists():  # next already promoted before the journal advanced
+                if backup.exists():
+                    shutil.rmtree(backup)
+                result = "kept_new"
+            elif backup.exists():
+                os.rename(backup, stage)
+                result = "restored_backup"
+            else:
+                result = "discarded_next"
+            if nxt.exists():
+                shutil.rmtree(nxt)
+            _clear_journal(journal)
+            return result
+        if phase == "prepare":
+            if not stage.exists() and backup.exists():
+                os.rename(backup, stage)  # backup happened before the journal advanced
+                result = "restored_backup"
+            else:
+                result = "discarded_next"
+            if nxt.exists():
+                shutil.rmtree(nxt)
+            _clear_journal(journal)
+            return result
+        raise SwapError(f"UNKNOWN_PHASE: {phase!r}")  # fail-closed, delete nothing
 
 
 # ── compose pipeline ────────────────────────────────────────────────────────
@@ -222,10 +263,12 @@ def _apply_exclusions(nxt: Path, exclusions: list[str]) -> None:
 
 
 def _seal_manifest(nxt: Path, *, version: str, git_sha: str, mode: str,
-                   receipts: dict[str, Path]) -> dict[str, Any]:
+                   receipts: dict[str, Path], asset_digest: str | None = None) -> dict[str, Any]:
     receipt_meta = [{"name": k, **rc.load_receipt(p)} for k, p in receipts.items()]
     manifest = stage_policy.build_manifest(nxt, version=version, git_sha=git_sha,
                                            mode=mode, receipts=receipt_meta)
+    if asset_digest is not None:
+        manifest["asset_manifest_sha256"] = asset_digest  # G5: SoT provenance pin
     (nxt / stage_policy.MANIFEST_NAME).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -236,25 +279,36 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
                   receipts: dict[str, Path], version: str, git_sha: str, mode: str,
                   exclusions: list[str], materializer: Materializer, signer: Signer,
                   token: str) -> Path:
-    """Compose a clean sealed stage and swap it into place rollback-safely."""
-    recover_swap(dist_premium)  # finish any interrupted prior swap first
-    nxt = dist_premium / f"premium_stage.next-{token}"
-    stage_policy.assert_safe_dest(dist_premium, nxt)
-    if nxt.exists():
-        shutil.rmtree(nxt)
-    nxt.mkdir(parents=True)
+    """Compose a clean sealed stage and swap it into place rollback-safely.
 
-    # F2: source-containment BEFORE copy — junction/escaping/dangling reject,
-    # only contained HF file-symlinks tolerated.
-    for key in ("assets", "backend"):
-        stage_policy.assert_source_symlinks_contained(inputs[key])
-    _copy_inputs(nxt, inputs)
-    _verify_receipts(nxt, receipts, version, git_sha)
-    _apply_exclusions(nxt, exclusions)
-    materializer(nxt)
-    stage_policy.assert_tree_reparse_free(nxt)  # zero reparse points after materialize
-    signer(nxt, mode)
-    manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
-                              receipts=receipts)  # MANIFEST LAST
-    stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
-    return transactional_swap(dist_premium, nxt, token=token)
+    G4: the OS swap lock is held across the WHOLE recover -> compose -> seal -> swap
+    flow, so a second concurrent compose cannot interleave on the same next-stage."""
+    with swap_lock(dist_premium):
+        recover_swap(dist_premium, _held=True)  # finish any interrupted prior swap first
+        nxt = dist_premium / f"premium_stage.next-{token}"
+        stage_policy.assert_safe_dest(dist_premium, nxt)
+        if nxt.exists():
+            shutil.rmtree(nxt)
+        nxt.mkdir(parents=True)
+
+        # F2: source-containment BEFORE copy — junction/escaping/dangling reject,
+        # only contained HF file-symlinks tolerated.
+        for key in ("assets", "backend"):
+            stage_policy.assert_source_symlinks_contained(inputs[key])
+        # G5: the premium_assets SoT must be physical-only and match its integrity
+        # manifest BEFORE copy — any drift after bootstrap stops the build.
+        asset_digest = None
+        assets_manifest = inputs.get("assets_manifest")
+        if assets_manifest is not None:
+            asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
+            asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
+        _copy_inputs(nxt, inputs)
+        _verify_receipts(nxt, receipts, version, git_sha)
+        _apply_exclusions(nxt, exclusions)
+        materializer(nxt)
+        stage_policy.assert_tree_reparse_free(nxt)  # zero reparse points after materialize
+        signer(nxt, mode)
+        manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
+                                  receipts=receipts, asset_digest=asset_digest)  # MANIFEST LAST
+        stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
+        return transactional_swap(dist_premium, nxt, token=token, _held=True)

@@ -241,6 +241,18 @@ def test_verify_manifest_ok_for_exact_stage(tmp_path: Path) -> None:
     sp.verify_manifest(stage, m)  # не поднимает
 
 
+def test_verify_manifest_requires_reparse_free(tmp_path: Path) -> None:
+    # G6: a reparse point could hide files from the walk — verify_manifest must
+    # refuse a stage with any reparse point BEFORE trusting the entry comparison.
+    stage = tmp_path / "premium_stage"
+    stage.mkdir()
+    _seed_stage(stage)
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[])
+    _make_junction(stage / "j", tmp_path / "target")
+    with pytest.raises(sp.ReparseError):
+        sp.verify_manifest(stage, m)
+
+
 @pytest.mark.parametrize("drift", ["extraneous", "mismatch", "missing"])
 def test_verify_manifest_detects_drift(tmp_path: Path, drift: str) -> None:
     stage = tmp_path / "premium_stage"

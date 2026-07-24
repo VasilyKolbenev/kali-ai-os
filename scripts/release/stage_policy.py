@@ -136,17 +136,29 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def file_content_hashes(root: Path, *, exclude: "frozenset[str]" = frozenset()) -> dict[str, str]:
+    """``{relpath: sha256}`` over every file under ``root``, hashing by CONTENT.
+
+    A contained HF FILE-symlink is hashed by the bytes it points at, so it is
+    materialize-invariant: after materialize (symlink -> a real copy of the target)
+    the hash is unchanged. Dir reparse points (junctions) are never descended into
+    (they are rejected by the source-containment / reparse-free policy elsewhere)."""
+    out: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        base = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if not is_reparse_point(base / d)]
+        for fn in filenames:
+            fp = base / fn
+            rel = fp.relative_to(root).as_posix()
+            if rel in exclude:
+                continue
+            out[rel] = _sha256_file(fp)  # opens fp, following a file-symlink to its content
+    return out
+
+
 def _entry_hashes(stage: Path) -> dict[str, str]:
-    """``{relpath: sha256}`` for every regular file except the manifest itself."""
-    entries: dict[str, str] = {}
-    for child in _scandir_no_follow(stage):
-        if is_reparse_point(child) or not child.is_file():
-            continue
-        rel = child.relative_to(stage).as_posix()
-        if rel == MANIFEST_NAME:
-            continue
-        entries[rel] = _sha256_file(child)
-    return entries
+    """``{relpath: sha256}`` for every file except the manifest itself."""
+    return file_content_hashes(stage, exclude=frozenset({MANIFEST_NAME}))
 
 
 def build_manifest(stage: Path, *, version: str, git_sha: str, mode: str,
@@ -182,7 +194,11 @@ def validate_manifest_schema(manifest: dict[str, Any]) -> None:
 
 
 def verify_manifest(stage: Path, manifest: dict[str, Any]) -> None:
-    """Raise ManifestError if the on-disk stage drifts from ``manifest`` entries."""
+    """Raise ManifestError if the on-disk stage drifts from ``manifest`` entries.
+
+    A reparse point could hide files from the content walk, so a zero-reparse check
+    runs FIRST (G6): no junction/symlink may bypass the manifest comparison."""
+    assert_tree_reparse_free(stage)
     validate_manifest_schema(manifest)
     expected: dict[str, str] = manifest["entries"]
     actual = _entry_hashes(stage)
