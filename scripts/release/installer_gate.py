@@ -74,7 +74,8 @@ def assert_iss_internal_naming(iss_text: str) -> None:
     """An internal build must name Setup AND every slice INTERNAL at ISCC time
     (a conditional OutputBaseFilename), never by a post-build EXE rename."""
     if "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE" not in iss_text:
-        raise InstallerGateError("NO_INTERNAL_NAMING: conditional INTERNAL OutputBaseFilename missing")
+        raise InstallerGateError(
+            "NO_INTERNAL_NAMING: conditional INTERNAL OutputBaseFilename missing")
     if "#ifdef Internal" not in iss_text:
         raise InstallerGateError("NO_INTERNAL_GUARD: #ifdef Internal guard missing")
 

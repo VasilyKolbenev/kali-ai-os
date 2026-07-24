@@ -46,7 +46,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -139,7 +139,8 @@ def verify_installed_root(root: Path, manifest_path: Path) -> None:
     stage_policy.validate_manifest_schema(manifest)
     installed = root / stage_policy.MANIFEST_NAME
     if installed.is_file() and json.loads(installed.read_text(encoding="utf-8")) != manifest:
-        raise stage_policy.ManifestError("installed STAGE_MANIFEST differs from the passed manifest")
+        raise stage_policy.ManifestError(
+            "installed STAGE_MANIFEST differs from the passed manifest")
     expected: dict[str, str] = manifest["entries"]
     actual = _root_entry_hashes(root)
     for rel, digest in expected.items():

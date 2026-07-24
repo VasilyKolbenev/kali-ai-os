@@ -91,7 +91,8 @@ def build_signing(mode: str, *, env: dict[str, str]) -> Signer:
                 exe, selector=selector, timestamp_url=timestamp_url, signtool=signtool),
                 capture_output=True, text=True)
             if proc.returncode != 0:
-                raise signing_gate.SigningGateError(f"inner sign failed: {exe}: {proc.stderr[:200]}")
+                raise signing_gate.SigningGateError(
+                    f"inner sign failed: {exe}: {proc.stderr[:200]}")
             signing_gate.verify_signed(exe, expected_thumbprint=expected_thumbprint,
                                        inspector=signing_gate.powershell_inspector)
     return _sign

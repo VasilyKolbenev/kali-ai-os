@@ -32,9 +32,8 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from scripts.release import asset_bootstrap
+from scripts.release import asset_bootstrap, stage_policy
 from scripts.release import receipts as rc
-from scripts.release import stage_policy
 
 if sys.platform == "win32":
     import msvcrt

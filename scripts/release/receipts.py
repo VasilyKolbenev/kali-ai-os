@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -42,18 +41,13 @@ def _sha256_file(path: Path) -> str:
 
 
 def artifact_sha256(artifact: Path) -> str:
-    """Content hash of an artifact: a file's sha256, or a dir's Merkle-style digest."""
+    """Content hash of an artifact: a file's sha256, or a dir's Merkle-style digest.
+
+    Contained file-symlinks are hashed by content (materialize-invariant) via the
+    shared stage_policy.file_content_hashes."""
     if artifact.is_file():
         return _sha256_file(artifact)
-    entries: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(artifact):
-        base = Path(dirpath)
-        dirnames[:] = [d for d in dirnames if not stage_policy.is_reparse_point(base / d)]
-        for fn in filenames:
-            fp = base / fn
-            if stage_policy.is_reparse_point(fp) or fn == RECEIPT_NAME:
-                continue
-            entries[fp.relative_to(artifact).as_posix()] = _sha256_file(fp)
+    entries = stage_policy.file_content_hashes(artifact, exclude=frozenset({RECEIPT_NAME}))
     canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
