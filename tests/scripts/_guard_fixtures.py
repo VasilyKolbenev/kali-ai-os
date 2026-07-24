@@ -216,7 +216,8 @@ def write_all_desktop(repo: Path, version: str, mobile_version: str = "0.1.0+1")
 # ── release-status / dist / manifest ───────────────────────────────────────
 def write_status(repo: Path, *, distributable=True, frozen=None,
                  burned=None, canonical: str | None = None,
-                 drop_frozen: bool = False, raw: str | None = None) -> None:
+                 drop_frozen: bool = False, raw: str | None = None,
+                 expected_signer: str | None = None) -> None:
     if raw is not None:
         (repo / "release-status.json").write_text(raw, encoding="utf-8")
         return
@@ -227,6 +228,8 @@ def write_status(repo: Path, *, distributable=True, frozen=None,
     }
     if distributable is not _ABSENT:
         data["distributable"] = distributable
+    if expected_signer is not None:
+        data["expected_signer"] = expected_signer
     if not drop_frozen:
         default_frozen = [{"name": "old.exe", "sha256": FROZEN_RC2_SHA, "why": "dnd"}]
         data["frozen_artifacts"] = default_frozen if frozen is None else frozen

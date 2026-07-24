@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import scripts.release.version as relver
+from scripts.release import signing_gate
 
 log = logging.getLogger("publish_release")
 
@@ -276,6 +277,10 @@ def _validate_status_schema(status: dict) -> None:
     if not isinstance(status.get("distributable"), bool):
         _refuse("STATUS_SCHEMA", "distributable обязан быть bool")
 
+    signer = status.get("expected_signer")
+    if signer is not None and not (isinstance(signer, str) and signer.strip()):
+        _refuse("STATUS_SCHEMA", "expected_signer, если задан, обязан быть непустой строкой")
+
     if not relver.is_valid_semver(status.get("canonical_version")):
         _refuse("STATUS_SCHEMA",
                 f"canonical_version не semver: {status.get('canonical_version')!r}")
@@ -393,6 +398,48 @@ def _check_manifest(repo: Path, dist: Path, version: str,
             _refuse("MANIFEST_MISMATCH", f"asset sha256 расходится: {name}")
 
 
+def _resolve_signtool() -> str | None:
+    import shutil
+    return shutil.which("signtool") or shutil.which("signtool.exe")
+
+
+def verify_release_signature(setup: Path, *, expected_signer: str) -> None:
+    """Проверить Authenticode-подпись финального Setup.exe (chain + expected signer
+    + timestamp) через ``signtool verify /pa``. Fail-closed при любом провале."""
+    signtool = _resolve_signtool()
+    if not signtool:
+        _refuse("SIGN_NO_SIGNTOOL", "signtool не найден для проверки подписи релиза")
+
+    def _runner(cmd: list[str]) -> tuple[int, str]:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    try:
+        signing_gate.verify_signed(setup, signtool=signtool,
+                                   expected_signer=expected_signer, runner=_runner)
+    except signing_gate.SigningGateError as exc:
+        _refuse("SIGN_VERIFY_FAILED", str(exc))
+
+
+def _check_internal_marker(dist: Path) -> None:
+    """Отказать в distributable-публикации внутреннего (unsigned) артефакта."""
+    if (dist / signing_gate.INTERNAL_MARKER).exists():
+        _refuse("INTERNAL_ARTIFACT", f"{signing_gate.INTERNAL_MARKER} в installer-каталоге")
+    for item in dist.glob("*"):
+        if signing_gate.INTERNAL_SUFFIX in item.name:
+            _refuse("INTERNAL_ARTIFACT", f"internal-маркированный артефакт: {item.name}")
+
+
+def _check_signature(status: dict, dist: Path, version: str) -> None:
+    """Проверить подпись финального Setup.exe, если задан expected_signer (.bin
+    слайсы защищены подписанным Setup, отдельно НЕ проверяются)."""
+    expected = status.get("expected_signer")
+    if not expected:
+        return
+    verify_release_signature(dist / f"KALI-Premium-Setup-{version}.exe",
+                             expected_signer=expected)
+
+
 def enforce_release_guard(repo: Path, dist: Path) -> None:
     """Fail-closed release-guard: read-only проверки ДО любого gh/git-push.
 
@@ -421,6 +468,11 @@ def enforce_release_guard(repo: Path, dist: Path) -> None:
     if status.get("canonical_version") != version:
         _refuse("CANONICAL_MISMATCH",
                 f"canonical_version {status.get('canonical_version')!r} != VERSION {version!r}")
+    # 2a) C8: no internal (unsigned) artifact publishes; the final Setup signature
+    #     is verified when an expected signer is configured. Both run AFTER the
+    #     freeze gate above (a frozen release never reaches the signature runner).
+    _check_internal_marker(dist)
+    _check_signature(status, dist, version)
     assets = collect_assets(dist, version)
     asset_hashes = _hash_assets(dist, assets)
 

@@ -31,14 +31,15 @@ DEFAULT_EXE = b"fresh-exe"
 def _green_baseline(tmp_path: Path, *, version: str = fx.VERSION,
                     mobile: str = "0.1.0+1", distributable=True,
                     frozen=None, burned=None, committer_date: str | None = None,
-                    exe_bytes: bytes = DEFAULT_EXE) -> SimpleNamespace:
+                    exe_bytes: bytes = DEFAULT_EXE,
+                    expected_signer: str | None = None) -> SimpleNamespace:
     """Полностью проходящий репо+dist: synced-версии, clean git, свежий артефакт,
     distributable=true, валидный release-manifest, non-empty frozen (не совпад.)."""
     repo = tmp_path
     fx.write_all_desktop(repo, version, mobile)
     fx.write_version_file(repo, (version + "\n").encode("utf-8"))
     fx.write_status(repo, distributable=distributable, frozen=frozen,
-                    burned=burned, canonical=version)
+                    burned=burned, canonical=version, expected_signer=expected_signer)
     (repo / ".gitignore").write_text("dist_premium/\n", encoding="utf-8")
     fx.init_git(repo)
     fx.commit_all(repo, "baseline", date=committer_date)
@@ -522,3 +523,57 @@ def test_unprotected_rebuilt_rc2_is_blocked(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         _guard(b)
     assert "BURNED_VERSION" in str(exc.value)
+
+
+# ── C8 (OPUS-201): signature / internal-artifact guard, freeze-first preserved ─
+def test_signature_checker_not_called_when_not_distributable(monkeypatch, tmp_path: Path) -> None:
+    # freeze-first: NOT_DISTRIBUTABLE refuses BEFORE the signature runner. Mutation
+    # (moving the signature check above the freeze gate) makes this go red.
+    b = _green_baseline(tmp_path, distributable=False, expected_signer="KALI Labs LLC")
+    calls: list = []
+    monkeypatch.setattr(pr, "verify_release_signature", lambda *a, **k: calls.append(1))
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "NOT_DISTRIBUTABLE" in str(exc.value)
+    assert calls == []  # signature checker NEVER ran on a frozen release
+
+
+def test_distributable_verifies_setup_signature_exe_only(monkeypatch, tmp_path: Path) -> None:
+    b = _green_baseline(tmp_path, expected_signer="KALI Labs LLC")
+    seen: list = []
+    monkeypatch.setattr(pr, "verify_release_signature",
+                        lambda setup, *, expected_signer: seen.append((setup.name, expected_signer)))
+    _guard(b)  # проходит (verifier застабан «успешным»)
+    assert len(seen) == 1  # ровно один вызов — final Setup EXE
+    assert seen[0][1] == "KALI Labs LLC"
+    assert seen[0][0].endswith(".exe") and ".bin" not in seen[0][0]  # .bin НЕ проверяются
+
+
+def test_refuses_when_signature_verification_fails(monkeypatch, tmp_path: Path) -> None:
+    b = _green_baseline(tmp_path, expected_signer="KALI Labs LLC")
+
+    def _boom(setup, *, expected_signer):  # noqa: ANN001
+        pr._refuse("SIGN_VERIFY_FAILED", "expected signer/timestamp absent")
+
+    monkeypatch.setattr(pr, "verify_release_signature", _boom)
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "SIGN_VERIFY_FAILED" in str(exc.value)
+
+
+def test_refuses_internal_marked_artifact(tmp_path: Path) -> None:
+    # an internal (unsigned) artifact must never publish as distributable.
+    b = _green_baseline(tmp_path)
+    (b.dist / "INTERNAL-UNSIGNED.txt").write_text("do not distribute", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _guard(b)
+    assert "INTERNAL_ARTIFACT" in str(exc.value)
+
+
+def test_no_expected_signer_skips_signature_check(monkeypatch, tmp_path: Path) -> None:
+    # backward-compatible: without expected_signer the signature runner is not invoked.
+    b = _green_baseline(tmp_path)  # no expected_signer
+    calls: list = []
+    monkeypatch.setattr(pr, "verify_release_signature", lambda *a, **k: calls.append(1))
+    _guard(b)
+    assert calls == []
