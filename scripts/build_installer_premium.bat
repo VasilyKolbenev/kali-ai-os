@@ -1,16 +1,20 @@
 @echo off
 REM Build Premium installer via InnoSetup (replaces 7z SFX — no 4GB limit).
-REM Prereq: backend built (scripts\build_backend_premium.py) + premium_stage\
-REM pre-populated with heavy models / .hf_cache (this script re-stages the two
-REM volatile build artifacts: kali-backend\ and kali-desktop.exe).
-REM LICENSE: models\ffmpeg\ MUST be the LGPL FFmpeg build (NOT GPL) — torchcodec
-REM only decodes, so libx264/GPL is never needed. Run scripts\fetch_lgpl_ffmpeg.py
-REM --stage to (re)install the BtbN lgpl-shared DLLs + LICENSE.txt (P1.4).
-REM Install InnoSetup: winget install -e --id JRSoftware.InnoSetup
+REM Usage:  scripts\build_installer_premium.bat <signed|internal>
 REM
-REM Optional code signing (5.2): set these env vars to sign the inner exes and
-REM the final installer with a timestamped Authenticode signature. When unset
-REM the build still runs and produces an UNSIGNED installer (no-op cleanly):
+REM Prereq: backend built (scripts\build_backend_premium.py) + desktop built +
+REM the premium_assets source-of-truth bootstrapped (scripts\release\asset_bootstrap).
+REM The clean sealed premium_stage is COMPOSED by the transactional composer
+REM (scripts\release\compose_cli) — this script no longer stages with an additive
+REM robocopy /E (which let stale/deleted files survive across builds).
+REM
+REM Build mode is MANDATORY (C7/OPUS-201), validated by scripts\release\installer_gate:
+REM   signed    — Setup + uninstaller Authenticode-signed (needs the env vars below);
+REM               refused unless a cert + signtool are present (no silent unsigned).
+REM   internal  — unsigned; output renamed to ...-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
+REM               Refused when release-status.json marks the release distributable.
+REM
+REM Signed-mode env vars:
 REM   KALI_SIGN_CERT    path to the .pfx code-signing certificate
 REM   KALI_SIGN_PASS    certificate password (optional if the .pfx has none)
 REM   KALI_SIGN_TR_URL  RFC-3161 timestamp URL (default below)
@@ -19,10 +23,6 @@ setlocal enableextensions
 cd /d "%~dp0\.."
 
 REM ---- Version comes from the .iss (single source of truth) ----------------
-REM NEVER hardcode it here: a stale literal made :sign target a non-existent
-REM file, and :sign no-ops (exit 0) on a missing file — so once KALI_SIGN_CERT
-REM is set the final installer would ship UNSIGNED while the build reported
-REM success. Parse `#define AppVersion "X"` instead.
 set "APPVER="
 for /f tokens^=2^ delims^=^" %%V in ('findstr /b /c:"#define AppVersion" scripts\installer_premium.iss') do set "APPVER=%%V"
 if not defined APPVER (
@@ -32,7 +32,26 @@ if not defined APPVER (
 set "SETUP_EXE=dist_premium\installer\KALI-Premium-Setup-%APPVER%.exe"
 echo Building version %APPVER%
 
-REM ---- Resolve signtool.exe (optional; signing is skipped if absent) --------
+REM ---- Build mode (C7/OPUS-201): signed|internal is MANDATORY (no default) --
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+set "MODE=%~1"
+if not defined MODE (
+    echo ERROR: build mode required — usage: build_installer_premium.bat ^<signed^|internal^>
+    exit /b 1
+)
+set "VMODE="
+for /f "usebackq delims=" %%M in (`"%PY%" -m scripts.release.installer_gate resolve-mode "%MODE%" "release-status.json"`) do set "VMODE=%%M"
+if not defined VMODE (
+    echo ERROR: installer_gate rejected build mode "%MODE%" ^(unknown, or internal while distributable=true^).
+    exit /b 1
+)
+set "MODE=%VMODE%"
+set "GIT_SHA="
+for /f "usebackq delims=" %%G in (`git rev-parse HEAD`) do set "GIT_SHA=%%G"
+echo Build mode: %MODE%
+
+REM ---- Resolve signtool.exe (needed only for a signed build) ----------------
 set "SIGNTOOL="
 for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
 if not defined SIGNTOOL if exist "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" set "SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
@@ -42,7 +61,6 @@ set "ISCC="
 if exist "%LocalAppData%\Programs\Inno Setup 6\iscc.exe" set "ISCC=%LocalAppData%\Programs\Inno Setup 6\iscc.exe"
 if exist "C:\Program Files (x86)\Inno Setup 6\iscc.exe" set "ISCC=C:\Program Files (x86)\Inno Setup 6\iscc.exe"
 if exist "C:\Program Files\Inno Setup 6\iscc.exe" set "ISCC=C:\Program Files\Inno Setup 6\iscc.exe"
-
 if "%ISCC%"=="" (
     echo ERROR: Inno Setup 6 not found.
     echo Install it: winget install -e --id JRSoftware.InnoSetup
@@ -54,49 +72,24 @@ if not exist "dist_premium\kali-backend\kali-backend.exe" (
     echo Run first: uv run --with pyinstaller python scripts\build_backend_premium.py
     exit /b 1
 )
-
 if not exist "src-tauri\target\release\kali-desktop.exe" (
     echo ERROR: desktop release exe not built yet.
     echo Run first: npm --prefix ui exec -- tauri build
     exit /b 1
 )
 
-REM ---- Stage build artifacts (5.3, fail-fast) ------------------------------
-REM Re-copy the two volatile build outputs into premium_stage\ so a stale
-REM backend/desktop never ships in a (signed) installer. robocopy /E is
-REM ADDITIVE — it must NOT be /MIR, which would wipe the pre-staged .hf_cache
-REM and models\ that live alongside. robocopy exit code < 8 = success.
-echo Staging freshly-built backend into premium_stage...
-if not exist "dist_premium\premium_stage" mkdir "dist_premium\premium_stage"
-robocopy "dist_premium\kali-backend" "dist_premium\premium_stage\kali-backend" /E /NFL /NDL /NJH /NJS /NP
-if errorlevel 8 (
-    echo ERROR: staging kali-backend failed ^(robocopy exit code 8 or higher^).
+REM ---- Compose a clean, sealed stage (C5/C7 — replaces additive robocopy) ---
+REM The transactional composer copies fresh backend/desktop + the premium_assets
+REM SoT + install-webview2.ps1 into a clean premium_stage.next-*, drops declared
+REM dead weight, materializes HF links, signs inner EXEs (signed) or leaves them
+REM unsigned (internal), seals STAGE_MANIFEST.json LAST, verifies it, then swaps
+REM it into premium_stage rollback-safely. Stale/deleted files cannot survive.
+echo Composing sealed premium_stage ^(%MODE%^)...
+"%PY%" -m scripts.release.compose_cli "%MODE%" "%APPVER%" "%GIT_SHA%"
+if errorlevel 1 (
+    echo ERROR: stage compose failed.
     exit /b 1
 )
-echo Staging freshly-built kali-desktop.exe into premium_stage...
-robocopy "src-tauri\target\release" "dist_premium\premium_stage" kali-desktop.exe /NFL /NDL /NJH /NJS /NP
-if errorlevel 8 (
-    echo ERROR: staging kali-desktop.exe failed ^(robocopy exit code 8 or higher^).
-    exit /b 1
-)
-
-REM ---- Drop dead weight from the stage (5.4) -------------------------------
-REM ggml-base.bin: leftover whisper.cpp model from the abandoned Rust-native
-REM STT path, referenced nowhere in shipped code (STT uses faster-whisper /
-REM CTranslate2 model.bin). ~148 MB of dead weight — delete from staging.
-REM NOTE: the three silero_vad*.onnx files are each loaded by a different live
-REM consumer (Rust ort VAD, faster-whisper vad_filter, OpenWakeWord) and are
-REM intentionally NOT deduped here — none is an unused duplicate.
-if exist "dist_premium\premium_stage\models\ggml-base.bin" (
-    echo Removing dead ggml-base.bin from stage...
-    del /f /q "dist_premium\premium_stage\models\ggml-base.bin"
-)
-
-REM ---- Sign inner executables (5.2; no-op cleanly without a cert) ----------
-call :sign "dist_premium\premium_stage\kali-desktop.exe"
-if errorlevel 1 exit /b 1
-call :sign "dist_premium\premium_stage\kali-backend\kali-backend.exe"
-if errorlevel 1 exit /b 1
 echo.
 
 echo ============================================
@@ -104,94 +97,53 @@ echo   Building KALI Premium installer via InnoSetup
 echo ============================================
 echo Source:  dist_premium\premium_stage\
 echo Output:  %SETUP_EXE% ^(+ .bin slices — DiskSpanning^)
-echo Compression: lzma2/ultra64 (slow but small)
-echo.
 echo This takes ~15-30 minutes for ~9 GB content. Be patient.
 echo.
 
-REM Materialize HF-cache symlinks (vocos/Whisper snapshots -> blobs) into real
-REM files before packaging: shipping the symlinks risks dangling links on the
-REM user's machine (offline gate then fails to load voice instead of degrading)
-REM or double-shipping each model. See scripts\materialize_hf_symlinks.py.
-set "PY=python"
-if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
-echo Materializing HF-cache symlinks to real files...
-"%PY%" scripts\materialize_hf_symlinks.py "dist_premium\premium_stage"
-if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: HF-cache materialization failed.
-    exit /b 1
+REM signed → sign Setup + uninstaller at compile via a named Inno SignTool.
+REM ($q = an embedded quote, $f = the file to sign — Inno's SignTool syntax.)
+set "SIGN_DEFINE="
+if /I "%MODE%"=="signed" (
+    if not defined KALI_SIGN_CERT ( echo ERROR: signed build requires KALI_SIGN_CERT. & exit /b 1 )
+    if not defined SIGNTOOL ( echo ERROR: signed build requires signtool.exe. & exit /b 1 )
+    if defined KALI_SIGN_PASS (
+        set SIGN_DEFINE=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_CERT%$q /p $q%KALI_SIGN_PASS%$q $f"
+    ) else (
+        set SIGN_DEFINE=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /f $q%KALI_SIGN_CERT%$q $f"
+    )
 )
-echo.
 
-"%ISCC%" scripts\installer_premium.iss
-
+"%ISCC%" %SIGN_DEFINE% scripts\installer_premium.iss
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Build FAILED with exit code %ERRORLEVEL%.
     exit /b %ERRORLEVEL%
 )
 
-REM Sign the final installer (5.2; no-op cleanly without a cert).
-REM Fail loudly if the artifact is missing: :sign silently skips absent files,
-REM so a wrong path here would ship an unsigned installer as a "successful" build.
 if not exist "%SETUP_EXE%" (
     echo ERROR: expected installer not found: %SETUP_EXE%
     echo ^(ISCC reported success — version mismatch between .iss and this script?^)
     exit /b 1
 )
-call :sign "%SETUP_EXE%"
-if errorlevel 1 exit /b 1
+
+if /I "%MODE%"=="signed" (
+    REM ISCC already signed Setup + uninstaller; verify the chain fail-closed.
+    "%SIGNTOOL%" verify /pa /v "%SETUP_EXE%"
+    if errorlevel 1 ( echo ERROR: signtool verify /pa failed for the Setup. & exit /b 1 )
+    echo [sign] Setup + uninstaller signed and verified.
+) else (
+    REM INTERNAL: rename to the explicit DO-NOT-DISTRIBUTE artifact + marker.
+    "%PY%" -m scripts.release.installer_gate mark-internal "%SETUP_EXE%" "%APPVER%"
+    if errorlevel 1 ( echo ERROR: internal-marking failed. & exit /b 1 )
+    echo [internal] output renamed to ...-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
+)
 
 echo.
 echo ============================================
-echo   Build complete!
+echo   Build complete! (mode: %MODE%)
 echo ============================================
-echo.
-echo InnoSetup produced a DiskSpanning set — the bundle exceeds Inno's
-echo ~4.2 GB single-file limit, so slices are MANDATORY, not optional:
-echo   .exe   - wizard UI + first slice
-echo   .bin   - remaining slices, must sit NEXT TO the .exe
-echo.
+echo InnoSetup produced a DiskSpanning set — ship ALL of these together (zip them):
 dir dist_premium\installer\KALI-Premium-Setup-%APPVER%*
-echo.
-echo Ship ALL of these together (zip them) — a missing .bin breaks the install.
 
 endlocal
-exit /b 0
-
-REM ===========================================================================
-REM :sign "<file>"  — timestamped Authenticode signing, env-gated.
-REM No-ops cleanly (returns 0) when KALI_SIGN_CERT is unset or signtool is
-REM missing, so today's unsigned build still succeeds. Signs automatically
-REM once Vasily provides the EV cert via KALI_SIGN_CERT (+ optional PASS).
-REM ===========================================================================
-REM Every exit path returns an EXPLICIT code. `goto :eof` would leak the
-REM caller's errorlevel: robocopy above returns 1 on SUCCESS ("files copied"),
-REM so a skip-path `goto :eof` left errorlevel=1 and the caller's
-REM `if errorlevel 1 exit /b 1` aborted a perfectly good build. That only
-REM surfaced once the backend was actually rebuilt (identical files -> robocopy
-REM returns 0 -> no leak), which is why rc1 built and rc2 did not.
-:sign
-if not defined KALI_SIGN_CERT (
-    echo [sign] skipped — no cert configured ^(set KALI_SIGN_CERT to enable^)
-    exit /b 0
-)
-if not defined SIGNTOOL (
-    echo [sign] skipped — signtool.exe not found ^(KALI_SIGN_CERT is set^)
-    exit /b 0
-)
-if not exist %1 (
-    echo [sign] skipped — file not found: %1
-    exit /b 0
-)
-echo [sign] signing %1
-if defined KALI_SIGN_PASS (
-    "%SIGNTOOL%" sign /fd SHA256 /tr "%KALI_SIGN_TR_URL%" /td SHA256 /f "%KALI_SIGN_CERT%" /p "%KALI_SIGN_PASS%" %1
-) else (
-    "%SIGNTOOL%" sign /fd SHA256 /tr "%KALI_SIGN_TR_URL%" /td SHA256 /f "%KALI_SIGN_CERT%" %1
-)
-if errorlevel 1 (
-    echo ERROR: signing failed for %1
-    exit /b 1
-)
 exit /b 0

@@ -27,6 +27,17 @@ Compression=lzma2/ultra64
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
 
+; Code signing (C7/OPUS-201): a SIGNED build passes /DSignSetup plus a named
+; SignTool command (/Skali="...") to ISCC. Both the Setup AND the generated
+; uninstaller are then Authenticode-signed. An INTERNAL build omits the define
+; and compiles unsigned (the .bat renames the output to the explicit
+; INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE artifact). .bin slices are NOT signed
+; separately — the signed Setup protects them via Inno's own checksums.
+#ifdef SignSetup
+SignTool=kali
+SignedUninstaller=yes
+#endif
+
 ; DiskSpanning is MANDATORY: Inno hard-errors on any installation over
 ; ~4.2 GB in a single Setup.exe (Windows loader limit — first compile of the
 ; single-file variant failed exactly there, 2026-07-13; the premium bundle is
@@ -62,13 +73,12 @@ Name: "startmenuicon"; Description: "Добавить в меню Пуск"; Gro
 [Files]
 ; Source is the pre-staged premium bundle
 ; Exclude SFX-specific artifacts (install.bat + sfx_config.txt) — InnoSetup replaces them
+; [Files] reads ONLY from premium_stage (C7/OPUS-103): the transactional stage
+; composer stages install-webview2.ps1 into premium_stage, so it arrives via the
+; glob below — no external Source pulls anything in past the sealed stage.
 Source: "..\dist_premium\premium_stage\*"; DestDir: "{app}"; \
     Excludes: "install.bat,sfx_config.txt"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
-; Stage the WebView2 bootstrap script directly from scripts/ — the [Run] step
-; below invokes {app}\install-webview2.ps1, but no build step copies it into
-; premium_stage, so pull it in deterministically here.
-Source: "..\scripts\install-webview2.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\KALI"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: startmenuicon
