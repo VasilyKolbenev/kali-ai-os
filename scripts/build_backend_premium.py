@@ -48,6 +48,29 @@ def lgpl_ffmpeg_dir() -> Path:
     swapped into av.libs cannot diverge from the bytes the installer ships."""
     return ab.sot_ffmpeg_dir(DIST)
 
+
+def missing_lgpl_files(lgpl_dir: Path) -> list[str]:
+    """The LGPL files the av.libs swap needs and does not have."""
+    required = [f"{soname}.dll" for soname in _FFMPEG_SONAMES] + ["LICENSE.txt"]
+    return [name for name in required if not (lgpl_dir / name).is_file()]
+
+
+def assert_lgpl_set_available() -> None:
+    """Preflight the av.libs swap BEFORE the build, not after it (H4/D2).
+
+    dist_premium is gitignored, so on a fresh checkout the SoT is absent by default.
+    Discovering that after a ~20-minute PyInstaller run costs the whole build and
+    leaves an unusable onedir behind."""
+    lgpl_dir = lgpl_ffmpeg_dir()
+    missing = missing_lgpl_files(lgpl_dir)
+    if missing:
+        raise BuildError(
+            f"LGPL_SET_MISSING: {lgpl_dir} lacks {missing}. Prepare the shipping "
+            "source-of-truth first:\n"
+            "  1) python -m scripts.release.asset_bootstrap\n"
+            "  2) python scripts/fetch_lgpl_ffmpeg.py"
+        )
+
 DATAS = [
     (str(ROOT / "agents"), "agents"),
     (str(ROOT / "config"), "config"),
@@ -248,7 +271,7 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
     if not av_libs.is_dir():
         return []
     lgpl_dir = lgpl_ffmpeg_dir()
-    missing = [s for s in _FFMPEG_SONAMES if not (lgpl_dir / f"{s}.dll").exists()]
+    missing = missing_lgpl_files(lgpl_dir)
     if missing:
         raise SystemExit(
             f"LGPL FFmpeg set incomplete in {lgpl_dir} (missing {missing}) — "
@@ -283,6 +306,11 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
 
 
 def main(*, runner: Runner = subprocess.run) -> int:
+    try:
+        assert_lgpl_set_available()  # H4/D2: refuse before the expensive build
+    except BuildError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", NAME,

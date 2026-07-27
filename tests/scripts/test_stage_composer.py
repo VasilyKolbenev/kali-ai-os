@@ -329,10 +329,16 @@ def test_compose_rejects_junction_in_source_before_copy(tmp_path: Path) -> None:
                           capture_output=True, text=True)
     if proc.returncode != 0:
         pytest.skip("mklink /J unavailable")
-    with pytest.raises(stage_policy.ReparseError):
+    # H4: a junction inside the assets SoT is now caught by the physical-copy check
+    # that runs first (BootstrapError); one in the backend still raises ReparseError.
+    # Either way it is refused BEFORE any copy and nothing is created in dist_premium.
+    from scripts.release import asset_bootstrap as ab
+    with pytest.raises((stage_policy.ReparseError, ab.BootstrapError)) as exc:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
                          git_sha="a" * 40, mode="internal", exclusions=[],
                          materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "sneaky" in str(exc.value)
+    _assert_dist_untouched(dist)
 
 
 # ── H2.1: assets_manifest — обязательный вход compose_stage ─────────────────
@@ -363,6 +369,23 @@ def test_compose_rejects_missing_assets_manifest_file(tmp_path: Path) -> None:
     inputs = _mk_inputs(tmp_path)
     inputs["assets_manifest"].unlink()
     receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(ab.BootstrapError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "SOT_MISSING" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
+def test_compose_missing_assets_dir_is_a_clean_sot_missing(tmp_path: Path) -> None:
+    # H4: отсутствующий premium_assets (текущее состояние машины) обязан давать
+    # SOT_MISSING, а не сырой FileNotFoundError из обхода symlink'ов.
+    from scripts.release import asset_bootstrap as ab
+    import shutil as _shutil
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    _shutil.rmtree(inputs["assets"])
     with pytest.raises(ab.BootstrapError) as exc:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
                          git_sha="a" * 40, mode="internal", exclusions=[],

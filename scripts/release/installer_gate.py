@@ -17,6 +17,7 @@ renames an unsigned Setup to the DO-NOT-DISTRIBUTE artifact.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -105,6 +106,10 @@ def _iss_sources(iss_text: str) -> list[str]:
     for line in _logical_lines(_files_section(iss_text)):
         if line.lstrip().startswith(";"):
             continue  # a comment line
+        if line.lstrip().lower().startswith("#include"):
+            # ISPP pulls in entries this gate cannot see — fail closed rather than
+            # certify a [Files] section whose real content lives in another file.
+            raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line.strip()!r}")
         for match in _SOURCE_KEY_RE.finditer(line):
             quoted = _QUOTED_RE.match(line[match.end():])
             if not quoted:
@@ -208,6 +213,13 @@ def main(argv: list[str] | None = None) -> int:
         if args[0] == "verify-iss":
             verify_iss(Path(args[1]).read_text(encoding="utf-8"))
             print("ok")
+            return 0
+        if args[0] == "resolve-signtool":
+            # The .bat consumes this so it cannot keep its own (narrower) path list.
+            signtool = signing_gate.resolve_signtool(dict(os.environ))
+            if not signtool:
+                _die("SIGNTOOL: signtool.exe not found (PATH or Windows Kits)")
+            print(signtool)
             return 0
     except (InstallerGateError, signing_gate.SigningGateError) as e:
         _die(str(e))

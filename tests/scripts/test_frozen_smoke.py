@@ -148,8 +148,19 @@ def test_verify_installed_root_requires_shipped_manifest(tmp_path: Path) -> None
     assert "STAGE_MANIFEST" in str(exc.value)
 
 
+def test_verify_installed_root_allows_signed_uninstaller_msg(tmp_path: Path) -> None:
+    # H4/D4: SignedUninstaller=yes заставляет Inno писать unins000.msg в {app}
+    # (сообщения нельзя вшить в подписанный EXE). Подтверждено на машине:
+    # Git/VS Code/Inno Setup 6 (sig=Valid) имеют .msg, unsigned KALI_test — нет.
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / "unins000.exe").write_bytes(b"UNINST")
+    (root / "unins000.dat").write_bytes(b"DAT")
+    (root / "unins000.msg").write_bytes(b"Inno Setup Messages")
+    fs.verify_installed_root(root, mpath)  # подписанная установка обязана проходить
+
+
 @pytest.mark.parametrize("name", ["unins.exe", "unins1.exe", "unins0000.dat",
-                                  "unins000.txt", "Unins000.exe.bak"])
+                                  "unins000.txt", "unins000.log", "Unins000.exe.bak"])
 def test_verify_installed_root_rejects_non_inno_names(tmp_path: Path, name: str) -> None:
     # H2.5: allowlist — РОВНО unins<3 цифры>.exe/.dat в корне, ничего похожего
     root, mpath = _sealed_stage_root(tmp_path)

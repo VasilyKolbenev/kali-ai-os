@@ -104,10 +104,47 @@ def test_backend_assert_output_accepts_real_onedir(tmp_path: Path) -> None:
     _BB.assert_build_output(0, out)  # не поднимает
 
 
+def _sot_with_lgpl_set(dist: Path) -> Path:
+    """Готовый premium_assets SoT с полным LGPL-набором (предусловие билда)."""
+    lgpl = dist / "premium_assets" / "models" / "ffmpeg"
+    lgpl.mkdir(parents=True)
+    for soname in _BB._FFMPEG_SONAMES:
+        (lgpl / f"{soname}.dll").write_bytes(b"LGPL")
+    (lgpl / "LICENSE.txt").write_text("LESSER GENERAL PUBLIC LICENSE", encoding="utf-8")
+    return lgpl
+
+
 def test_backend_main_nonzero_when_pyinstaller_lies(monkeypatch, tmp_path: Path) -> None:
     # PyInstaller вернул 0, но dist_premium/kali-backend не создан → билд провален.
+    dist = tmp_path / "dist_premium"
+    _sot_with_lgpl_set(dist)  # preflight должен пройти, иначе тест зелёный не по той причине
+    monkeypatch.setattr(_BB, "DIST", dist)
+    runner = _Runner(returncode=0)
+    assert _BB.main(runner=runner) == 1
+    assert runner.calls, "билд обязан был запуститься — иначе проверяется не тот инвариант"
+
+
+# ── H4/D2: предусловие LGPL-набора проверяется ДО многочасового билда ────────
+def test_backend_preflight_refuses_missing_lgpl_set_before_building(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(_BB, "DIST", tmp_path / "dist_premium")  # SoT отсутствует
+    runner = _Runner(returncode=0)
+    assert _BB.main(runner=runner) == 1
+    assert runner.calls == [], "PyInstaller не должен был запуститься"
+
+
+def test_backend_assert_lgpl_set_names_the_bootstrap_step(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_BB, "DIST", tmp_path / "dist_premium")
-    assert _BB.main(runner=_Runner(returncode=0)) == 1
+    with pytest.raises(_BB.BuildError) as exc:
+        _BB.assert_lgpl_set_available()
+    message = str(exc.value)
+    assert "asset_bootstrap" in message and "fetch_lgpl_ffmpeg" in message
+
+
+def test_backend_assert_lgpl_set_accepts_complete_sot(monkeypatch, tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    _BB.assert_lgpl_set_available()  # не поднимает
 
 
 # ── H1.4: toolchain fail-closed (иначе receipt врёт про сборочную среду) ─────

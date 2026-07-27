@@ -292,15 +292,16 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
     with swap_lock(dist_premium):
         recover_swap(dist_premium, _held=True)  # finish any interrupted prior swap first
 
+        # G5/H2.1: the premium_assets SoT must exist, be physical-only and match its
+        # integrity manifest BEFORE any copy — missing, malformed or drifted stops the
+        # build here, with no next-stage left on disk. This runs FIRST so an absent SoT
+        # is a clean SOT_MISSING rather than a raw FileNotFoundError from the walk.
+        asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
+        asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
         # F2: source-containment BEFORE anything is created — junction/escaping/
         # dangling reject, only contained HF file-symlinks tolerated.
         for key in ("assets", "backend"):
             stage_policy.assert_source_symlinks_contained(inputs[key])
-        # G5/H2.1: the premium_assets SoT must be physical-only and match its integrity
-        # manifest BEFORE any copy — missing, malformed or drifted stops the build here,
-        # with no next-stage left on disk.
-        asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
-        asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
 
         nxt = dist_premium / f"premium_stage.next-{token}"
         stage_policy.assert_safe_dest(dist_premium, nxt)

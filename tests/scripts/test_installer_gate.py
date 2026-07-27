@@ -152,6 +152,15 @@ def test_assert_iss_handles_line_continuations() -> None:
     ig.assert_iss_stage_only(ok)  # продолжение строки не ломает разбор
 
 
+def test_assert_iss_rejects_unresolvable_include_in_files() -> None:
+    # ISPP #include подтягивает записи, которых парсер не видит → fail-closed
+    bad = _files('#include "extra-files.iss"',
+                 'Source: "..\\dist_premium\\premium_stage\\*"; DestDir: "{app}"')
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_stage_only(bad)
+    assert "ISS_UNRESOLVED_INCLUDE" in str(exc.value)
+
+
 def test_assert_iss_ignores_sources_outside_files_section() -> None:
     # Source в другой секции не является [Files]-входом и не заменяет обязательный
     text = ("[Files]\n; nothing here\n\n[Icons]\n"
@@ -238,6 +247,50 @@ def test_bat_cmd_invocation_accepts_valid_mode_past_gate() -> None:
     out = (proc.stdout + proc.stderr).lower()
     assert "rejected build mode" not in out       # the gate parsed + accepted it
     assert "build mode: internal" in out          # the validated mode was set (for/f ran)
+
+
+# ── H4/D3: .bat берёт signtool из ЕДИНОГО python-резолвера, guard ДО compose ─
+def test_main_resolve_signtool_cli(monkeypatch, capsys, tmp_path: Path) -> None:
+    from scripts.release import signing_gate
+    kit = tmp_path / "10.0.26100.0" / "x64"
+    kit.mkdir(parents=True)
+    (kit / "signtool.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(signing_gate, "_KITS_ROOT", tmp_path)
+    monkeypatch.setattr(signing_gate.shutil, "which", lambda name: None)
+    monkeypatch.delenv("KALI_SIGN_SIGNTOOL", raising=False)
+    assert ig.main(["resolve-signtool"]) == 0
+    assert capsys.readouterr().out.strip() == str(kit / "signtool.exe")
+
+
+def test_main_resolve_signtool_exits_nonzero_when_absent(monkeypatch, tmp_path: Path) -> None:
+    from scripts.release import signing_gate
+    monkeypatch.setattr(signing_gate, "_KITS_ROOT", tmp_path)
+    monkeypatch.setattr(signing_gate.shutil, "which", lambda name: None)
+    monkeypatch.delenv("KALI_SIGN_SIGNTOOL", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        ig.main(["resolve-signtool"])
+    assert exc.value.code != 0
+
+
+def test_real_bat_resolves_signtool_via_the_python_gate() -> None:
+    # .bat не имеет права держать СВОЙ список путей: он видел только неверсионный
+    # bin\x64 и не находил signtool там, где его находит python.
+    text = BAT.read_text(encoding="utf-8")
+    assert "installer_gate resolve-signtool" in text
+    assert "Windows Kits" not in text, "у .bat не должно быть собственного списка путей"
+
+
+def test_real_bat_aborts_signed_without_signtool_before_compose() -> None:
+    # иначе signed-билд подписывает EXE и копирует ~9 ГБ, а затем падает
+    text = BAT.read_text(encoding="utf-8")
+    guard = text.find("signed build requires signtool.exe")
+    compose = text.find("scripts.release.compose_cli")
+    assert guard != -1 and compose != -1
+    assert guard < compose, "abort обязан быть ДО compose"
+
+
+def test_real_bat_documents_the_signtool_env_var() -> None:
+    assert "KALI_SIGN_SIGNTOOL" in BAT.read_text(encoding="utf-8")[:2000]
 
 
 def test_real_bat_exports_signtool_to_the_composer(tmp_path: Path) -> None:

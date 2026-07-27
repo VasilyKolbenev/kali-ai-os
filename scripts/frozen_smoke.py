@@ -55,7 +55,9 @@ from scripts.release import stage_policy  # noqa: E402
 
 _CACHE_VARS = ("HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE",
                "TORCH_HOME", "XDG_CACHE_HOME")
-_UNINS_RE = re.compile(r"^unins\d{3}\.(exe|dat)$")  # exactly what Inno generates
+# Exactly what Inno generates at {app}: uninsNNN.exe/.dat, plus uninsNNN.msg when
+# SignedUninstaller=yes (the messages cannot be embedded in a signed EXE).
+_UNINS_RE = re.compile(r"^unins\d{3}\.(exe|dat|msg)$")
 _OFFLINE_FLAGS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
 _PROXY_SINK = "http://127.0.0.1:1"  # closed port → external HTTP fails fast
 _NO_PROXY = "127.0.0.1,localhost,::1"
@@ -126,8 +128,12 @@ def verify_root_matches_manifest(root: Path, manifest_path: Path) -> None:
 
 def _is_inno_root_extra(rel: str) -> bool:
     """An Inno-generated extra is allowed ONLY at the root (no nesting) and only under
-    the exact ``uninsNNN.exe``/``uninsNNN.dat`` name Inno actually emits — nested
-    models/unins999.exe, unins.exe, unins1.exe and unins0000.dat are all refused."""
+    the exact ``uninsNNN.{exe,dat,msg}`` names Inno actually emits — nested
+    models/unins999.exe, unins.exe, unins1.exe and unins0000.dat are all refused.
+
+    ``uninsNNN.msg`` appears on every SIGNED install (SignedUninstaller=yes writes the
+    uninstaller messages to a side file because embedding them would invalidate the
+    signature), so omitting it would fail the installed-root gate on every release."""
     return "/" not in rel and bool(_UNINS_RE.match(rel))
 
 

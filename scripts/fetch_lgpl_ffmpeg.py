@@ -99,25 +99,37 @@ def _install(build_dir: Path, target: Path) -> None:
     print(f"Installed {len(EXPECTED_DLLS)} LGPL DLLs + LICENSE.txt -> {target}")
 
 
+# The ONLY subtree of the premium_assets SoT this script is authorized to write.
+OWNED_SUBTREE = "ffmpeg"
+
+
 def install_target(dist_premium: Path) -> Path:
     """The single shipping source-of-truth for the LGPL DLLs (never repo models/)."""
     return asset_bootstrap.sot_ffmpeg_dir(dist_premium)
 
 
-def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
-    """Install the verified LGPL set into the SoT and re-seal its integrity manifest.
-
-    Fails closed when the premium_assets SoT does not exist yet: bootstrapping it is
-    a separate, non-destructive step (``scripts/release/asset_bootstrap.py``)."""
+def require_sot(dist_premium: Path) -> Path:
+    """Fail closed BEFORE the download when the premium_assets SoT is not bootstrapped."""
     sot, _ = asset_bootstrap.sot_paths(dist_premium)
     if not sot.is_dir():
         raise SystemExit(
             f"premium_assets SoT not found: {sot} — run "
             "`python -m scripts.release.asset_bootstrap` first"
         )
+    return sot
+
+
+def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
+    """Install the verified LGPL set into the SoT and re-seal its integrity manifest.
+
+    The SoT is verified BEFORE it is touched: this script owns ``models/ffmpeg`` and
+    nothing else, so pre-existing drift anywhere else refuses the install instead of
+    being laundered into a fresh seal."""
+    sot = require_sot(dist_premium)
+    asset_bootstrap.verify_unowned_unchanged(dist_premium, owned=OWNED_SUBTREE)
     target = install_target(dist_premium)
     _install(build_dir, target)
-    asset_bootstrap.refresh_asset_manifest(dist_premium)
+    asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE)
     print(f"SoT integrity manifest re-sealed for {sot}")
     return target
 
@@ -154,6 +166,9 @@ def main() -> None:
         )
         raise SystemExit(2)
 
+    dist_premium = Path(args.dist)
+    require_sot(dist_premium)  # refuse BEFORE downloading ~70 MB
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         zip_path = tmp_path / "ffmpeg-lgpl.zip"
@@ -166,7 +181,7 @@ def main() -> None:
         _verify_lgpl(build_dir / "LICENSE.txt")
         print("Verified LICENSE is LGPL (not GPL).")
 
-        install_into_sot(build_dir, Path(args.dist))
+        install_into_sot(build_dir, dist_premium)
 
     print("Done. Re-run with the F5 engine to confirm torchcodec loads the LGPL DLLs.")
 

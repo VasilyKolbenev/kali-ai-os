@@ -119,15 +119,39 @@ def verify_sot_integrity(sot: Path, manifest_path: Path) -> None:
         raise BootstrapError("SOT_DRIFT: premium_assets drifted from its integrity manifest")
 
 
-def refresh_asset_manifest(dist_premium: Path) -> Path:
-    """Re-seal the SoT integrity manifest after an AUTHORIZED SoT mutation.
+def _outside(entries: dict[str, str], prefix: str) -> dict[str, str]:
+    return {rel: digest for rel, digest in entries.items() if not rel.startswith(prefix)}
 
-    Only the asset fetcher may call this (it owns the FFmpeg DLLs inside the SoT);
-    every other writer is drift and must be caught by :func:`verify_sot_integrity`."""
+
+def verify_unowned_unchanged(dist_premium: Path, *, owned: str) -> None:
+    """Everything OUTSIDE the ``owned`` subtree must still match the sealed manifest.
+
+    A writer authorized for ONE subtree (the FFmpeg fetcher owns ``models/ffmpeg``)
+    must not be able to launder drift elsewhere in the SoT into a fresh, valid-looking
+    seal — that would silently defeat the SOT_DRIFT gate the composer depends on."""
     sot, manifest_path = sot_paths(dist_premium)
     if not sot.is_dir():
         raise BootstrapError(f"SOT_MISSING: {sot}")
+    if not manifest_path.is_file():
+        raise BootstrapError(
+            f"SOT_UNSEALED: {manifest_path} is missing — only the bootstrap may mint "
+            "the first seal; re-run scripts/release/asset_bootstrap.py")
     _assert_physical(sot)
+    prefix = owned if owned.endswith("/") else owned + "/"
+    stored = _outside(_load_manifest(manifest_path)["entries"], prefix)
+    current = _outside(_dir_hashes(sot), prefix)
+    if stored != current:
+        raise BootstrapError(
+            f"SOT_DRIFT: premium_assets drifted outside {prefix} — refusing to re-seal")
+
+
+def refresh_asset_manifest(dist_premium: Path, *, owned: str) -> Path:
+    """Re-seal the SoT integrity manifest after an AUTHORIZED mutation of ``owned``.
+
+    Only the asset fetcher may call this, and only for the subtree it owns; every
+    other change is drift and must be caught by :func:`verify_sot_integrity`."""
+    verify_unowned_unchanged(dist_premium, owned=owned)
+    sot, manifest_path = sot_paths(dist_premium)
     manifest_path.write_text(
         json.dumps({"entries": _dir_hashes(sot)}, ensure_ascii=False, indent=2),
         encoding="utf-8",

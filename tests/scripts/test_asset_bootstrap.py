@@ -208,8 +208,77 @@ def test_ffmpeg_install_fail_closed_without_sot(tmp_path: Path) -> None:
 
 def test_refresh_asset_manifest_requires_sot(tmp_path: Path) -> None:
     with pytest.raises(ab.BootstrapError) as exc:
-        ab.refresh_asset_manifest(tmp_path / "dist_premium")
+        ab.refresh_asset_manifest(tmp_path / "dist_premium", owned="ffmpeg")
     assert "SOT_MISSING" in str(exc.value)
+
+
+# ── H4/D1: пере-запечатывание ТОЛЬКО своего поддерева ───────────────────────
+def test_refresh_manifest_refuses_drift_outside_owned_subtree(tmp_path: Path) -> None:
+    # дрейф в ассете, которым fetcher НЕ владеет, нельзя отмыть в валидную печать
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    (sot / "model.bin").write_bytes(b"TAMPERED")
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.refresh_asset_manifest(dist, owned="ffmpeg")
+    assert "SOT_DRIFT" in str(exc.value)
+    with pytest.raises(ab.BootstrapError):
+        ab.verify_sot_integrity(sot, manifest)  # гейт всё ещё красный
+
+
+def test_refresh_manifest_reseals_owned_subtree(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    (sot / "ffmpeg" / "avcodec-62.dll").write_bytes(b"NEW-LGPL")  # легальный bump
+    ab.refresh_asset_manifest(dist, owned="ffmpeg")
+    ab.verify_sot_integrity(sot, manifest)  # снова согласовано
+
+
+def test_refresh_manifest_refuses_unsealed_sot(tmp_path: Path) -> None:
+    # SoT без манифеста нельзя «запечатать» fetcher'ом — печать чеканит только bootstrap
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    _sot, manifest = ab.sot_paths(dist)
+    manifest.unlink()
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.refresh_asset_manifest(dist, owned="ffmpeg")
+    assert "SOT_UNSEALED" in str(exc.value)
+
+
+def test_ffmpeg_install_does_not_launder_drift(tmp_path: Path) -> None:
+    # ровно репро ревью: дрейф F5-чекпойнта + рутинный refresh FFmpeg
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    (sot / "model.bin").write_bytes(b"TAMPERED-MODEL")
+    with pytest.raises(ab.BootstrapError) as exc:
+        fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    assert "SOT_DRIFT" in str(exc.value)
+    assert (sot / "model.bin").read_bytes() == b"TAMPERED-MODEL"
+    # проверка обязана быть ДО мутации: ни один DLL не должен быть установлен
+    assert not (sot / "ffmpeg" / "avcodec-62.dll").exists()
+    with pytest.raises(ab.BootstrapError):
+        ab.verify_sot_integrity(sot, manifest)  # не отмыто
+
+
+def test_ffmpeg_main_requires_sot_before_downloading(monkeypatch, tmp_path: Path) -> None:
+    # проверка SoT обязана быть ДО скачивания ~100 МБ
+    import scripts.fetch_lgpl_ffmpeg as fl
+    calls = {"download": 0}
+
+    def _spy_urlretrieve(*a, **k):  # noqa: ANN002, ANN003
+        calls["download"] += 1
+        return None
+
+    monkeypatch.setattr(fl.urllib.request, "urlretrieve", _spy_urlretrieve)
+    monkeypatch.setattr(sys, "argv",
+                        ["fetch_lgpl_ffmpeg.py", "--dist", str(tmp_path / "dist_premium")])
+    with pytest.raises(SystemExit) as exc:
+        fl.main()
+    assert exc.value.code != 0
+    assert calls["download"] == 0
 
 
 def test_verify_sot_integrity_rejects_malformed_manifest(tmp_path: Path) -> None:

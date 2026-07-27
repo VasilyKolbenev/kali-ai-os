@@ -17,6 +17,9 @@ REM   KALI_SIGN_THUMBPRINT          Windows store / HSM cert thumbprint
 REM   KALI_SIGN_PFX_PASS            .pfx password, if any
 REM   KALI_SIGN_EXPECTED_THUMBPRINT expected signer thumbprint to verify against
 REM   KALI_SIGN_TR_URL             RFC-3161 timestamp URL, defaulted below
+REM   KALI_SIGN_SIGNTOOL            optional explicit signtool.exe; when unset it is
+REM                                 resolved by scripts\release\installer_gate and
+REM                                 exported for the composer
 
 setlocal enableextensions
 cd /d "%~dp0\.."
@@ -53,15 +56,28 @@ for /f "usebackq delims=" %%G in (`git rev-parse HEAD`) do set "GIT_SHA=%%G"
 echo Build mode: %MODE%
 
 REM ---- Resolve signtool.exe, needed only for a signed build ----------------
-REM Same order as scripts\release\signing_gate.resolve_signtool: explicit env, then
-REM PATH, then Windows Kits. The result is exported back into KALI_SIGN_SIGNTOOL so
-REM the composer signs with the SAME binary this script verified with.
+REM This script keeps NO path list of its own: it asks the single python resolver
+REM (scripts\release\signing_gate.resolve_signtool via installer_gate) and exports the
+REM answer, so the composer signs with the SAME binary this script verified with.
+REM %PY% is unquoted in the for/f on purpose: a for/f command that STARTS with a
+REM quote is mis-parsed by cmd. The venv path has no spaces.
+REM The exports below must stay OUTSIDE any parenthesised block: %SIGNTOOL% inside a
+REM block would expand at parse time, i.e. before the for/f ever assigns it.
 set "SIGNTOOL="
-if defined KALI_SIGN_SIGNTOOL set "SIGNTOOL=%KALI_SIGN_SIGNTOOL%"
-if not defined SIGNTOOL for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
-if not defined SIGNTOOL if exist "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" set "SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
-if defined SIGNTOOL set "KALI_SIGN_SIGNTOOL=%SIGNTOOL%"
 if not defined KALI_SIGN_TR_URL set "KALI_SIGN_TR_URL=http://timestamp.digicert.com"
+if /I not "%MODE%"=="signed" goto :signtool_done
+for /f "usebackq delims=" %%S in (`%PY% -m scripts.release.installer_gate resolve-signtool`) do set "SIGNTOOL=%%S"
+if defined SIGNTOOL set "KALI_SIGN_SIGNTOOL=%SIGNTOOL%"
+REM A signed build aborts HERE, before the multi-GB compose signs anything.
+if not defined SIGNTOOL (
+    echo ERROR: signed build requires signtool.exe. Install the Windows SDK or set KALI_SIGN_SIGNTOOL.
+    exit /b 1
+)
+if not defined KALI_SIGN_THUMBPRINT if not defined KALI_SIGN_PFX (
+    echo ERROR: signed build requires KALI_SIGN_THUMBPRINT or KALI_SIGN_PFX.
+    exit /b 1
+)
+:signtool_done
 
 set "ISCC="
 if exist "%LocalAppData%\Programs\Inno Setup 6\iscc.exe" set "ISCC=%LocalAppData%\Programs\Inno Setup 6\iscc.exe"
@@ -116,7 +132,6 @@ REM pass /DInternal so the Setup AND every slice are named INTERNAL at compile t
 REM In the SignTool command $q is an embedded quote and $f is the file to sign.
 set "DEFINES="
 if /I "%MODE%"=="signed" (
-    if not defined SIGNTOOL ( echo ERROR: signed build requires signtool.exe. & exit /b 1 )
     if defined KALI_SIGN_THUMBPRINT (
         set DEFINES=/DSignSetup "/Skali=$q%SIGNTOOL%$q sign /fd SHA256 /tr $q%KALI_SIGN_TR_URL%$q /td SHA256 /sha1 %KALI_SIGN_THUMBPRINT% $f"
     ) else (
