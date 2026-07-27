@@ -358,7 +358,14 @@ def main(*, runner: Runner = subprocess.run) -> int:
 
     # G2: HEAD + clean-state captured BEFORE the build; the receipt (written only on
     # success, below) re-checks HEAD didn't move and derives dirty from git itself.
-    head_before, _clean_before = rc.capture_head_state(ROOT)
+    # H6-3: a dirty worktree refuses HERE — never burn a multi-GB build that can never
+    # earn a receipt, and never let a mid-build `git stash` launder it clean.
+    head_before, clean_before = rc.capture_head_state(ROOT)
+    if not clean_before:
+        print("ERROR: DIRTY_AT_START: the worktree is dirty — build from a clean "
+              "dedicated worktree (a dirty build can never earn a BUILD_RECEIPT)",
+              file=sys.stderr)
+        return 1
 
     print(f"Building Premium {NAME} (F5 + CUDA torch)...")
     result = runner(cmd, cwd=str(ROOT))
@@ -389,7 +396,7 @@ def main(*, runner: Runner = subprocess.run) -> int:
     receipt_path = DIST / f"{NAME}.BUILD_RECEIPT.json"
     rc.finalize_build_receipt(out_dir, receipt_path, repo=ROOT, version=version,
                               build_kind="pyinstaller-onedir", toolchain=toolchain,
-                              head_before=head_before)
+                              head_before=head_before, clean_before=clean_before)
     print(f"BUILD_RECEIPT written: {receipt_path}")
     return 0
 

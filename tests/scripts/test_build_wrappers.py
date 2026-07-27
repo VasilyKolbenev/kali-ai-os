@@ -32,6 +32,12 @@ assert _SPEC.loader is not None
 _SPEC.loader.exec_module(_BB)
 
 
+def _pretend_clean(monkeypatch, module) -> None:  # noqa: ANN001
+    """Реальное дерево репозитория грязное (pre-existing dirty), а эти тесты про
+    другое — фиксируем clean-at-start, иначе они зеленеют не по той причине."""
+    monkeypatch.setattr(module.rc, "capture_head_state", lambda repo: ("a" * 40, True))
+
+
 class _Runner:
     """Инъектируемый subprocess.run: записывает вызовы, отдаёт заданный rc."""
 
@@ -64,6 +70,7 @@ def test_desktop_resolve_npm_fail_closed_when_absent() -> None:
 
 def test_desktop_main_runs_exact_command_without_shell(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(bd, "EXE", tmp_path / "kali-desktop.exe")  # не появится → rc=1
+    _pretend_clean(monkeypatch, bd)
     runner = _Runner(returncode=0)
     assert bd.main(runner=runner, which=lambda n: "npm.cmd") == 1
     cmd, kwargs = runner.calls[0]
@@ -80,7 +87,10 @@ def test_desktop_main_fail_closed_without_npm(monkeypatch, tmp_path: Path) -> No
 
 def test_desktop_main_nonzero_when_build_fails(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(bd, "EXE", tmp_path / "kali-desktop.exe")
-    assert bd.main(runner=_Runner(returncode=2), which=lambda n: "npm.cmd") == 1
+    _pretend_clean(monkeypatch, bd)
+    runner = _Runner(returncode=2)
+    assert bd.main(runner=runner, which=lambda n: "npm.cmd") == 1
+    assert runner.calls, "билд обязан был стартовать — иначе проверяется не тот инвариант"
 
 
 # ── H1.5: backend rc=0 без onedir обязан быть nonzero ────────────────────────
@@ -119,6 +129,7 @@ def test_backend_main_nonzero_when_pyinstaller_lies(monkeypatch, tmp_path: Path)
     dist = tmp_path / "dist_premium"
     _sot_with_lgpl_set(dist)  # preflight должен пройти, иначе тест зелёный не по той причине
     monkeypatch.setattr(_BB, "DIST", dist)
+    _pretend_clean(monkeypatch, _BB)
     runner = _Runner(returncode=0)
     assert _BB.main(runner=runner) == 1
     assert runner.calls, "билд обязан был запуститься — иначе проверяется не тот инвариант"
@@ -145,6 +156,28 @@ def test_backend_assert_lgpl_set_accepts_complete_sot(monkeypatch, tmp_path: Pat
     _sot_with_lgpl_set(dist)
     monkeypatch.setattr(_BB, "DIST", dist)
     _BB.assert_lgpl_set_available()  # не поднимает
+
+
+# ── H6-3: dirty-at-start обязан отказать ДО запуска сборки ──────────────────
+def test_backend_refuses_dirty_worktree_before_running(monkeypatch, tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    monkeypatch.setattr(_BB.rc, "capture_head_state", lambda repo: ("a" * 40, False))
+    runner = _Runner(returncode=0)
+    assert _BB.main(runner=runner) == 1
+    assert runner.calls == [], "сборка не должна была стартовать на грязном дереве"
+    assert not (dist / "kali-backend.BUILD_RECEIPT.json").exists()
+
+
+def test_desktop_refuses_dirty_worktree_before_running(monkeypatch, tmp_path: Path) -> None:
+    exe = tmp_path / "kali-desktop.exe"
+    monkeypatch.setattr(bd, "EXE", exe)
+    monkeypatch.setattr(bd.rc, "capture_head_state", lambda repo: ("a" * 40, False))
+    runner = _Runner(returncode=0)
+    assert bd.main(runner=runner, which=lambda n: "npm.cmd") == 1
+    assert runner.calls == []
+    assert not exe.with_name(exe.name + ".BUILD_RECEIPT.json").exists()
 
 
 # ── H1.4: toolchain fail-closed (иначе receipt врёт про сборочную среду) ─────

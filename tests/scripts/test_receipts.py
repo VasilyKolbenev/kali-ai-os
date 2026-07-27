@@ -230,6 +230,20 @@ def test_collect_toolchain_uses_real_command_output() -> None:
     assert tc.startswith("python=") and "Python" in tc  # real output, not a label
 
 
+def test_finalize_refuses_a_build_that_started_dirty(tmp_path: Path) -> None:
+    # H6-3: дерево могло стать чистым к концу сборки — receipt всё равно запрещён,
+    # артефакт собран из непрокоммиченного состояния.
+    repo = _git_repo(tmp_path)
+    head = _head(repo)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    rp = tmp_path / "r.json"
+    with pytest.raises(rc.ReceiptError) as exc:
+        rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="k",
+                                  toolchain="t", head_before=head, clean_before=False)
+    assert "DIRTY_AT_START" in str(exc.value)
+    assert not rp.exists()
+
+
 def test_finalize_build_receipt_rejects_head_move(tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
     head_before = _head(repo)
@@ -239,7 +253,7 @@ def test_finalize_build_receipt_rejects_head_move(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "commit", "-am", "moved"], check=True, capture_output=True)
     with pytest.raises(rc.ReceiptError) as exc:
         rc.finalize_build_receipt(art, tmp_path / "r.json", repo=repo, version="v1",
-                                  build_kind="pyinstaller", toolchain="python=x", head_before=head_before)
+                                  build_kind="pyinstaller", toolchain="python=x", head_before=head_before, clean_before=True)
     assert "HEAD_MOVED" in str(exc.value)
 
 
@@ -249,7 +263,7 @@ def test_finalize_build_receipt_writes_current_head(tmp_path: Path) -> None:
     art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
     rp = tmp_path / "r.json"
     rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="pyinstaller",
-                              toolchain="python=Python 3.12", head_before=head_before)
+                              toolchain="python=Python 3.12", head_before=head_before, clean_before=True)
     written = json.loads(rp.read_text(encoding="utf-8"))
     assert written["git_sha"] == head_before and written["dirty"] is False
     assert written["toolchain"] == "python=Python 3.12"
@@ -262,7 +276,7 @@ def test_stale_receipt_from_other_commit_rejected(tmp_path: Path) -> None:
     rp = tmp_path / "r.json"
     head_a = _head(repo)
     rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="k",
-                              toolchain="t", head_before=head_a)
+                              toolchain="t", head_before=head_a, clean_before=True)
     (repo / "seed.txt").write_text("b", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "commit", "-am", "B"], check=True, capture_output=True)
     head_b = _head(repo)

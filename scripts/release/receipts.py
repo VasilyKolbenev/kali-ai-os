@@ -197,9 +197,16 @@ def collect_toolchain(commands: list[tuple[str, list[str]]]) -> str:
 
 
 def finalize_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, version: str,
-                           build_kind: str, toolchain: str, head_before: str) -> dict[str, Any]:
-    """Write a BUILD_RECEIPT after a successful build, refusing if HEAD moved during
-    it (the artifact then would not match the committed source)."""
+                           build_kind: str, toolchain: str, head_before: str,
+                           clean_before: bool) -> dict[str, Any]:
+    """Write a BUILD_RECEIPT after a successful build, refusing if HEAD moved during it
+    (the artifact then would not match the committed source).
+
+    H6-3 — a build that STARTED dirty can never earn a receipt, even if the worktree
+    happens to be clean by the time it finishes: the artifact was produced from
+    uncommitted source and ``dirty=false`` would be a lie."""
+    if not clean_before:
+        raise ReceiptError("DIRTY_AT_START: the worktree was dirty when the build began")
     head_after, clean_after = capture_head_state(repo)
     if head_after != head_before:
         raise ReceiptError(f"HEAD_MOVED: {head_before} -> {head_after} during the build")

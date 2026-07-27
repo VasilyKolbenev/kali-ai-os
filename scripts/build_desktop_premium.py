@@ -63,7 +63,13 @@ def main(*, runner: Runner = subprocess.run, which: Which | None = None) -> int:
     except BuildError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
-    head_before, _clean = rc.capture_head_state(ROOT)
+    # H6-3: refuse a dirty worktree BEFORE the build — a dirty build can never earn a
+    # receipt, so running it only burns time and leaves an unusable artifact.
+    head_before, clean_before = rc.capture_head_state(ROOT)
+    if not clean_before:
+        print("ERROR: DIRTY_AT_START: the worktree is dirty — build from a clean "
+              "dedicated worktree", file=sys.stderr)
+        return 1
     print("Building Tauri desktop release ...")
     result = runner(build_command(npm), cwd=str(ROOT))
     if result.returncode != 0:
@@ -85,7 +91,7 @@ def main(*, runner: Runner = subprocess.run, which: Which | None = None) -> int:
     receipt_path = EXE.with_name(EXE.name + ".BUILD_RECEIPT.json")
     rc.finalize_build_receipt(EXE, receipt_path, repo=ROOT, version=version,
                               build_kind="tauri-release", toolchain=toolchain,
-                              head_before=head_before)
+                              head_before=head_before, clean_before=clean_before)
     print(f"BUILD_RECEIPT written: {receipt_path}")
     return 0
 
