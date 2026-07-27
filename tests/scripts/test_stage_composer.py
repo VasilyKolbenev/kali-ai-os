@@ -341,6 +341,87 @@ def test_compose_rejects_junction_in_source_before_copy(tmp_path: Path) -> None:
     _assert_dist_untouched(dist)
 
 
+# ── H6-1: один снимок ассетов на весь compose (verify → copy → post-verify) ──
+def _last_good(dist: Path) -> Path:
+    """Существующий premium_stage, который обязан пережить неудачный compose."""
+    stage = dist / "premium_stage"
+    stage.mkdir()
+    (stage / "marker.txt").write_bytes(b"LASTGOOD")
+    return stage
+
+
+def _assert_last_good_intact(dist: Path) -> None:
+    assert (dist / "premium_stage" / "marker.txt").read_bytes() == b"LASTGOOD"
+    assert not list(dist.glob("premium_stage.next-*"))
+    assert not (dist / "premium_stage.swap-journal.json").exists()
+
+
+def test_compose_pins_the_digest_of_the_bytes_it_verified(tmp_path: Path) -> None:
+    import hashlib
+    dist = _dist(tmp_path)
+    stage = _compose(tmp_path, dist)
+    sot_manifest = tmp_path / "inputs" / "premium_assets" / "PREMIUM_ASSETS.sha256.json"
+    manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["asset_manifest_sha256"] == hashlib.sha256(sot_manifest.read_bytes()).hexdigest()
+
+
+def test_compose_stops_when_assets_change_between_verify_and_copy(tmp_path: Path) -> None:
+    # deterministic race: ассет меняется ПОСЛЕ verify, но ДО/во время copy.
+    # Снимок заморожен ⇒ post-copy проверка обязана поймать расхождение,
+    # swap не выполняется, last-good stage цел.
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    _last_good(dist)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    real_copy = sc._copy_inputs
+
+    def _racing_copy(nxt: Path, inp: dict) -> None:
+        (inp["assets"] / "model.bin").write_bytes(b"CHANGED-MID-COMPOSE")
+        real_copy(nxt, inp)
+
+    original = sc._copy_inputs
+    sc._copy_inputs = _racing_copy
+    try:
+        with pytest.raises(ab.BootstrapError) as exc:
+            sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                             git_sha="a" * 40, mode="internal", exclusions=[],
+                             materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    finally:
+        sc._copy_inputs = original
+    assert "SOT_DRIFT" in str(exc.value)
+    _assert_last_good_intact(dist)
+
+
+def test_compose_ignores_a_manifest_rewritten_after_the_snapshot(tmp_path: Path) -> None:
+    # «догоняющий» манифест, переписанный под изменённый ассет, НЕ становится новой
+    # истиной: compose сверяется с замороженным снимком.
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    _last_good(dist)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    real_copy = sc._copy_inputs
+
+    def _racing_copy(nxt: Path, inp: dict) -> None:
+        (inp["assets"] / "model.bin").write_bytes(b"CHANGED-MID-COMPOSE")
+        inp["assets_manifest"].write_text(  # манифест «подогнан» под новый контент
+            json.dumps({"entries": stage_policy.file_content_hashes(inp["assets"])}),
+            encoding="utf-8")
+        real_copy(nxt, inp)
+
+    original = sc._copy_inputs
+    sc._copy_inputs = _racing_copy
+    try:
+        with pytest.raises(ab.BootstrapError):
+            sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                             git_sha="a" * 40, mode="internal", exclusions=[],
+                             materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    finally:
+        sc._copy_inputs = original
+    _assert_last_good_intact(dist)
+
+
 # ── H2.1: assets_manifest — обязательный вход compose_stage ─────────────────
 def _assert_dist_untouched(dist: Path) -> None:
     """Отказ обязан произойти ДО любых copy/seal/swap — в dist_premium ничего нет."""

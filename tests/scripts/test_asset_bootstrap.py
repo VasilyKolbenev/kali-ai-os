@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from scripts.release import asset_bootstrap as ab
+from scripts.release import stage_policy
 
 
 def _make_junction(link: Path, target: Path) -> None:
@@ -365,6 +366,71 @@ def test_verify_sot_integrity_rejects_malformed_manifest(tmp_path: Path) -> None
     with pytest.raises(ab.BootstrapError) as exc:
         ab.verify_sot_integrity(sot, manifest)
     assert "SOT_MANIFEST_MALFORMED" in str(exc.value)
+
+
+# ── H6-1: immutable asset snapshot (одно чтение манифеста = одна истина) ────
+def test_load_asset_snapshot_freezes_bytes_and_entries(tmp_path: Path) -> None:
+    import hashlib
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    snap = ab.load_asset_snapshot(manifest)
+    assert snap.digest == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert snap.entries == stage_policy.file_content_hashes(sot)
+
+
+def test_snapshot_digest_is_of_the_bytes_that_were_parsed(tmp_path: Path) -> None:
+    # манифест, переписанный ПОСЛЕ снимка, не должен менять ни digest, ни entries
+    import hashlib
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    _sot, manifest = ab.sot_paths(dist)
+    before = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    snap = ab.load_asset_snapshot(manifest)
+    manifest.write_text('{"entries": {"lies.bin": "%s"}}' % ("f" * 64), encoding="utf-8")
+    assert snap.digest == before and "lies.bin" not in snap.entries
+
+
+def test_load_asset_snapshot_reads_the_manifest_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    # «один раз» — структурный инвариант: два чтения = окно, в котором файл может
+    # измениться между тем, что распарсили, и тем, что захешировали.
+    import json as _json
+    manifest = tmp_path / "PREMIUM_ASSETS.sha256.json"
+    manifest.write_text(_json.dumps({"entries": {"a.bin": "b" * 64}}), encoding="utf-8")
+    # считаем только Path.open: Path.read_bytes внутри идёт через него, так что одно
+    # логическое чтение = один open, а повторный хеш файла даст второй.
+    reads = {"n": 0}
+    real_open = Path.open
+
+    def _counting_open(self: Path, *args, **kwargs):  # noqa: ANN202
+        if self == manifest:
+            reads["n"] += 1
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _counting_open)
+    ab.load_asset_snapshot(manifest)
+    assert reads["n"] == 1, f"манифест прочитан {reads['n']} раз(а) вместо одного"
+
+
+@pytest.mark.parametrize("body", ["{ not json", '{"entries": []}', '{"no": "entries"}', "[]"])
+def test_load_asset_snapshot_rejects_malformed(tmp_path: Path, body: str) -> None:
+    manifest = tmp_path / "PREMIUM_ASSETS.sha256.json"
+    manifest.write_text(body, encoding="utf-8")
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.load_asset_snapshot(manifest)
+    assert "SOT_MANIFEST_MALFORMED" in str(exc.value)
+
+
+def test_verify_against_snapshot_detects_drift(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    snap = ab.load_asset_snapshot(manifest)
+    ab.verify_against_snapshot(sot, snap, what="SoT")  # не поднимает
+    (sot / "model.bin").write_bytes(b"DRIFTED")
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.verify_against_snapshot(sot, snap, what="SoT")
+    assert "SOT_DRIFT" in str(exc.value)
 
 
 # ── external-writer lockdown: fetch_lgpl_ffmpeg --stage forbidden ───────────

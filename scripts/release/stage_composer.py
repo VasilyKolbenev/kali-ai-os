@@ -292,12 +292,14 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
     with swap_lock(dist_premium):
         recover_swap(dist_premium, _held=True)  # finish any interrupted prior swap first
 
-        # G5/H2.1: the premium_assets SoT must exist, be physical-only and match its
-        # integrity manifest BEFORE any copy — missing, malformed or drifted stops the
-        # build here, with no next-stage left on disk. This runs FIRST so an absent SoT
-        # is a clean SOT_MISSING rather than a raw FileNotFoundError from the walk.
-        asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
-        asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
+        # H6-1: read the SoT integrity manifest ONCE and freeze it. The same snapshot
+        # gates the source BEFORE the copy and the staged copy AFTER it, and its digest
+        # is what the STAGE_MANIFEST pins — a manifest rewritten mid-compose can never
+        # become the new truth. G5/H2.1: missing, malformed or drifted stops the build
+        # here, before anything is created on disk.
+        snapshot = asset_bootstrap.load_asset_snapshot(assets_manifest)
+        asset_bootstrap.verify_against_snapshot(inputs["assets"], snapshot,
+                                                what="premium_assets SoT")
         # F2: source-containment BEFORE anything is created — junction/escaping/
         # dangling reject, only contained HF file-symlinks tolerated.
         for key in ("assets", "backend"):
@@ -308,13 +310,24 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
         if nxt.exists():
             shutil.rmtree(nxt)
         nxt.mkdir(parents=True)
-        _copy_inputs(nxt, inputs)
-        _verify_receipts(nxt, receipts, version, git_sha)
-        _apply_exclusions(nxt, exclusions)
-        materializer(nxt)
-        stage_policy.assert_tree_reparse_free(nxt)  # zero reparse points after materialize
-        signer(nxt, mode)
-        manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
-                                  receipts=receipts, asset_digest=asset_digest)  # MANIFEST LAST
-        stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
+        try:
+            _copy_inputs(nxt, inputs)
+            # H6-1: the STAGED assets must match the SAME frozen snapshot — an asset
+            # that changed between the verify and the copy is caught here, before the
+            # exclusions touch models/ and long before the swap.
+            asset_bootstrap.verify_against_snapshot(nxt / "models", snapshot,
+                                                    what="staged models")
+            _verify_receipts(nxt, receipts, version, git_sha)
+            _apply_exclusions(nxt, exclusions)
+            materializer(nxt)
+            stage_policy.assert_tree_reparse_free(nxt)  # zero reparse after materialize
+            signer(nxt, mode)
+            manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
+                                      receipts=receipts,
+                                      asset_digest=snapshot.digest)  # MANIFEST LAST
+            stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
+        except BaseException:
+            # never leave a multi-GB orphaned next-stage behind; last-good is untouched
+            shutil.rmtree(nxt, ignore_errors=True)
+            raise
         return transactional_swap(dist_premium, nxt, token=token, _held=True)

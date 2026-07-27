@@ -23,7 +23,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from scripts.release import stage_policy
 
@@ -97,26 +97,55 @@ def sot_ffmpeg_dir(dist_premium: Path) -> Path:
     return sot / "ffmpeg"
 
 
-def _load_manifest(manifest_path: Path) -> dict[str, Any]:
+class AssetSnapshot(NamedTuple):
+    """An IMMUTABLE view of the SoT integrity manifest.
+
+    ``digest`` is the sha256 of the exact bytes ``entries`` was parsed from, so the
+    provenance pin and the content contract can never come from two different reads
+    of a file that changed in between."""
+
+    digest: str
+    entries: dict[str, str]
+
+
+def load_asset_snapshot(manifest_path: Path) -> AssetSnapshot:
+    """Read the integrity manifest ONCE and freeze it (bytes + parsed entries)."""
+    if not manifest_path.is_file():
+        raise BootstrapError(f"SOT_MISSING: {manifest_path}")
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        raw = manifest_path.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         raise BootstrapError(f"SOT_MANIFEST_MALFORMED: {manifest_path}: {e}") from e
-    if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
         raise BootstrapError(f"SOT_MANIFEST_MALFORMED: {manifest_path}: no 'entries' map")
-    return data
+    return AssetSnapshot(digest=hashlib.sha256(raw).hexdigest(), entries=dict(entries))
+
+
+def verify_against_snapshot(tree: Path, snapshot: AssetSnapshot, *, what: str) -> None:
+    """Fail-closed: ``tree`` must be physical-only and match the FROZEN snapshot.
+
+    Used twice per compose — on the SoT before the copy and on the staged copy after
+    it — so an asset that changes mid-compose cannot reach the sealed stage."""
+    if not tree.is_dir():
+        raise BootstrapError(f"SOT_MISSING: {tree}")
+    _assert_physical(tree)
+    if _dir_hashes(tree) != snapshot.entries:
+        raise BootstrapError(f"SOT_DRIFT: {what} does not match the frozen asset snapshot")
+
+
+def _load_manifest(manifest_path: Path) -> dict[str, Any]:
+    return {"entries": load_asset_snapshot(manifest_path).entries}
 
 
 def verify_sot_integrity(sot: Path, manifest_path: Path) -> None:
     """Fail-closed: the premium_assets SoT must be physical-only and byte-identical
-    to its integrity manifest. The composer runs this BEFORE copying the assets, so
-    any drift after bootstrap stops the build."""
-    if not sot.is_dir() or not manifest_path.is_file():
+    to its integrity manifest (single-shot convenience over :func:`load_asset_snapshot`)."""
+    if not sot.is_dir():
         raise BootstrapError(f"SOT_MISSING: {sot} / {manifest_path}")
-    _assert_physical(sot)
-    stored = _load_manifest(manifest_path)
-    if _dir_hashes(sot) != stored["entries"]:
-        raise BootstrapError("SOT_DRIFT: premium_assets drifted from its integrity manifest")
+    verify_against_snapshot(sot, load_asset_snapshot(manifest_path),
+                            what="premium_assets SoT")
 
 
 def _outside(entries: dict[str, str], prefix: str) -> dict[str, str]:
@@ -160,7 +189,10 @@ def refresh_asset_manifest(dist_premium: Path, *, owned: str) -> Path:
 
 
 def asset_manifest_digest(manifest_path: Path) -> str:
-    """A digest of the SoT integrity manifest, pinned into STAGE_MANIFEST provenance."""
+    """A digest of the SoT integrity manifest, pinned into STAGE_MANIFEST provenance.
+
+    Prefer :func:`load_asset_snapshot` when the entries are needed too: taking the
+    digest in a second read would pin bytes nobody validated."""
     return _sha256_file(manifest_path)
 
 
