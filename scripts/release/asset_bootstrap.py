@@ -22,12 +22,14 @@ import json
 import os
 import shutil
 import sys
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, Iterator, NamedTuple
 
-from scripts.release import stage_policy
+from scripts.release import file_lock, stage_policy
 
 _MANIFEST_NAME = "PREMIUM_ASSETS.sha256.json"
+_LOCK_NAME = "premium_assets.lock"
 _DEFAULT_DIST = Path(__file__).resolve().parents[2] / "dist_premium"
 
 Copier = Callable[[Path, Path], None]
@@ -97,6 +99,24 @@ def sot_ffmpeg_dir(dist_premium: Path) -> Path:
     return sot / "ffmpeg"
 
 
+@contextmanager
+def asset_lock(dist_premium: Path) -> Iterator[int]:
+    """The ONE lock every premium_assets reader/writer takes (H6-2).
+
+    Held by the bootstrap, the FFmpeg fetcher and the stage composer, so the SoT can
+    never be mutated underneath a verify/copy. The composer takes it INSIDE the swap
+    lock; nothing takes them in the other order, so there is no cycle."""
+    path = dist_premium / _LOCK_NAME
+    try:
+        fd = file_lock.acquire(path)
+    except file_lock.LockBusy as e:
+        raise BootstrapError(f"ASSETS_LOCKED: {e}") from e
+    try:
+        yield fd
+    finally:
+        file_lock.release(fd)
+
+
 class AssetSnapshot(NamedTuple):
     """An IMMUTABLE view of the SoT integrity manifest.
 
@@ -152,12 +172,19 @@ def _outside(entries: dict[str, str], prefix: str) -> dict[str, str]:
     return {rel: digest for rel, digest in entries.items() if not rel.startswith(prefix)}
 
 
-def verify_unowned_unchanged(dist_premium: Path, *, owned: str) -> None:
+def verify_unowned_unchanged(dist_premium: Path, *, owned: str, _held: bool = False) -> None:
     """Everything OUTSIDE the ``owned`` subtree must still match the sealed manifest.
 
     A writer authorized for ONE subtree (the FFmpeg fetcher owns ``models/ffmpeg``)
     must not be able to launder drift elsewhere in the SoT into a fresh, valid-looking
-    seal — that would silently defeat the SOT_DRIFT gate the composer depends on."""
+    seal — that would silently defeat the SOT_DRIFT gate the composer depends on.
+
+    ``_held`` means the caller already holds the asset lock for the whole flow."""
+    with (nullcontext() if _held else asset_lock(dist_premium)):
+        _verify_unowned_unchanged(dist_premium, owned=owned)
+
+
+def _verify_unowned_unchanged(dist_premium: Path, *, owned: str) -> None:
     sot, manifest_path = sot_paths(dist_premium)
     if not sot.is_dir():
         raise BootstrapError(f"SOT_MISSING: {sot}")
@@ -174,12 +201,17 @@ def verify_unowned_unchanged(dist_premium: Path, *, owned: str) -> None:
             f"SOT_DRIFT: premium_assets drifted outside {prefix} — refusing to re-seal")
 
 
-def refresh_asset_manifest(dist_premium: Path, *, owned: str) -> Path:
+def refresh_asset_manifest(dist_premium: Path, *, owned: str, _held: bool = False) -> Path:
     """Re-seal the SoT integrity manifest after an AUTHORIZED mutation of ``owned``.
 
     Only the asset fetcher may call this, and only for the subtree it owns; every
     other change is drift and must be caught by :func:`verify_sot_integrity`."""
-    verify_unowned_unchanged(dist_premium, owned=owned)
+    with (nullcontext() if _held else asset_lock(dist_premium)):
+        return _refresh_asset_manifest(dist_premium, owned=owned)
+
+
+def _refresh_asset_manifest(dist_premium: Path, *, owned: str) -> Path:
+    _verify_unowned_unchanged(dist_premium, owned=owned)
     sot, manifest_path = sot_paths(dist_premium)
     manifest_path.write_text(
         json.dumps({"entries": _dir_hashes(sot)}, ensure_ascii=False, indent=2),
@@ -196,7 +228,8 @@ def asset_manifest_digest(manifest_path: Path) -> str:
     return _sha256_file(manifest_path)
 
 
-def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None) -> str:
+def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None,
+                             _held: bool = False) -> str:
     """Migrate heavy assets to dist_premium/premium_assets/models, safely.
 
     Returns ``"already"`` when the SoT already exists and verifies against its
@@ -207,6 +240,11 @@ def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None
             legacy source, or a drifted existing SoT. The legacy junction is left
             intact on every failure path.
     """
+    with (nullcontext() if _held else asset_lock(dist_premium)):
+        return _bootstrap_premium_assets(dist_premium, copier=copier)
+
+
+def _bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None) -> str:
     copier = copier or _default_copier
     assets_dir = dist_premium / "premium_assets"
     sot = assets_dir / "models"

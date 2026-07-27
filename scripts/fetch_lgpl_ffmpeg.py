@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import sys
 import tempfile
@@ -37,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.release import asset_bootstrap  # noqa: E402
+from scripts.release import asset_bootstrap, stage_policy  # noqa: E402
 
 # H1.1: an immutable, owner-pinned release asset. The tag is a dated BtbN autobuild
 # (never the mutable "latest" release) and the download is verified against the
@@ -85,18 +86,71 @@ def _verify_lgpl(license_path: Path) -> None:
         raise SystemExit(f"LICENSE looks like full GPL — refusing: {license_path}")
 
 
-def _install(build_dir: Path, target: Path) -> None:
-    """Copy the 7 LGPL DLLs + LICENSE.txt into ``target`` (models/ffmpeg)."""
-    target.mkdir(parents=True, exist_ok=True)
+OWNED_FILES = frozenset(EXPECTED_DLLS | {"LICENSE.txt"})
+
+
+def assert_exact_ffmpeg_subtree(tree: Path) -> None:
+    """The owned subtree must be EXACTLY the LGPL set (H6-2).
+
+    Additive copying let a stale ``libx264``, a previous soname or any stray DLL
+    survive an FFmpeg bump and ship inside models/ffmpeg — which the installed app
+    puts on its DLL search path."""
+    stage_policy.assert_tree_reparse_free(tree)  # no links, no dangling targets
+    names = {p.name for p in tree.iterdir()}
+    gpl = sorted(n for n in names if "x264" in n.lower() or "x265" in n.lower())
+    if gpl:
+        raise SystemExit(f"FFMPEG_SUBTREE_GPL: forbidden codecs in {tree}: {gpl}")
+    extra = sorted(names - OWNED_FILES)
+    missing = sorted(OWNED_FILES - names)
+    if extra or missing:
+        raise SystemExit(f"FFMPEG_SUBTREE_INEXACT: {tree}: extra={extra} missing={missing}")
+
+
+def _stage_exact_subtree(build_dir: Path, work: Path) -> None:
+    """Assemble the exact LGPL set in a clean scratch dir OUTSIDE the hashed tree."""
     bin_dir = build_dir / "bin"
-    found = {p.name for p in bin_dir.glob("*.dll")}
+    found = {p.name for p in bin_dir.glob("*.dll")} if bin_dir.is_dir() else set()
     missing = EXPECTED_DLLS - found
     if missing:
         raise SystemExit(f"LGPL build missing expected DLLs: {sorted(missing)}")
-    for name in EXPECTED_DLLS:
-        shutil.copy2(bin_dir / name, target / name)
-    shutil.copy2(build_dir / "LICENSE.txt", target / "LICENSE.txt")
-    print(f"Installed {len(EXPECTED_DLLS)} LGPL DLLs + LICENSE.txt -> {target}")
+    work.mkdir(parents=True)
+    for name in sorted(EXPECTED_DLLS):
+        shutil.copy2(bin_dir / name, work / name)
+    shutil.copy2(build_dir / "LICENSE.txt", work / "LICENSE.txt")
+
+
+def replace_owned_subtree(build_dir: Path, dist_premium: Path, *, token: str = "1") -> Path:
+    """Transactionally REPLACE models/ffmpeg with an exact, verified subtree.
+
+    The replacement is assembled and proven in a scratch dir that is NOT under the
+    hashed models/ tree, then swapped in. Any failure restores the previous subtree,
+    and the caller only re-seals the manifest after this returns."""
+    target = install_target(dist_premium)
+    scratch = dist_premium / "premium_assets"
+    work = scratch / f"ffmpeg.next-{token}"
+    backup = scratch / f"ffmpeg.backup-{token}"
+    for leftover in (work, backup):
+        if leftover.exists():
+            shutil.rmtree(leftover)
+    _stage_exact_subtree(build_dir, work)
+    assert_exact_ffmpeg_subtree(work)
+    promoted = False
+    try:
+        if target.exists():
+            os.rename(target, backup)
+        os.rename(work, target)
+        promoted = True
+        assert_exact_ffmpeg_subtree(target)
+    except BaseException:
+        if promoted and target.exists():
+            os.rename(target, work)  # undo the promotion
+        if backup.exists() and not target.exists():
+            os.rename(backup, target)  # restore the last-good subtree
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
+    print(f"Replaced models/ffmpeg with the exact LGPL set -> {target}")
+    return target
 
 
 # The ONLY subtree of the premium_assets SoT this script is authorized to write.
@@ -134,14 +188,17 @@ def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
 
     The SoT is verified BEFORE it is touched: this script owns ``models/ffmpeg`` and
     nothing else, so pre-existing drift anywhere else refuses the install instead of
-    being laundered into a fresh seal."""
-    sot = require_sot(dist_premium)
-    asset_bootstrap.verify_unowned_unchanged(dist_premium, owned=OWNED_SUBTREE)
-    target = install_target(dist_premium)
-    _install(build_dir, target)
-    asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE)
-    print(f"SoT integrity manifest re-sealed for {sot}")
-    return target
+    being laundered into a fresh seal. The whole flow runs under the shared asset lock,
+    and the seal is re-written only after the subtree swap succeeded."""
+    with asset_bootstrap.asset_lock(dist_premium):
+        sot = require_sot(dist_premium)
+        asset_bootstrap.verify_unowned_unchanged(dist_premium, owned=OWNED_SUBTREE,
+                                                 _held=True)
+        target = replace_owned_subtree(build_dir, dist_premium)
+        asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE,
+                                               _held=True)
+        print(f"SoT integrity manifest re-sealed for {sot}")
+        return target
 
 
 def stage_write_forbidden(*, staged: bool) -> bool:

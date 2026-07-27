@@ -27,18 +27,12 @@ import json
 import os
 import re
 import shutil
-import sys
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from scripts.release import asset_bootstrap, stage_policy
+from scripts.release import asset_bootstrap, file_lock, stage_policy
 from scripts.release import receipts as rc
-
-if sys.platform == "win32":
-    import msvcrt
-else:  # pragma: no cover - build tooling is Windows; POSIX kept for CI/dev
-    import fcntl
 
 _JOURNAL = "premium_stage.swap-journal.json"
 _LOCK = "premium_stage.swap.lock"
@@ -76,44 +70,17 @@ def _derive_paths(dist: Path, token: str) -> tuple[Path, Path, Path]:
     return stage, backup, nxt
 
 
-def _acquire_os_lock(lock_path: Path) -> int:
-    """Acquire an OWNERSHIP-safe OS lock (held by the returned fd). A live holder's
-    lock cannot be taken by another process; the OS releases it if that process
-    dies — so a leftover lock FILE never blocks, only a live lock does."""
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
-    try:
-        os.write(fd, b"\0")
-        os.lseek(fd, 0, os.SEEK_SET)
-        if sys.platform == "win32":
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        else:  # pragma: no cover
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as e:
-        os.close(fd)
-        raise SwapError(f"SWAP_LOCKED: {lock_path} held by another process") from e
-    return fd
-
-
-def _release_os_lock(fd: int) -> None:
-    try:
-        os.lseek(fd, 0, os.SEEK_SET)
-        if sys.platform == "win32":
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:  # pragma: no cover
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    except OSError:
-        pass
-    os.close(fd)
-
-
 @contextmanager
 def swap_lock(dist: Path) -> Iterator[int]:
     """Hold the OS swap lock across a whole recover -> compose -> seal -> swap flow."""
-    fd = _acquire_os_lock(_lock_path(dist))
+    try:
+        fd = file_lock.acquire(_lock_path(dist))
+    except file_lock.LockBusy as e:
+        raise SwapError(f"SWAP_LOCKED: {e}") from e
     try:
         yield fd
     finally:
-        _release_os_lock(fd)
+        file_lock.release(fd)
 
 
 def _write_journal(journal: Path, phase: str, token: str) -> None:
@@ -297,37 +264,41 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
         # is what the STAGE_MANIFEST pins — a manifest rewritten mid-compose can never
         # become the new truth. G5/H2.1: missing, malformed or drifted stops the build
         # here, before anything is created on disk.
-        snapshot = asset_bootstrap.load_asset_snapshot(assets_manifest)
-        asset_bootstrap.verify_against_snapshot(inputs["assets"], snapshot,
-                                                what="premium_assets SoT")
-        # F2: source-containment BEFORE anything is created — junction/escaping/
-        # dangling reject, only contained HF file-symlinks tolerated.
-        for key in ("assets", "backend"):
-            stage_policy.assert_source_symlinks_contained(inputs[key])
+        # H6-2: the composer takes the SAME asset lock as the bootstrap and the FFmpeg
+        # fetcher, so nothing can mutate the SoT between the verify and the copy. It is
+        # taken INSIDE the swap lock; no other flow takes them in the opposite order.
+        with asset_bootstrap.asset_lock(dist_premium):
+            snapshot = asset_bootstrap.load_asset_snapshot(assets_manifest)
+            asset_bootstrap.verify_against_snapshot(inputs["assets"], snapshot,
+                                                    what="premium_assets SoT")
+            # F2: source-containment BEFORE anything is created — junction/escaping/
+            # dangling reject, only contained HF file-symlinks tolerated.
+            for key in ("assets", "backend"):
+                stage_policy.assert_source_symlinks_contained(inputs[key])
 
-        nxt = dist_premium / f"premium_stage.next-{token}"
-        stage_policy.assert_safe_dest(dist_premium, nxt)
-        if nxt.exists():
-            shutil.rmtree(nxt)
-        nxt.mkdir(parents=True)
-        try:
-            _copy_inputs(nxt, inputs)
-            # H6-1: the STAGED assets must match the SAME frozen snapshot — an asset
-            # that changed between the verify and the copy is caught here, before the
-            # exclusions touch models/ and long before the swap.
-            asset_bootstrap.verify_against_snapshot(nxt / "models", snapshot,
-                                                    what="staged models")
-            _verify_receipts(nxt, receipts, version, git_sha)
-            _apply_exclusions(nxt, exclusions)
-            materializer(nxt)
-            stage_policy.assert_tree_reparse_free(nxt)  # zero reparse after materialize
-            signer(nxt, mode)
-            manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
-                                      receipts=receipts,
-                                      asset_digest=snapshot.digest)  # MANIFEST LAST
-            stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
-        except BaseException:
-            # never leave a multi-GB orphaned next-stage behind; last-good is untouched
-            shutil.rmtree(nxt, ignore_errors=True)
-            raise
-        return transactional_swap(dist_premium, nxt, token=token, _held=True)
+            nxt = dist_premium / f"premium_stage.next-{token}"
+            stage_policy.assert_safe_dest(dist_premium, nxt)
+            if nxt.exists():
+                shutil.rmtree(nxt)
+            nxt.mkdir(parents=True)
+            try:
+                _copy_inputs(nxt, inputs)
+                # H6-1: the STAGED assets must match the SAME frozen snapshot — an asset
+                # that changed between the verify and the copy is caught here, before the
+                # exclusions touch models/ and long before the swap.
+                asset_bootstrap.verify_against_snapshot(nxt / "models", snapshot,
+                                                        what="staged models")
+                _verify_receipts(nxt, receipts, version, git_sha)
+                _apply_exclusions(nxt, exclusions)
+                materializer(nxt)
+                stage_policy.assert_tree_reparse_free(nxt)  # zero reparse after materialize
+                signer(nxt, mode)
+                manifest = _seal_manifest(nxt, version=version, git_sha=git_sha, mode=mode,
+                                          receipts=receipts,
+                                          asset_digest=snapshot.digest)  # MANIFEST LAST
+                stage_policy.verify_manifest(nxt, manifest)  # exact verify before the swap
+            except BaseException:
+                # never leave a multi-GB orphaned next-stage behind; last-good untouched
+                shutil.rmtree(nxt, ignore_errors=True)
+                raise
+            return transactional_swap(dist_premium, nxt, token=token, _held=True)

@@ -356,6 +356,22 @@ def _assert_last_good_intact(dist: Path) -> None:
     assert not (dist / "premium_stage.swap-journal.json").exists()
 
 
+def test_compose_refuses_while_the_assets_are_locked(tmp_path: Path) -> None:
+    # H6-2: композер участвует в ТОМ ЖЕ asset-lock, что fetcher и bootstrap
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    _last_good(dist)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with ab.asset_lock(dist):
+        with pytest.raises(ab.BootstrapError) as exc:
+            sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                             git_sha="a" * 40, mode="internal", exclusions=[],
+                             materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "ASSETS_LOCKED" in str(exc.value)
+    _assert_last_good_intact(dist)
+
+
 def test_compose_pins_the_digest_of_the_bytes_it_verified(tmp_path: Path) -> None:
     import hashlib
     dist = _dist(tmp_path)

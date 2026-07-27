@@ -433,6 +433,105 @@ def test_verify_against_snapshot_detects_drift(tmp_path: Path) -> None:
     assert "SOT_DRIFT" in str(exc.value)
 
 
+# ── H6-2: точное ТРАНЗАКЦИОННОЕ поддерево ffmpeg + общий asset-lock ─────────
+def _seed_stale_subtree(dist: Path) -> Path:
+    """Поддерево с мусором, который аддитивное копирование оставляло жить."""
+    import scripts.fetch_lgpl_ffmpeg as fl
+    target = fl.install_target(dist)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "libx264-165.dll").write_bytes(b"GPL")       # запрещённый кодек
+    (target / "avcodec-61.dll").write_bytes(b"OLD-SONAME")  # прошлый мажор FFmpeg
+    (target / "random.dll").write_bytes(b"JUNK")            # посторонний файл
+    return target
+
+
+def test_ffmpeg_update_removes_stale_x264_and_arbitrary_dlls(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    target = _seed_stale_subtree(dist)  # мусор ВНУТРИ owned-поддерева, ещё не в печати
+    fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    assert {p.name for p in target.iterdir()} == set(fl.EXPECTED_DLLS) | {"LICENSE.txt"}
+    sot, manifest = ab.sot_paths(dist)
+    ab.verify_sot_integrity(sot, manifest)
+
+
+def test_assert_exact_ffmpeg_subtree_rejects_extras_and_gpl(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    tree = tmp_path / "ffmpeg"
+    tree.mkdir()
+    for name in fl.EXPECTED_DLLS:
+        (tree / name).write_bytes(b"LGPL")
+    (tree / "LICENSE.txt").write_text("LESSER GENERAL PUBLIC LICENSE", encoding="utf-8")
+    fl.assert_exact_ffmpeg_subtree(tree)  # ровно набор → ok
+    (tree / "libx265-x.dll").write_bytes(b"GPL")
+    with pytest.raises(SystemExit) as exc:
+        fl.assert_exact_ffmpeg_subtree(tree)
+    assert "GPL" in str(exc.value)
+    (tree / "libx265-x.dll").unlink()
+    (tree / "extra.dll").write_bytes(b"X")
+    with pytest.raises(SystemExit) as exc:
+        fl.assert_exact_ffmpeg_subtree(tree)
+    assert "INEXACT" in str(exc.value)
+
+
+def test_ffmpeg_failed_update_preserves_last_good_subtree_and_manifest(
+        monkeypatch, tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    target = _seed_stale_subtree(dist)
+    _sot, manifest = ab.sot_paths(dist)
+    # печать снята ДО появления мусора: если re-seal выполнить раньше успешного свопа,
+    # он запечатает несуществующее состояние — и манифест разойдётся с этим снимком.
+    before_manifest = manifest.read_bytes()
+    before_names = {p.name for p in target.iterdir()}
+
+    calls = {"n": 0}
+    real_assert = fl.assert_exact_ffmpeg_subtree
+
+    def _fail_after_promote(tree: Path) -> None:
+        calls["n"] += 1
+        real_assert(tree)
+        if calls["n"] == 2:  # уже после rename в target
+            raise SystemExit("injected post-promote failure")
+
+    monkeypatch.setattr(fl, "assert_exact_ffmpeg_subtree", _fail_after_promote)
+    with pytest.raises(SystemExit):
+        fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    assert {p.name for p in target.iterdir()} == before_names  # старое поддерево цело
+    assert manifest.read_bytes() == before_manifest            # печать не тронута
+
+
+# ── H6-2: один asset-lock на fetcher / bootstrap / composer ─────────────────
+def test_asset_lock_blocks_a_second_holder(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    with ab.asset_lock(dist):
+        with pytest.raises(ab.BootstrapError) as exc:
+            with ab.asset_lock(dist):
+                pass
+    assert "ASSETS_LOCKED" in str(exc.value)
+
+
+def test_bootstrap_refuses_while_assets_locked(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    with ab.asset_lock(dist):
+        with pytest.raises(ab.BootstrapError) as exc:
+            ab.bootstrap_premium_assets(dist)
+    assert "ASSETS_LOCKED" in str(exc.value)
+
+
+def test_fetcher_refuses_while_assets_locked(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    with ab.asset_lock(dist):
+        with pytest.raises(ab.BootstrapError) as exc:
+            fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    assert "ASSETS_LOCKED" in str(exc.value)
+
+
 # ── external-writer lockdown: fetch_lgpl_ffmpeg --stage forbidden ───────────
 def test_fetch_lgpl_stage_is_forbidden(monkeypatch, tmp_path: Path) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl
