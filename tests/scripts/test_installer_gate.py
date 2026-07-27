@@ -185,6 +185,75 @@ def test_assert_iss_signs_requires_setup_and_uninstaller() -> None:
         ig.assert_iss_signs_setup_and_uninstaller("[Setup]\nAppName=x\n")
 
 
+# ── H6-4: только АКТИВНЫЕ директивы, с учётом guard'ов ──────────────────────
+def _signed_iss(signtool: str = "SignTool=kali",
+                uninst: str = "SignedUninstaller=yes",
+                naming: str = "OutputBaseFilename=x-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE") -> str:
+    return ("[Setup]\nAppName=x\n"
+            "#ifdef SignSetup\n" + signtool + "\n" + uninst + "\n#endif\n"
+            "#ifdef Internal\n" + naming + "\n#endif\n")
+
+
+def test_commented_out_signeduninstaller_is_not_active() -> None:
+    text = _signed_iss(uninst="; SignedUninstaller=yes")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+    assert "NO_UNINSTALLER_SIGN" in str(exc.value)
+
+
+def test_commented_out_signtool_is_not_active() -> None:
+    text = _signed_iss(signtool="; SignTool=kali")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+    assert "NO_SETUP_SIGN" in str(exc.value)
+
+
+def test_commented_out_internal_naming_is_not_active() -> None:
+    text = _signed_iss(naming="; OutputBaseFilename=x-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_internal_naming(text)
+    assert "NO_INTERNAL_NAMING" in str(exc.value)
+
+
+def test_active_directives_normalize_whitespace_and_case() -> None:
+    text = ("[Setup]\n#ifdef SignSetup\n   signtool   =   kali  \n"
+            "\tSignedUninstaller\t=\tYES\t\n#endif\n")
+    ig.assert_iss_signs_setup_and_uninstaller(text)  # не поднимает
+
+
+def test_signing_directives_outside_the_guard_are_refused() -> None:
+    # незагарденные директивы применились бы и к internal-сборке
+    text = "[Setup]\nSignTool=kali\nSignedUninstaller=yes\n"
+    with pytest.raises(ig.InstallerGateError):
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+
+
+# ── H6-4: подписанный uninsNNN.exe — обязательная проверка live acceptance ──
+def test_verify_installed_uninstaller_requires_valid_exact_timestamped(tmp_path: Path) -> None:
+    from scripts.release import signing_gate as sg
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "unins000.exe").write_bytes(b"MZ")
+    thumb = "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"
+    good = {"status": "Valid", "thumbprint": thumb, "timestamped": True}
+    assert ig.verify_installed_uninstaller(root, expected_thumbprint=thumb,
+                                           inspector=lambda p: dict(good)) == 1
+    for broken in ({"status": "HashMismatch"}, {"thumbprint": "DEAD"}, {"timestamped": False}):
+        report = dict(good, **broken)
+        with pytest.raises(sg.SigningGateError):
+            ig.verify_installed_uninstaller(root, expected_thumbprint=thumb,
+                                            inspector=lambda p, r=report: dict(r))
+
+
+def test_verify_installed_uninstaller_requires_one_to_exist(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    root.mkdir()
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.verify_installed_uninstaller(root, expected_thumbprint="A" * 40,
+                                        inspector=lambda p: {})
+    assert "UNINSTALLER_MISSING" in str(exc.value)
+
+
 # ── REAL files: the .iss/.bat edits are test-verified ───────────────────────
 def test_real_iss_files_are_stage_only() -> None:
     ig.assert_iss_stage_only(ISS.read_text(encoding="utf-8"))

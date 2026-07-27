@@ -32,6 +32,11 @@ _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 # only legal file source is strictly BELOW ..\dist_premium\premium_stage\.
 _ISS_BASE = ("<repo>", "scripts")
 _STAGE_PREFIX = ("<repo>", "dist_premium", "premium_stage")
+_DIRECTIVE_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
+_UNINS_EXE_RE = re.compile(r"^unins\d{3}\.exe$")
+_SIGN_GUARD = "SignSetup"
+_INTERNAL_GUARD = "Internal"
+INTERNAL_NAME = "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
 
 
 class InstallerGateError(Exception):
@@ -167,22 +172,89 @@ def assert_iss_stage_only(iss_text: str) -> None:
             raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {raw}")
 
 
+def active_directives(iss_text: str) -> list[tuple[str, str, tuple[str, ...]]]:
+    """Every ACTIVE ``key=value`` directive as ``(key_lower, value, guards)`` (H6-4).
+
+    Comment lines are inactive, whitespace and case are normalized, and each directive
+    carries the ``#ifdef`` guards it sits under — a commented-out or unguarded
+    SignedUninstaller must never satisfy the signing gate the way a raw substring did."""
+    out: list[tuple[str, str, tuple[str, ...]]] = []
+    guards: list[str] = []
+    for raw in iss_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "//")):
+            continue
+        low = line.lower()
+        if low.startswith(("#ifdef ", "#ifndef ")):
+            guards.append(line.split(None, 1)[1].strip())
+            continue
+        if low.startswith("#else"):
+            if guards:
+                guards[-1] = "!" + guards[-1]
+            continue
+        if low.startswith("#endif"):
+            if guards:
+                guards.pop()
+            continue
+        if line.startswith(("#", "[")):
+            continue
+        match = _DIRECTIVE_RE.match(line)
+        if match:
+            out.append((match.group("key").lower(), match.group("value").strip(),
+                        tuple(guards)))
+    return out
+
+
+def _has_directive(directives: list[tuple[str, str, tuple[str, ...]]], key: str, *,
+                   value: str | None = None, contains: str | None = None,
+                   guard: str | None = None) -> bool:
+    for found_key, found_value, guards in directives:
+        if found_key != key:
+            continue
+        if value is not None and found_value.lower() != value.lower():
+            continue
+        if contains is not None and contains not in found_value:
+            continue
+        if guard is not None and guard not in guards:
+            continue
+        return True
+    return False
+
+
 def assert_iss_signs_setup_and_uninstaller(iss_text: str) -> None:
-    """The .iss must sign both the Setup and the generated uninstaller."""
-    if "SignedUninstaller=yes" not in iss_text:
-        raise InstallerGateError("NO_UNINSTALLER_SIGN: SignedUninstaller=yes missing")
-    if "SignTool=" not in iss_text:
-        raise InstallerGateError("NO_SETUP_SIGN: SignTool= directive missing")
+    """The .iss must sign both the Setup and the generated uninstaller — with ACTIVE
+    directives under the ``SignSetup`` guard the signed build actually defines."""
+    directives = active_directives(iss_text)
+    if not _has_directive(directives, "signtool", guard=_SIGN_GUARD):
+        raise InstallerGateError(
+            f"NO_SETUP_SIGN: no active SignTool= directive under #ifdef {_SIGN_GUARD}")
+    if not _has_directive(directives, "signeduninstaller", value="yes", guard=_SIGN_GUARD):
+        raise InstallerGateError(
+            f"NO_UNINSTALLER_SIGN: no active SignedUninstaller=yes under #ifdef {_SIGN_GUARD}")
 
 
 def assert_iss_internal_naming(iss_text: str) -> None:
-    """An internal build must name Setup AND every slice INTERNAL at ISCC time
-    (a conditional OutputBaseFilename), never by a post-build EXE rename."""
-    if "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE" not in iss_text:
+    """An internal build must name Setup AND every slice INTERNAL at ISCC time via an
+    ACTIVE OutputBaseFilename under the ``Internal`` guard — never a post-build rename."""
+    if not _has_directive(active_directives(iss_text), "outputbasefilename",
+                          contains=INTERNAL_NAME, guard=_INTERNAL_GUARD):
         raise InstallerGateError(
-            "NO_INTERNAL_NAMING: conditional INTERNAL OutputBaseFilename missing")
-    if "#ifdef Internal" not in iss_text:
-        raise InstallerGateError("NO_INTERNAL_GUARD: #ifdef Internal guard missing")
+            f"NO_INTERNAL_NAMING: no active OutputBaseFilename containing {INTERNAL_NAME} "
+            f"under #ifdef {_INTERNAL_GUARD}")
+
+
+def verify_installed_uninstaller(root: Path, *, expected_thumbprint: str,
+                                 inspector: signing_gate.Inspector) -> int:
+    """Signed live acceptance (H6-4): every installed uninsNNN.exe must carry a VALID
+    signature by the EXACT expected signer, with a timestamp countersignature."""
+    uninstallers = sorted(p for p in root.iterdir()
+                          if p.is_file() and _UNINS_EXE_RE.match(p.name))
+    if not uninstallers:
+        raise InstallerGateError(f"UNINSTALLER_MISSING: no uninsNNN.exe in {root}")
+    for exe in uninstallers:
+        signing_gate.verify_signed(exe, expected_thumbprint=expected_thumbprint,
+                                   inspector=inspector)
+    return len(uninstallers)
 
 
 def verify_iss(iss_text: str) -> None:
@@ -221,6 +293,12 @@ def main(argv: list[str] | None = None) -> int:
         if args[0] == "verify-iss":
             verify_iss(Path(args[1]).read_text(encoding="utf-8"))
             print("ok")
+            return 0
+        if args[0] == "verify-uninstaller":
+            count = verify_installed_uninstaller(
+                Path(args[1]), expected_thumbprint=args[2],
+                inspector=signing_gate.powershell_inspector)
+            print(f"verified {count} uninstaller(s)")
             return 0
         if args[0] == "resolve-signtool":
             # The .bat consumes this so it cannot keep its own (narrower) path list.
