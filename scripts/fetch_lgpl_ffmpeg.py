@@ -12,9 +12,15 @@ bundle's avcodec-62/avformat-62/avutil-60 sonames), verifies the bundled
 LICENSE is LGPL (not GPL), and drops it alongside the DLLs so the installer
 ships the required license text.
 
+H1.2: the DLLs are installed into the ONE shipping source-of-truth —
+``dist_premium/premium_assets/models/ffmpeg`` — and the SoT integrity manifest is
+re-sealed afterwards. The backend build reads the same directory, so the bytes
+swapped into ``av.libs`` and the bytes staged into the installer can no longer be
+two different truths.
+
 Usage:
-    python scripts/fetch_lgpl_ffmpeg.py            # install into models/ffmpeg/
-    python scripts/fetch_lgpl_ffmpeg.py --stage    # also refresh dist_premium/premium_stage
+    python scripts/fetch_lgpl_ffmpeg.py                    # install into the SoT
+    python scripts/fetch_lgpl_ffmpeg.py --dist D:\\alt\\dist_premium
 """
 
 from __future__ import annotations
@@ -29,16 +35,20 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# G5: pin the release to an immutable, dated autobuild tag (NOT the mutable "latest"
-# tag) and verify the download against a pinned SHA256. The tag + SHA256 are owner-
-# pinned values; an empty ASSET_SHA256 fails closed (refuses to install unverified
-# bytes). Update both together when bumping the FFmpeg build.
-FFMPEG_TAG = "autobuild-2025-01-01-12-30"  # owner-pinned immutable tag (placeholder)
+sys.path.insert(0, str(ROOT))
+
+from scripts.release import asset_bootstrap  # noqa: E402
+
+# H1.1: an immutable, owner-pinned release asset. The tag is a dated BtbN autobuild
+# (never the mutable "latest" release) and the download is verified against the
+# SHA256 GitHub reports for that exact asset. An empty ASSET_SHA256 fails closed
+# (refuses to install unverified bytes). Bump tag + name + SHA256 together.
+FFMPEG_TAG = "autobuild-2026-07-24-13-32"
+ASSET_NAME = "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-lgpl-shared-8.1.zip"
 ASSET_URL = (
-    f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{FFMPEG_TAG}/"
-    "ffmpeg-n8.1-win64-lgpl-shared-8.1.zip"
+    f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{FFMPEG_TAG}/{ASSET_NAME}"
 )
-ASSET_SHA256 = ""  # owner-pinned SHA256 of the exact asset; empty => fail closed
+ASSET_SHA256 = "8271471492f5ebe8ccf15a39fbdac4266db4832a4765ba5603b49da36aef2f36"
 
 
 def verify_download_sha256(path: Path, expected: str) -> None:
@@ -89,6 +99,29 @@ def _install(build_dir: Path, target: Path) -> None:
     print(f"Installed {len(EXPECTED_DLLS)} LGPL DLLs + LICENSE.txt -> {target}")
 
 
+def install_target(dist_premium: Path) -> Path:
+    """The single shipping source-of-truth for the LGPL DLLs (never repo models/)."""
+    return asset_bootstrap.sot_ffmpeg_dir(dist_premium)
+
+
+def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
+    """Install the verified LGPL set into the SoT and re-seal its integrity manifest.
+
+    Fails closed when the premium_assets SoT does not exist yet: bootstrapping it is
+    a separate, non-destructive step (``scripts/release/asset_bootstrap.py``)."""
+    sot, _ = asset_bootstrap.sot_paths(dist_premium)
+    if not sot.is_dir():
+        raise SystemExit(
+            f"premium_assets SoT not found: {sot} — run "
+            "`python -m scripts.release.asset_bootstrap` first"
+        )
+    target = install_target(dist_premium)
+    _install(build_dir, target)
+    asset_bootstrap.refresh_asset_manifest(dist_premium)
+    print(f"SoT integrity manifest re-sealed for {sot}")
+    return target
+
+
 def stage_write_forbidden(*, staged: bool) -> bool:
     """External writes into the sealed premium_stage are forbidden (C2 lockdown).
 
@@ -100,10 +133,15 @@ def stage_write_forbidden(*, staged: bool) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Install LGPL FFmpeg into models/ffmpeg/")
+    parser = argparse.ArgumentParser(
+        description="Install LGPL FFmpeg into the premium_assets source-of-truth")
     parser.add_argument(
         "--stage", action="store_true",
         help="DISABLED (C2): the sealed premium_stage is composed only by the stage composer",
+    )
+    parser.add_argument(
+        "--dist", default=str(ROOT / "dist_premium"),
+        help="dist_premium root that holds the premium_assets source-of-truth",
     )
     args = parser.parse_args()
 
@@ -128,7 +166,7 @@ def main() -> None:
         _verify_lgpl(build_dir / "LICENSE.txt")
         print("Verified LICENSE is LGPL (not GPL).")
 
-        _install(build_dir, ROOT / "models" / "ffmpeg")
+        install_into_sot(build_dir, Path(args.dist))
 
     print("Done. Re-run with the F5 engine to confirm torchcodec loads the LGPL DLLs.")
 

@@ -11,14 +11,42 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.release import asset_bootstrap as ab  # noqa: E402
 from scripts.release import receipts as rc  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
 ENTRY = ROOT / "kernel" / "entry.py"
 DIST = ROOT / "dist_premium"
 NAME = "kali-backend"
+
+Runner = Callable[..., Any]
+
+
+class BuildError(RuntimeError):
+    """The backend build failed or did not produce its onedir (fail-closed)."""
+
+
+def assert_build_output(returncode: int, out_dir: Path) -> None:
+    """H1.5 — PyInstaller's exit code alone is not proof of a build.
+
+    A zero exit with no onedir on disk (a wiped/redirected distpath, a spec that
+    produced nothing) used to fall through silently and the wrapper exited 0."""
+    if returncode != 0:
+        raise BuildError(f"PYINSTALLER_FAILED: exit code {returncode}")
+    if not out_dir.is_dir():
+        raise BuildError(
+            f"MISSING_OUTPUT: PyInstaller reported success but {out_dir} does not exist")
+
+
+def lgpl_ffmpeg_dir() -> Path:
+    """The ONE shipping source-of-truth for the LGPL FFmpeg DLLs (H1.2).
+
+    Same directory the fetcher installs into and the composer stages, so the bytes
+    swapped into av.libs cannot diverge from the bytes the installer ships."""
+    return ab.sot_ffmpeg_dir(DIST)
 
 DATAS = [
     (str(ROOT / "agents"), "agents"),
@@ -199,7 +227,7 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
     hard-link libx264 — so the GPL DLLs are *replaced*, not just pruned:
 
     1. delete the mangled GPL FFmpeg DLLs + libx264/libx265;
-    2. copy the BtbN LGPL set (models/ffmpeg, fetched by
+    2. copy the BtbN LGPL set (the premium_assets SoT, fetched by
        ``scripts/fetch_lgpl_ffmpeg.py``, soname-matched n8.1) in under their
        PLAIN names — FFmpeg's inter-DLL imports resolve there via the
        ``os.add_dll_directory(av.libs)`` delvewheel patch;
@@ -219,7 +247,7 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
     av_libs = out_dir / "_internal" / "av.libs"
     if not av_libs.is_dir():
         return []
-    lgpl_dir = ROOT / "models" / "ffmpeg"
+    lgpl_dir = lgpl_ffmpeg_dir()
     missing = [s for s in _FFMPEG_SONAMES if not (lgpl_dir / f"{s}.dll").exists()]
     if missing:
         raise SystemExit(
@@ -254,7 +282,7 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
     return actions
 
 
-def main() -> None:
+def main(*, runner: Runner = subprocess.run) -> int:
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", NAME,
@@ -305,33 +333,38 @@ def main() -> None:
     head_before, _clean_before = rc.capture_head_state(ROOT)
 
     print(f"Building Premium {NAME} (F5 + CUDA torch)...")
-    result = subprocess.run(cmd, cwd=str(ROOT))
+    result = runner(cmd, cwd=str(ROOT))
 
-    if result.returncode == 0:
-        out_dir = DIST / NAME
-        if out_dir.exists():
-            # Swap PyAV's vendored GPL FFmpeg for the LGPL build (deleting
-            # alone breaks av._core — see swap_avlibs_to_lgpl docstring).
-            actions = swap_avlibs_to_lgpl(out_dir)
-            print(f"av.libs LGPL swap: {len(actions)} actions")
-            total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
-            print(f"\nSuccess! Built Premium backend at {out_dir}")
-            print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
-            # BUILD_RECEIPT — real build-time provenance (toolchain from actual cmds).
-            toolchain = rc.collect_toolchain([
-                ("python", [sys.executable, "--version"]),
-                ("pyinstaller", [sys.executable, "-m", "PyInstaller", "--version"]),
-            ])
-            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-            receipt_path = DIST / f"{NAME}.BUILD_RECEIPT.json"
-            rc.finalize_build_receipt(out_dir, receipt_path, repo=ROOT, version=version,
-                                      build_kind="pyinstaller-onedir", toolchain=toolchain,
-                                      head_before=head_before)
-            print(f"BUILD_RECEIPT written: {receipt_path}")
-    else:
-        print(f"\nBuild failed with exit code {result.returncode}")
-        sys.exit(1)
+    out_dir = DIST / NAME
+    try:
+        assert_build_output(result.returncode, out_dir)
+    except BuildError as e:
+        print(f"\nERROR: {e}", file=sys.stderr)
+        return 1
+    # Swap PyAV's vendored GPL FFmpeg for the LGPL build (deleting alone breaks
+    # av._core — see swap_avlibs_to_lgpl docstring).
+    actions = swap_avlibs_to_lgpl(out_dir)
+    print(f"av.libs LGPL swap: {len(actions)} actions")
+    total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
+    print(f"\nSuccess! Built Premium backend at {out_dir}")
+    print(f"Size: {total / 1024 / 1024 / 1024:.2f} GB uncompressed")
+    # BUILD_RECEIPT — real build-time provenance (toolchain from actual cmds).
+    try:
+        toolchain = rc.collect_toolchain([
+            ("python", [sys.executable, "--version"]),
+            ("pyinstaller", [sys.executable, "-m", "PyInstaller", "--version"]),
+        ])
+    except rc.ReceiptError as e:
+        print(f"ERROR: {e}", file=sys.stderr)  # fail-closed: no receipt without a toolchain
+        return 1
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    receipt_path = DIST / f"{NAME}.BUILD_RECEIPT.json"
+    rc.finalize_build_receipt(out_dir, receipt_path, repo=ROOT, version=version,
+                              build_kind="pyinstaller-onedir", toolchain=toolchain,
+                              head_before=head_before)
+    print(f"BUILD_RECEIPT written: {receipt_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

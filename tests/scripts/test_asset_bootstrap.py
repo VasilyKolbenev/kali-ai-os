@@ -157,6 +157,71 @@ def test_ffmpeg_verify_download_accepts_match(tmp_path: Path) -> None:
     fl.verify_download_sha256(f, hashlib.sha256(b"payload").hexdigest())  # matches → ok
 
 
+# ── H1.1/H1.2: реальный immutable pin + одна правда (premium_assets SoT) ────
+def test_ffmpeg_asset_sha256_is_pinned_hex() -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    assert len(fl.ASSET_SHA256) == 64
+    assert all(c in "0123456789abcdef" for c in fl.ASSET_SHA256.lower())
+
+
+def test_ffmpeg_url_pins_an_immutable_dated_tag() -> None:
+    import re
+
+    import scripts.fetch_lgpl_ffmpeg as fl
+    assert re.search(r"/download/autobuild-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}/", fl.ASSET_URL)
+    assert fl.FFMPEG_TAG in fl.ASSET_URL
+
+
+def test_ffmpeg_install_target_is_the_sot(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = tmp_path / "dist_premium"
+    assert fl.install_target(dist) == dist / "premium_assets" / "models" / "ffmpeg"
+
+
+def _fake_lgpl_build(tmp_path: Path) -> Path:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    build_dir = tmp_path / "ffmpeg-n8.1-win64-lgpl-shared-8.1"
+    (build_dir / "bin").mkdir(parents=True)
+    for name in fl.EXPECTED_DLLS:
+        (build_dir / "bin" / name).write_bytes(b"LGPL")
+    (build_dir / "LICENSE.txt").write_text("LESSER GENERAL PUBLIC LICENSE", encoding="utf-8")
+    return build_dir
+
+
+def test_ffmpeg_install_writes_sot_and_reseals_manifest(tmp_path: Path) -> None:
+    # запись в SoT обязана пере-запечатать integrity-манифест, иначе следующий
+    # compose упадёт SOT_DRIFT на легальном обновлении FFmpeg.
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    sot, manifest = ab.sot_paths(dist)
+    assert (sot / "ffmpeg" / "avcodec-62.dll").read_bytes() == b"LGPL"
+    ab.verify_sot_integrity(sot, manifest)  # SoT и манифест снова согласованы
+
+
+def test_ffmpeg_install_fail_closed_without_sot(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    with pytest.raises(SystemExit):
+        fl.install_into_sot(_fake_lgpl_build(tmp_path), tmp_path / "dist_premium")
+
+
+def test_refresh_asset_manifest_requires_sot(tmp_path: Path) -> None:
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.refresh_asset_manifest(tmp_path / "dist_premium")
+    assert "SOT_MISSING" in str(exc.value)
+
+
+def test_verify_sot_integrity_rejects_malformed_manifest(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, manifest = ab.sot_paths(dist)
+    manifest.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(ab.BootstrapError) as exc:
+        ab.verify_sot_integrity(sot, manifest)
+    assert "SOT_MANIFEST_MALFORMED" in str(exc.value)
+
+
 # ── external-writer lockdown: fetch_lgpl_ffmpeg --stage forbidden ───────────
 def test_fetch_lgpl_stage_is_forbidden(monkeypatch, tmp_path: Path) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl

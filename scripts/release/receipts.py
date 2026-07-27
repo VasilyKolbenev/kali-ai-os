@@ -172,15 +172,27 @@ def capture_head_state(repo: Path) -> tuple[str, bool]:
 
 def collect_toolchain(commands: list[tuple[str, list[str]]]) -> str:
     """Toolchain string from the ACTUALLY-executed version commands (no hardcoded
-    labels): e.g. ``python=Python 3.12.1; pyinstaller=6.3.0``."""
+    labels): e.g. ``python=Python 3.12.1; pyinstaller=6.3.0``.
+
+    H1.4 — fail-closed: every listed command is REQUIRED. A missing binary, a
+    nonzero exit or empty version output raises instead of writing a receipt that
+    claims ``tauri=unavailable``: provenance that cannot name the toolchain that
+    produced the artifact is not provenance."""
     parts: list[str] = []
     for name, cmd in commands:
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True)
-            lines = (proc.stdout or proc.stderr or "").strip().splitlines()
-            parts.append(f"{name}={lines[0].strip() if lines else 'unknown'}")
-        except OSError:
-            parts.append(f"{name}=unavailable")
+        except OSError as e:
+            raise ReceiptError(f"TOOLCHAIN_UNAVAILABLE: {name}: {e}") from e
+        if proc.returncode != 0:
+            raise ReceiptError(
+                f"TOOLCHAIN_FAILED: {name} exited {proc.returncode}: "
+                f"{(proc.stderr or proc.stdout or '').strip()[:200]}"
+            )
+        lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+        if not lines or not lines[0].strip():
+            raise ReceiptError(f"TOOLCHAIN_UNKNOWN: {name} produced no version output")
+        parts.append(f"{name}={lines[0].strip()}")
     return "; ".join(parts)
 
 

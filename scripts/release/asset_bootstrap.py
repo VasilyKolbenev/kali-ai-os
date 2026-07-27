@@ -87,6 +87,26 @@ def sot_paths(dist_premium: Path) -> tuple[Path, Path]:
     return assets / "models", assets / _MANIFEST_NAME
 
 
+def sot_ffmpeg_dir(dist_premium: Path) -> Path:
+    """The ONE shipping source-of-truth for the LGPL FFmpeg DLLs (H1.2).
+
+    Both the fetcher (which installs them) and the backend build (which swaps them
+    into av.libs) resolve the directory here, so ``models/ffmpeg`` in the repo can
+    no longer drift away from what the stage actually ships."""
+    sot, _ = sot_paths(dist_premium)
+    return sot / "ffmpeg"
+
+
+def _load_manifest(manifest_path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise BootstrapError(f"SOT_MANIFEST_MALFORMED: {manifest_path}: {e}") from e
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
+        raise BootstrapError(f"SOT_MANIFEST_MALFORMED: {manifest_path}: no 'entries' map")
+    return data
+
+
 def verify_sot_integrity(sot: Path, manifest_path: Path) -> None:
     """Fail-closed: the premium_assets SoT must be physical-only and byte-identical
     to its integrity manifest. The composer runs this BEFORE copying the assets, so
@@ -94,9 +114,25 @@ def verify_sot_integrity(sot: Path, manifest_path: Path) -> None:
     if not sot.is_dir() or not manifest_path.is_file():
         raise BootstrapError(f"SOT_MISSING: {sot} / {manifest_path}")
     _assert_physical(sot)
-    stored: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if _dir_hashes(sot) != stored.get("entries"):
+    stored = _load_manifest(manifest_path)
+    if _dir_hashes(sot) != stored["entries"]:
         raise BootstrapError("SOT_DRIFT: premium_assets drifted from its integrity manifest")
+
+
+def refresh_asset_manifest(dist_premium: Path) -> Path:
+    """Re-seal the SoT integrity manifest after an AUTHORIZED SoT mutation.
+
+    Only the asset fetcher may call this (it owns the FFmpeg DLLs inside the SoT);
+    every other writer is drift and must be caught by :func:`verify_sot_integrity`."""
+    sot, manifest_path = sot_paths(dist_premium)
+    if not sot.is_dir():
+        raise BootstrapError(f"SOT_MISSING: {sot}")
+    _assert_physical(sot)
+    manifest_path.write_text(
+        json.dumps({"entries": _dir_hashes(sot)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 def asset_manifest_digest(manifest_path: Path) -> str:
@@ -123,8 +159,8 @@ def bootstrap_premium_assets(dist_premium: Path, *, copier: Copier | None = None
     legacy = dist_premium / "models"
 
     if sot.is_dir() and manifest.is_file():
-        stored: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
-        if _dir_hashes(sot) != stored.get("entries"):
+        stored = _load_manifest(manifest)
+        if _dir_hashes(sot) != stored["entries"]:
             raise BootstrapError("premium_assets SoT drifted from its integrity manifest")
         _assert_physical(sot)  # re-verify the SoT is a physical-only copy (no reparse)
         # crash-safe: a verified SoT with the legacy junction still present means a

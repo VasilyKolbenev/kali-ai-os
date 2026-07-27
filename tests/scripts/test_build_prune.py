@@ -23,13 +23,16 @@ _FFMPEG_SONAMES = _MOD._FFMPEG_SONAMES
 
 @pytest.fixture
 def lgpl_dir(tmp_path: Path, monkeypatch) -> Path:
-    """A fake models/ffmpeg with the full LGPL soname set + license."""
-    lgpl = tmp_path / "models" / "ffmpeg"
+    """A fake premium_assets SoT ffmpeg dir with the full LGPL soname set + license.
+
+    H1.2: the swap reads the shipping source-of-truth, not the repo's models/."""
+    dist = tmp_path / "dist_premium"
+    lgpl = dist / "premium_assets" / "models" / "ffmpeg"
     lgpl.mkdir(parents=True)
     for soname in _FFMPEG_SONAMES:
         (lgpl / f"{soname}.dll").write_bytes(b"LGPL")
     (lgpl / "LICENSE.txt").write_text("LESSER GENERAL PUBLIC LICENSE")
-    monkeypatch.setattr(_MOD, "ROOT", tmp_path)
+    monkeypatch.setattr(_MOD, "DIST", dist)
     return lgpl
 
 
