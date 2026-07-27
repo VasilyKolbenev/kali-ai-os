@@ -175,7 +175,8 @@ def test_source_junction_rejected_even_when_contained(tmp_path: Path) -> None:
 # ── F2: strict STAGE_MANIFEST schema ─────────────────────────────────────────
 def _good_manifest() -> dict:
     return {"version": "1.0.0-rc3", "git_sha": "a" * 40, "mode": "internal",
-            "receipts": [], "entries": {"a.txt": "b" * 64}}
+            "receipts": [], "asset_manifest_sha256": "c" * 64,
+            "entries": {"a.txt": "b" * 64}}
 
 
 def test_validate_manifest_schema_ok() -> None:
@@ -198,6 +199,23 @@ def test_validate_manifest_schema_rejects_malformed(mutate) -> None:
         sp.validate_manifest_schema(m)
 
 
+# ── H2.2: asset_manifest_sha256 — обязательное 64-hex поле схемы ─────────────
+def test_validate_manifest_schema_requires_asset_digest() -> None:
+    m = _good_manifest()
+    del m["asset_manifest_sha256"]
+    with pytest.raises(sp.ManifestError) as exc:
+        sp.validate_manifest_schema(m)
+    assert "asset_manifest_sha256" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", "z" * 64, "c" * 63, 123, None, ["c" * 64]])
+def test_validate_manifest_schema_rejects_bad_asset_digest(bad) -> None:
+    m = _good_manifest()
+    m["asset_manifest_sha256"] = bad
+    with pytest.raises(sp.ManifestError):
+        sp.validate_manifest_schema(m)
+
+
 # ── STAGE_MANIFEST schema ────────────────────────────────────────────────────
 def _seed_stage(stage: Path) -> None:
     (stage / "kali-backend").mkdir(parents=True)
@@ -210,7 +228,8 @@ def test_build_manifest_self_excludes_and_hashes_entries(tmp_path: Path) -> None
     stage.mkdir()
     _seed_stage(stage)
     m = sp.build_manifest(stage, version="1.0.0-rc3", git_sha="abc123",
-                          mode="internal", receipts=[{"artifact": "kali-backend"}])
+                          mode="internal", receipts=[{"artifact": "kali-backend"}],
+                          asset_manifest_sha256="c" * 64)
     # поля
     assert m["version"] == "1.0.0-rc3"
     assert m["git_sha"] == "abc123"
@@ -224,12 +243,24 @@ def test_build_manifest_self_excludes_and_hashes_entries(tmp_path: Path) -> None
     assert m["entries"]["kali-desktop.exe"] == hashlib.sha256(b"DESKTOP").hexdigest()
 
 
+def test_build_manifest_pins_the_asset_manifest_digest(tmp_path: Path) -> None:
+    # H2.2: the SoT provenance pin is part of the sealed manifest, not an optional extra
+    stage = tmp_path / "premium_stage"
+    stage.mkdir()
+    _seed_stage(stage)
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[],
+                          asset_manifest_sha256="d" * 64)
+    assert m["asset_manifest_sha256"] == "d" * 64
+    sp.validate_manifest_schema(m)
+
+
 def test_build_manifest_excludes_written_manifest_file(tmp_path: Path) -> None:
     stage = tmp_path / "premium_stage"
     stage.mkdir()
     _seed_stage(stage)
     (stage / sp.MANIFEST_NAME).write_text("{}", encoding="utf-8")  # already present
-    m = sp.build_manifest(stage, version="v", git_sha="s", mode="signed", receipts=[])
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="signed", receipts=[],
+                          asset_manifest_sha256="c" * 64)
     assert sp.MANIFEST_NAME not in m["entries"]
 
 
@@ -237,7 +268,8 @@ def test_verify_manifest_ok_for_exact_stage(tmp_path: Path) -> None:
     stage = tmp_path / "premium_stage"
     stage.mkdir()
     _seed_stage(stage)
-    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[])
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[],
+                          asset_manifest_sha256="c" * 64)
     sp.verify_manifest(stage, m)  # не поднимает
 
 
@@ -247,7 +279,8 @@ def test_verify_manifest_requires_reparse_free(tmp_path: Path) -> None:
     stage = tmp_path / "premium_stage"
     stage.mkdir()
     _seed_stage(stage)
-    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[])
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[],
+                          asset_manifest_sha256="c" * 64)
     _make_junction(stage / "j", tmp_path / "target")
     with pytest.raises(sp.ReparseError):
         sp.verify_manifest(stage, m)
@@ -258,7 +291,8 @@ def test_verify_manifest_detects_drift(tmp_path: Path, drift: str) -> None:
     stage = tmp_path / "premium_stage"
     stage.mkdir()
     _seed_stage(stage)
-    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[])
+    m = sp.build_manifest(stage, version="v", git_sha="s", mode="internal", receipts=[],
+                          asset_manifest_sha256="c" * 64)
     if drift == "extraneous":
         (stage / "stray.txt").write_bytes(b"stray")     # файл вне манифеста
     elif drift == "mismatch":

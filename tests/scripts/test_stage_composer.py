@@ -210,7 +210,13 @@ def _mk_inputs(tmp_path: Path) -> dict:
     (sot / "ggml-base.bin").write_bytes(b"DEADWEIGHT")  # excluded
     webview = inp / "install-webview2.ps1"
     webview.write_bytes(b"PSSCRIPT")
-    return {"backend": backend, "desktop_exe": desktop, "assets": sot, "webview2": webview}
+    # H2.1/H2.6: every successful compose ships a REAL SoT integrity manifest — the
+    # composer refuses to stage assets it cannot pin.
+    assets_manifest = inp / "premium_assets" / "PREMIUM_ASSETS.sha256.json"
+    assets_manifest.write_text(
+        json.dumps({"entries": stage_policy.file_content_hashes(sot)}), encoding="utf-8")
+    return {"backend": backend, "desktop_exe": desktop, "assets": sot,
+            "assets_manifest": assets_manifest, "webview2": webview}
 
 
 def _mk_receipts(tmp_path: Path, inputs: dict, version: str) -> dict:
@@ -327,6 +333,81 @@ def test_compose_rejects_junction_in_source_before_copy(tmp_path: Path) -> None:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
                          git_sha="a" * 40, mode="internal", exclusions=[],
                          materializer=lambda p: None, signer=lambda p, m: None, token="1")
+
+
+# ── H2.1: assets_manifest — обязательный вход compose_stage ─────────────────
+def _assert_dist_untouched(dist: Path) -> None:
+    """Отказ обязан произойти ДО любых copy/seal/swap — в dist_premium ничего нет."""
+    assert not (dist / "premium_stage").exists()
+    assert not list(dist.glob("premium_stage.next-*"))
+    assert not (dist / "premium_stage.swap-journal.json").exists()
+
+
+def test_compose_requires_assets_manifest(tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    del inputs["assets_manifest"]  # раньше это молча означало «не проверять SoT»
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(ab.BootstrapError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "SOT_MANIFEST_REQUIRED" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
+def test_compose_rejects_missing_assets_manifest_file(tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    inputs["assets_manifest"].unlink()
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(ab.BootstrapError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "SOT_MISSING" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
+def test_compose_rejects_malformed_assets_manifest(tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    inputs["assets_manifest"].write_text("{ not json", encoding="utf-8")
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(ab.BootstrapError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "SOT_MANIFEST_MALFORMED" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
+def test_compose_rejects_asset_drift_before_copy(tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as ab
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    (inputs["assets"] / "model.bin").write_bytes(b"DRIFTED")  # после запечатывания SoT
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(ab.BootstrapError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "SOT_DRIFT" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
+def test_compose_pins_asset_manifest_digest_in_stage_manifest(tmp_path: Path) -> None:
+    import hashlib
+    dist = _dist(tmp_path)
+    stage = _compose(tmp_path, dist)
+    sot_manifest = tmp_path / "inputs" / "premium_assets" / "PREMIUM_ASSETS.sha256.json"
+    manifest = json.loads((stage / stage_policy.MANIFEST_NAME).read_text(encoding="utf-8"))
+    expected = hashlib.sha256(sot_manifest.read_bytes()).hexdigest()
+    assert manifest["asset_manifest_sha256"] == expected
+    stage_policy.validate_manifest_schema(manifest)
 
 
 def test_compose_rejects_reparse_after_materialize(tmp_path: Path) -> None:

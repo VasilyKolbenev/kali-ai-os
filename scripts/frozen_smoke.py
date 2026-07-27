@@ -55,7 +55,7 @@ from scripts.release import stage_policy  # noqa: E402
 
 _CACHE_VARS = ("HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE",
                "TORCH_HOME", "XDG_CACHE_HOME")
-_UNINS_RE = re.compile(r"^unins\d*\.(exe|dat)$", re.IGNORECASE)  # Inno-generated uninstaller
+_UNINS_RE = re.compile(r"^unins\d{3}\.(exe|dat)$")  # exactly what Inno generates
 _OFFLINE_FLAGS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
 _PROXY_SINK = "http://127.0.0.1:1"  # closed port → external HTTP fails fast
 _NO_PROXY = "127.0.0.1,localhost,::1"
@@ -125,8 +125,9 @@ def verify_root_matches_manifest(root: Path, manifest_path: Path) -> None:
 
 
 def _is_inno_root_extra(rel: str) -> bool:
-    """An Inno-generated extra is allowed ONLY at the root (no nesting) and only by
-    an exact uninsNNN.exe/dat name — nested models/unins999.exe is never allowed."""
+    """An Inno-generated extra is allowed ONLY at the root (no nesting) and only under
+    the exact ``uninsNNN.exe``/``uninsNNN.dat`` name Inno actually emits — nested
+    models/unins999.exe, unins.exe, unins1.exe and unins0000.dat are all refused."""
     return "/" not in rel and bool(_UNINS_RE.match(rel))
 
 
@@ -138,7 +139,10 @@ def verify_installed_root(root: Path, manifest_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     stage_policy.validate_manifest_schema(manifest)
     installed = root / stage_policy.MANIFEST_NAME
-    if installed.is_file() and json.loads(installed.read_text(encoding="utf-8")) != manifest:
+    if not installed.is_file():  # H2.4: an install without its own pin proves nothing
+        raise stage_policy.ManifestError(
+            f"installed root ships no {stage_policy.MANIFEST_NAME}")
+    if json.loads(installed.read_text(encoding="utf-8")) != manifest:
         raise stage_policy.ManifestError(
             "installed STAGE_MANIFEST differs from the passed manifest")
     expected: dict[str, str] = manifest["entries"]

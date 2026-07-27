@@ -262,12 +262,11 @@ def _apply_exclusions(nxt: Path, exclusions: list[str]) -> None:
 
 
 def _seal_manifest(nxt: Path, *, version: str, git_sha: str, mode: str,
-                   receipts: dict[str, Path], asset_digest: str | None = None) -> dict[str, Any]:
+                   receipts: dict[str, Path], asset_digest: str) -> dict[str, Any]:
     receipt_meta = [{"name": k, **rc.load_receipt(p)} for k, p in receipts.items()]
     manifest = stage_policy.build_manifest(nxt, version=version, git_sha=git_sha,
-                                           mode=mode, receipts=receipt_meta)
-    if asset_digest is not None:
-        manifest["asset_manifest_sha256"] = asset_digest  # G5: SoT provenance pin
+                                           mode=mode, receipts=receipt_meta,
+                                           asset_manifest_sha256=asset_digest)
     (nxt / stage_policy.MANIFEST_NAME).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -281,26 +280,33 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
     """Compose a clean sealed stage and swap it into place rollback-safely.
 
     G4: the OS swap lock is held across the WHOLE recover -> compose -> seal -> swap
-    flow, so a second concurrent compose cannot interleave on the same next-stage."""
+    flow, so a second concurrent compose cannot interleave on the same next-stage.
+
+    H2.1: ``inputs['assets_manifest']`` is MANDATORY — a stage whose assets cannot be
+    pinned to a verified premium_assets SoT is refused before ANY filesystem work."""
+    assets_manifest = inputs.get("assets_manifest")
+    if assets_manifest is None:
+        raise asset_bootstrap.BootstrapError(
+            "SOT_MANIFEST_REQUIRED: compose needs inputs['assets_manifest'] "
+            "(the premium_assets integrity manifest)")
     with swap_lock(dist_premium):
         recover_swap(dist_premium, _held=True)  # finish any interrupted prior swap first
+
+        # F2: source-containment BEFORE anything is created — junction/escaping/
+        # dangling reject, only contained HF file-symlinks tolerated.
+        for key in ("assets", "backend"):
+            stage_policy.assert_source_symlinks_contained(inputs[key])
+        # G5/H2.1: the premium_assets SoT must be physical-only and match its integrity
+        # manifest BEFORE any copy — missing, malformed or drifted stops the build here,
+        # with no next-stage left on disk.
+        asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
+        asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
+
         nxt = dist_premium / f"premium_stage.next-{token}"
         stage_policy.assert_safe_dest(dist_premium, nxt)
         if nxt.exists():
             shutil.rmtree(nxt)
         nxt.mkdir(parents=True)
-
-        # F2: source-containment BEFORE copy — junction/escaping/dangling reject,
-        # only contained HF file-symlinks tolerated.
-        for key in ("assets", "backend"):
-            stage_policy.assert_source_symlinks_contained(inputs[key])
-        # G5: the premium_assets SoT must be physical-only and match its integrity
-        # manifest BEFORE copy — any drift after bootstrap stops the build.
-        asset_digest = None
-        assets_manifest = inputs.get("assets_manifest")
-        if assets_manifest is not None:
-            asset_bootstrap.verify_sot_integrity(inputs["assets"], assets_manifest)
-            asset_digest = asset_bootstrap.asset_manifest_digest(assets_manifest)
         _copy_inputs(nxt, inputs)
         _verify_receipts(nxt, receipts, version, git_sha)
         _apply_exclusions(nxt, exclusions)

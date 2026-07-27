@@ -162,13 +162,18 @@ def _entry_hashes(stage: Path) -> dict[str, str]:
 
 
 def build_manifest(stage: Path, *, version: str, git_sha: str, mode: str,
-                   receipts: list[Any]) -> dict[str, Any]:
-    """Build the STAGE_MANIFEST dict (the manifest file itself is self-excluded)."""
+                   receipts: list[Any], asset_manifest_sha256: str) -> dict[str, Any]:
+    """Build the STAGE_MANIFEST dict (the manifest file itself is self-excluded).
+
+    ``asset_manifest_sha256`` is REQUIRED (H2.2): it pins which premium_assets SoT
+    the staged ``models/`` came from, so a stage cannot be sealed without naming
+    its asset provenance."""
     return {
         "version": version,
         "git_sha": git_sha,
         "mode": mode,
         "receipts": receipts,
+        "asset_manifest_sha256": asset_manifest_sha256,
         "entries": _entry_hashes(stage),
     }
 
@@ -183,6 +188,9 @@ def validate_manifest_schema(manifest: dict[str, Any]) -> None:
         raise ManifestError(f"manifest schema: mode must be one of {_MANIFEST_MODES}")
     if not isinstance(manifest.get("receipts"), list):
         raise ManifestError("manifest schema: receipts must be a list")
+    asset_digest = manifest.get("asset_manifest_sha256")
+    if not (isinstance(asset_digest, str) and _SHA64_RE.match(asset_digest)):
+        raise ManifestError("manifest schema: asset_manifest_sha256 must be 64 hex chars")
     entries = manifest.get("entries")
     if not isinstance(entries, dict):
         raise ManifestError("manifest schema: entries must be a dict")

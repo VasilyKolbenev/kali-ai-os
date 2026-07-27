@@ -23,7 +23,14 @@ from pathlib import Path
 
 from scripts.release import signing_gate
 
-_SOURCE_RE = re.compile(r'^\s*Source:\s*"([^"]+)"', re.MULTILINE)
+_SECTION_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
+_SOURCE_KEY_RE = re.compile(r"(?i)(?:^|;)\s*Source\s*:\s*")
+_QUOTED_RE = re.compile(r'^"([^"]*)"')
+_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+# The .iss lives in scripts/, so its relative Sources resolve against that dir. The
+# only legal file source is strictly BELOW ..\dist_premium\premium_stage\.
+_ISS_BASE = ("<repo>", "scripts")
+_STAGE_PREFIX = ("<repo>", "dist_premium", "premium_stage")
 
 
 class InstallerGateError(Exception):
@@ -55,11 +62,96 @@ def resolve_build_mode(mode_arg: object, *, distributable: bool) -> str:
     return mode
 
 
+def _files_section(iss_text: str) -> list[str]:
+    """The raw lines of the ``[Files]`` section (fail-closed if it is absent)."""
+    lines: list[str] = []
+    inside = False
+    seen = False
+    for raw in iss_text.splitlines():
+        section = _SECTION_RE.match(raw)
+        if section:
+            inside = section.group("name").strip().lower() == "files"
+            seen = seen or inside
+            continue
+        if inside:
+            lines.append(raw)
+    if not seen:
+        raise InstallerGateError("ISS_NO_FILES_SECTION: the .iss declares no [Files]")
+    return lines
+
+
+def _logical_lines(lines: list[str]) -> list[str]:
+    """Join Inno's backslash line continuations into single logical entries."""
+    joined: list[str] = []
+    buffer = ""
+    for line in lines:
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1]
+            continue
+        joined.append(buffer + stripped)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
+
+
+def _iss_sources(iss_text: str) -> list[str]:
+    """Every ``Source:`` value declared in [Files], as written.
+
+    A ``Source:`` whose value is not a double-quoted literal is refused rather than
+    skipped: an unparsed entry used to slip past the gate entirely."""
+    sources: list[str] = []
+    for line in _logical_lines(_files_section(iss_text)):
+        if line.lstrip().startswith(";"):
+            continue  # a comment line
+        for match in _SOURCE_KEY_RE.finditer(line):
+            quoted = _QUOTED_RE.match(line[match.end():])
+            if not quoted:
+                raise InstallerGateError(f"ISS_SOURCE_UNQUOTED: {line.strip()!r}")
+            sources.append(quoted.group(1))
+    return sources
+
+
+def _normalize_source(raw: str) -> tuple[str, ...]:
+    """Normalize a relative Source into path parts rooted at the repo (``..`` resolved)."""
+    if not raw.strip():
+        raise InstallerGateError("ISS_SOURCE_EMPTY: an empty Source is not a file source")
+    path = raw.replace("/", "\\")
+    if _DRIVE_RE.match(path) or path.startswith("\\"):
+        raise InstallerGateError(f"ISS_SOURCE_ABSOLUTE: {raw}")
+    if "{" in path:  # an Inno constant ({app}, {tmp}, ...) is not a stage-relative file
+        raise InstallerGateError(f"ISS_SOURCE_CONSTANT: {raw}")
+    parts = list(_ISS_BASE)
+    for segment in path.split("\\"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if len(parts) <= 1:  # would escape above the repo root
+                raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {raw}")
+            parts.pop()
+            continue
+        parts.append(segment)
+    return tuple(parts)
+
+
 def assert_iss_stage_only(iss_text: str) -> None:
-    """Every [Files] Source must come from premium_stage (no external inputs)."""
-    outside = [s for s in _SOURCE_RE.findall(iss_text) if "premium_stage" not in s]
-    if outside:
-        raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {outside}")
+    """[Files] must declare at least one Source and each must resolve strictly under
+    ``..\\dist_premium\\premium_stage\\``.
+
+    This is a real path check, not a substring one: ``premium_stage_evil`` and
+    ``premium_stage\\..\\..\\scripts`` are both outside the sealed stage."""
+    sources = _iss_sources(iss_text)
+    if not sources:
+        raise InstallerGateError("ISS_NO_SOURCE: [Files] declares no Source")
+    depth = len(_STAGE_PREFIX)
+    lowered_prefix = tuple(p.lower() for p in _STAGE_PREFIX)
+    for raw in sources:
+        parts = _normalize_source(raw)
+        contained = (len(parts) > depth
+                     and tuple(p.lower() for p in parts[:depth]) == lowered_prefix)
+        if not contained:
+            raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {raw}")
 
 
 def assert_iss_signs_setup_and_uninstaller(iss_text: str) -> None:

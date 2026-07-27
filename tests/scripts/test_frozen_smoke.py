@@ -84,7 +84,8 @@ def _sealed_stage_root(tmp_path: Path) -> tuple[Path, Path]:
     (root / "models" / "model.bin").write_bytes(b"W")
     (root / "install-webview2.ps1").write_bytes(b"PS")
     manifest = stage_policy.build_manifest(root, version="1.0.0-rc3", git_sha="a" * 40,
-                                           mode="internal", receipts=[])
+                                           mode="internal", receipts=[],
+                                           asset_manifest_sha256="c" * 64)
     mpath = root / stage_policy.MANIFEST_NAME
     mpath.write_text(json.dumps(manifest), encoding="utf-8")
     return root, mpath
@@ -134,6 +135,27 @@ def test_verify_installed_root_rejects_divergent_installed_manifest(tmp_path: Pa
     other.write_text(json.dumps(m), encoding="utf-8")
     with pytest.raises(stage_policy.ManifestError):
         fs.verify_installed_root(root, other)
+
+
+def test_verify_installed_root_requires_shipped_manifest(tmp_path: Path) -> None:
+    # H2.4: инсталляция без собственного STAGE_MANIFEST.json больше не «проходит»
+    root, mpath = _sealed_stage_root(tmp_path)
+    passed = tmp_path / "passed-manifest.json"
+    passed.write_bytes(mpath.read_bytes())
+    mpath.unlink()  # установка без собственного STAGE_MANIFEST.json
+    with pytest.raises(stage_policy.ManifestError) as exc:
+        fs.verify_installed_root(root, passed)
+    assert "STAGE_MANIFEST" in str(exc.value)
+
+
+@pytest.mark.parametrize("name", ["unins.exe", "unins1.exe", "unins0000.dat",
+                                  "unins000.txt", "Unins000.exe.bak"])
+def test_verify_installed_root_rejects_non_inno_names(tmp_path: Path, name: str) -> None:
+    # H2.5: allowlist — РОВНО unins<3 цифры>.exe/.dat в корне, ничего похожего
+    root, mpath = _sealed_stage_root(tmp_path)
+    (root / name).write_bytes(b"X")
+    with pytest.raises(stage_policy.ManifestError):
+        fs.verify_installed_root(root, mpath)
 
 
 def test_verify_installed_root_requires_reparse_free(tmp_path: Path) -> None:
