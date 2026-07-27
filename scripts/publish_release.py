@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import scripts.release.version as relver
-from scripts.release import signing_gate
+from scripts.release import installer_gate, signing_gate
 
 log = logging.getLogger("publish_release")
 
@@ -108,19 +108,22 @@ def collect_assets(dist: Path, version: str) -> list[AssetFile]:
     Raises:
         SystemExit: Если exe или хотя бы один слайс отсутствует / слайсы не непрерывны.
     """
-    exe = dist / f"KALI-Premium-Setup-{version}.exe"
-    if not exe.exists():
-        _fail(f"Нет {exe}")
-    # Лексикографическая сортировка верна при <10 слайсах (наш случай: 5.8GB/2GB=3);
-    # при ≥10 понадобилась бы числовая сортировка суффикса.
-    bins = sorted(dist.glob(f"KALI-Premium-Setup-{version}-*.bin"))
-    if not bins:
+    # H6-5: the EXACT list comes from the artifact manifest the installer build sealed,
+    # never from a glob — a stale -3.bin left by a previous, larger build would otherwise
+    # be picked up and published.
+    setup_name = f"KALI-Premium-Setup-{version}.exe"
+    try:
+        manifest = installer_gate.load_installer_manifest(dist, strict_extra=False)
+    except installer_gate.InstallerGateError as e:
+        _fail(f"installer-артефакты не запечатаны или разошлись: {e}")
+    if manifest.get("setup") != setup_name:
+        _fail(f"Манифест артефактов описывает {manifest.get('setup')!r}, а не {setup_name}")
+    names = [str(entry["name"]) for entry in manifest["files"]]
+    if names[0] != setup_name:
+        _fail(f"Первым ассетом обязан быть {setup_name}, получено {names[0]!r}")
+    if len(names) < 2:
         _fail("Не найдено ни одного .bin-слайса (DiskSpanning)")
-    expected = {f"KALI-Premium-Setup-{version}-{i}.bin" for i in range(1, len(bins) + 1)}
-    actual = {b.name for b in bins}
-    if expected != actual:
-        _fail(f"Слайсы не непрерывны: {sorted(actual)}")
-    return [AssetFile(exe.name, exe)] + [AssetFile(b.name, b) for b in bins]
+    return [AssetFile(name, dist / name) for name in names]
 
 
 def _sha256(path: Path) -> str:
@@ -352,7 +355,8 @@ def _check_dirty(repo: Path, dist: Path, allowed_asset_names: set[str]) -> None:
         _refuse("DIRTY_TREE", f"worktree не чист ({first} …) — нужен clean stage")
     # gitignored installer-артефакты невидимы git → прямой stat на посторонние файлы.
     for item in dist.iterdir():
-        if item.is_file() and item.name != "release-manifest.json" \
+        if item.is_file() and item.name not in ("release-manifest.json",
+                                                installer_gate.INSTALLER_MANIFEST) \
                 and item.name not in allowed_asset_names:
             _refuse("DIRTY_TREE", f"посторонний файл в installer: {item.name}")
 

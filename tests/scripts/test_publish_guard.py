@@ -420,8 +420,10 @@ def test_publish_refuses_on_version_skew(tmp_path: Path) -> None:
     assert "VERSION_SKEW" in str(exc.value)
 
 
-# ── 15c. FROZEN_HASH: asset — симлинк, резолвящийся ВНЕ dist (escape) ─────────
-def test_publish_refuses_on_symlink_escape(tmp_path: Path) -> None:
+# ── 15c. asset — симлинк, резолвящийся ВНЕ dist (escape) ─────────────────────
+def test_publish_refuses_on_symlink_escape(tmp_path: Path, caplog) -> None:
+    # H6-5: теперь это ловится РАНЬШЕ и строже — подменённые байты расходятся с
+    # запечатанным artifact-манифестом (ARTIFACT_HASH_MISMATCH) ещё до FROZEN_HASH.
     b = _green_baseline(tmp_path)
     exe = b.dist / f"KALI-Premium-Setup-{b.version}.exe"
     outside = tmp_path.parent / "outside-exe.bin"
@@ -431,9 +433,10 @@ def test_publish_refuses_on_symlink_escape(tmp_path: Path) -> None:
         os.symlink(outside, exe)
     except (OSError, NotImplementedError):
         pytest.skip("no symlink privilege")
-    with pytest.raises(SystemExit) as exc:
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
         _guard(b)
-    assert "FROZEN_HASH" in str(exc.value)
+    reasons = caplog.text
+    assert "ARTIFACT_HASH_MISMATCH" in reasons or "FROZEN_HASH" in reasons
 
 
 # ── 16. всё зелёное → guard пропускает, publish отрабатывает ─────────────────

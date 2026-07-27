@@ -16,13 +16,42 @@ from scripts.publish_release import (
 )
 
 
-def _mk_dist(tmp: Path, ver: str) -> Path:
+def _mk_dist(tmp: Path, ver: str, *, seal: bool = True) -> Path:
+    from scripts.release import installer_gate
     d = tmp / "installer"
     d.mkdir()
     (d / f"KALI-Premium-Setup-{ver}.exe").write_bytes(b"exe-bytes")
     for i in (1, 2, 3):
         (d / f"KALI-Premium-Setup-{ver}-{i}.bin").write_bytes(b"bin" * i)
+    if seal:  # H6-5: a real build always seals the exact artifact list
+        installer_gate.write_installer_manifest(d, f"KALI-Premium-Setup-{ver}.exe")
     return d
+
+
+def test_collect_assets_refuses_an_unsealed_installer_dir(tmp_path: Path, caplog) -> None:
+    dist = _mk_dist(tmp_path, "1.0.1", seal=False)
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+        collect_assets(dist, "1.0.1")
+    assert "ARTIFACT_MANIFEST_MISSING" in caplog.text  # именно эта причина, а не «версия»
+
+
+def test_collect_assets_never_picks_up_a_stale_slice(tmp_path: Path) -> None:
+    # H6-5: старый -4.bin от более крупной сборки НЕ попадает в список (публикацию
+    # такого каталога отдельно валит DIRTY_TREE-гейт publish).
+    dist = _mk_dist(tmp_path, "1.0.1")
+    (dist / "KALI-Premium-Setup-1.0.1-4.bin").write_bytes(b"STALE-FROM-A-BIGGER-BUILD")
+    assert "KALI-Premium-Setup-1.0.1-4.bin" not in [a.name for a in collect_assets(dist, "1.0.1")]
+
+
+def test_collect_assets_uses_the_sealed_exact_list(tmp_path: Path) -> None:
+    dist = _mk_dist(tmp_path, "1.0.1")
+    assets = collect_assets(dist, "1.0.1")
+    assert [a.name for a in assets] == [
+        "KALI-Premium-Setup-1.0.1.exe",
+        "KALI-Premium-Setup-1.0.1-1.bin",
+        "KALI-Premium-Setup-1.0.1-2.bin",
+        "KALI-Premium-Setup-1.0.1-3.bin",
+    ]
 
 
 def _mk_repo(tmp: Path, tauri_ver: str, cargo_ver: str, iss_ver: str) -> Path:

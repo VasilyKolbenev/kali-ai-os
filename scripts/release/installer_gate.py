@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -37,6 +38,8 @@ _UNINS_EXE_RE = re.compile(r"^unins\d{3}\.exe$")
 _SIGN_GUARD = "SignSetup"
 _INTERNAL_GUARD = "Internal"
 INTERNAL_NAME = "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
+INSTALLER_MANIFEST = "INSTALLER_ARTIFACTS.json"
+_SLICE_RE = re.compile(r"^(?P<base>.+)-(?P<n>\d+)\.bin$")
 
 
 class InstallerGateError(Exception):
@@ -265,6 +268,113 @@ def verify_iss(iss_text: str) -> None:
     assert_iss_internal_naming(iss_text)
 
 
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def collect_installer_artifacts(out_dir: Path, setup_name: str) -> dict:
+    """The EXACT artifact set: the Setup plus its CONTIGUOUS -1..-N slices (H6-5).
+
+    ISCC used to write into a directory that could still hold slices from a previous,
+    larger build; publish then globbed and shipped a stale ``-3.bin``. Here the set is
+    derived once, and anything else in the directory is an error rather than a guess."""
+    setup = out_dir / setup_name
+    if not setup.is_file():
+        raise InstallerGateError(f"SETUP_MISSING: {setup}")
+    base = setup_name[:-4] if setup_name.lower().endswith(".exe") else setup_name
+    numbered: dict[int, Path] = {}
+    for item in out_dir.iterdir():
+        match = _SLICE_RE.match(item.name)
+        if match and match.group("base") == base:
+            numbered[int(match.group("n"))] = item
+    ordered: list[Path] = []
+    index = 1
+    while index in numbered:
+        ordered.append(numbered[index])
+        index += 1
+    orphans = sorted(p.name for n, p in numbered.items() if n >= index)
+    if orphans:
+        raise InstallerGateError(f"NONCONTIGUOUS_SLICES: {orphans}")
+    files = [setup, *ordered]
+    known = {p.name for p in files} | {INSTALLER_MANIFEST, "release-manifest.json",
+                                       signing_gate.INTERNAL_MARKER}
+    stray = sorted(p.name for p in out_dir.iterdir() if p.is_file() and p.name not in known)
+    if stray:
+        raise InstallerGateError(f"STRAY_OUTPUT: {stray}")
+    return {"setup": setup_name,
+            "files": [{"name": f.name, "sha256": _sha256_file(f), "size": f.stat().st_size}
+                      for f in files]}
+
+
+def write_installer_manifest(out_dir: Path, setup_name: str) -> Path:
+    """Seal the exact artifact set produced by this ISCC run."""
+    manifest = collect_installer_artifacts(out_dir, setup_name)
+    path = out_dir / INSTALLER_MANIFEST
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict:
+    """Read the sealed artifact list and prove every entry still matches on disk.
+
+    ``strict_extra`` also refuses anything else in the directory; publish turns it off
+    because its own DIRTY_TREE gate owns that rule and reports it with its own reason."""
+    path = out_dir / INSTALLER_MANIFEST
+    if not path.is_file():
+        raise InstallerGateError(f"ARTIFACT_MANIFEST_MISSING: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        files = data["files"]
+        names = [str(entry["name"]) for entry in files]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+        raise InstallerGateError(f"ARTIFACT_MANIFEST_MALFORMED: {path}: {e}") from e
+    for entry in files:
+        item = out_dir / str(entry["name"])
+        if not item.is_file():
+            raise InstallerGateError(f"ARTIFACT_MISSING: {item}")
+        if _sha256_file(item) != entry["sha256"]:
+            raise InstallerGateError(f"ARTIFACT_HASH_MISMATCH: {item}")
+    if strict_extra:
+        known = set(names) | {INSTALLER_MANIFEST, "release-manifest.json",
+                              signing_gate.INTERNAL_MARKER}
+        stray = sorted(p.name for p in out_dir.iterdir()
+                       if p.is_file() and p.name not in known)
+        if stray:
+            raise InstallerGateError(f"STRAY_OUTPUT: {stray}")
+    return data
+
+
+def promote_installer_output(dist_premium: Path, next_dir: Path) -> Path:
+    """Rollback-safe promote of a verified output dir to dist_premium/installer."""
+    if not (next_dir / INSTALLER_MANIFEST).is_file():
+        raise InstallerGateError(f"ARTIFACT_MANIFEST_MISSING: {next_dir}")
+    load_installer_manifest(next_dir)  # names + hashes must still hold
+    final = dist_premium / "installer"
+    backup = dist_premium / f"installer.backup-{next_dir.name.split('-')[-1]}"
+    if backup.exists():
+        shutil.rmtree(backup)
+    promoted = False
+    try:
+        if final.exists():
+            os.rename(final, backup)
+        os.rename(next_dir, final)
+        promoted = True
+    except BaseException:
+        if promoted and final.exists():
+            os.rename(final, next_dir)
+        if backup.exists() and not final.exists():
+            os.rename(backup, final)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+    return final
+
+
 def _die(msg: str) -> None:
     print(f"installer_gate: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -293,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         if args[0] == "verify-iss":
             verify_iss(Path(args[1]).read_text(encoding="utf-8"))
             print("ok")
+            return 0
+        if args[0] == "seal-output":
+            print(write_installer_manifest(Path(args[1]), args[2]))
+            return 0
+        if args[0] == "promote-output":
+            print(promote_installer_output(Path(args[1]), Path(args[2])))
             return 0
         if args[0] == "verify-uninstaller":
             count = verify_installed_uninstaller(

@@ -273,6 +273,101 @@ def test_real_bat_requires_mode_and_delegates_to_gates() -> None:
     assert "verify" in text.lower()
 
 
+# ── H6-5: точный транзакционный вывод инсталлятора ──────────────────────────
+def _mk_output(dir_: Path, version: str = "1.0.0-rc3", slices: int = 2) -> str:
+    dir_.mkdir(parents=True, exist_ok=True)
+    setup = f"KALI-Premium-Setup-{version}.exe"
+    (dir_ / setup).write_bytes(b"SETUP")
+    for i in range(1, slices + 1):
+        (dir_ / f"KALI-Premium-Setup-{version}-{i}.bin").write_bytes(f"S{i}".encode())
+    return setup
+
+
+def test_collect_installer_artifacts_is_exact_and_contiguous(tmp_path: Path) -> None:
+    setup = _mk_output(tmp_path / "out")
+    manifest = ig.collect_installer_artifacts(tmp_path / "out", setup)
+    assert [f["name"] for f in manifest["files"]] == [
+        setup, f"{setup[:-4]}-1.bin", f"{setup[:-4]}-2.bin"]
+    assert all(len(f["sha256"]) == 64 for f in manifest["files"])
+
+
+def test_collect_installer_artifacts_rejects_a_stale_noncontiguous_slice(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    setup = _mk_output(out, slices=2)
+    (out / f"{setup[:-4]}-3.bin").write_bytes(b"STALE-FROM-A-BIGGER-BUILD")
+    # -3 сразу после -2 непрерывен; дыра появляется, если пропал -2
+    (out / f"{setup[:-4]}-2.bin").unlink()
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.collect_installer_artifacts(out, setup)
+    assert "NONCONTIGUOUS_SLICES" in str(exc.value)
+
+
+def test_collect_installer_artifacts_rejects_a_stray_file(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    setup = _mk_output(out)
+    (out / "leftover.tmp").write_bytes(b"X")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.collect_installer_artifacts(out, setup)
+    assert "STRAY_OUTPUT" in str(exc.value)
+
+
+def test_load_installer_manifest_detects_a_tampered_artifact(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    setup = _mk_output(out)
+    ig.write_installer_manifest(out, setup)
+    (out / f"{setup[:-4]}-1.bin").write_bytes(b"TAMPERED")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "ARTIFACT_HASH_MISMATCH" in str(exc.value)
+
+
+def test_load_installer_manifest_detects_a_slice_appearing_later(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    setup = _mk_output(out, slices=2)
+    ig.write_installer_manifest(out, setup)
+    (out / f"{setup[:-4]}-3.bin").write_bytes(b"STALE")  # подложен ПОСЛЕ печати
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "STRAY_OUTPUT" in str(exc.value)
+
+
+def test_promote_installer_output_replaces_the_previous_dir(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    old = dist / "installer"
+    old.mkdir(parents=True)
+    (old / "KALI-Premium-Setup-0.9.9.exe").write_bytes(b"OLD")
+    (old / "KALI-Premium-Setup-0.9.9-9.bin").write_bytes(b"STALE-SLICE")
+    nxt = dist / "installer.next-1"
+    setup = _mk_output(nxt)
+    ig.write_installer_manifest(nxt, setup)
+    final = ig.promote_installer_output(dist, nxt)
+    assert final == old and not nxt.exists()
+    assert not (final / "KALI-Premium-Setup-0.9.9-9.bin").exists()  # stale не пережил
+    ig.load_installer_manifest(final)
+
+
+def test_promote_refuses_an_unsealed_output(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    old = dist / "installer"
+    old.mkdir(parents=True)
+    (old / "keep.txt").write_bytes(b"LASTGOOD")
+    nxt = dist / "installer.next-1"
+    _mk_output(nxt)  # без INSTALLER_ARTIFACTS.json
+    with pytest.raises(ig.InstallerGateError):
+        ig.promote_installer_output(dist, nxt)
+    assert (old / "keep.txt").read_bytes() == b"LASTGOOD"
+
+
+def test_real_bat_builds_into_a_next_output_dir_and_promotes() -> None:
+    text = BAT.read_text(encoding="utf-8")
+    assert "installer.next-" in text, ".bat обязан собирать в чистый next-каталог"
+    iscc_line = next(ln for ln in text.splitlines() if "%ISCC%" in ln and ".iss" in ln)
+    assert "/O%OUTNEXT%" in iscc_line, "ISCC обязан писать в next-каталог, а не поверх live"
+    seal, promote, iscc = (text.find("seal-output"), text.find("promote-output"),
+                           text.find("%ISCC%"))
+    assert iscc != -1 and seal > iscc and promote > seal
+
+
 # ── CLI main() (consumed by the .bat) ───────────────────────────────────────
 def test_main_resolve_mode_prints_mode(tmp_path: Path, capsys) -> None:
     status = tmp_path / "release-status.json"

@@ -31,7 +31,12 @@ if not defined APPVER (
     echo ERROR: could not read AppVersion from scripts\installer_premium.iss
     exit /b 1
 )
-set "SETUP_EXE=dist_premium\installer\KALI-Premium-Setup-%APPVER%.exe"
+REM H6-5: ISCC never writes over the live installer dir (it could still hold slices
+REM from a previous, larger build). It builds into a clean next-* dir, the exact
+REM artifact set is sealed, and only then is it promoted rollback-safely.
+set "OUTNEXT=dist_premium\installer.next-1"
+set "SETUP_NAME=KALI-Premium-Setup-%APPVER%.exe"
+set "SETUP_EXE=%OUTNEXT%\%SETUP_NAME%"
 echo Building version %APPVER%
 
 REM ---- Build mode: signed or internal is MANDATORY, no default -------------
@@ -144,11 +149,14 @@ if /I "%MODE%"=="signed" (
     )
 )
 if /I "%MODE%"=="internal" (
+    set "SETUP_NAME=KALI-Premium-Setup-%APPVER%-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
     set "DEFINES=/DInternal"
-    set "SETUP_EXE=dist_premium\installer\KALI-Premium-Setup-%APPVER%-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
 )
+if /I "%MODE%"=="internal" set "SETUP_EXE=%OUTNEXT%\KALI-Premium-Setup-%APPVER%-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
 
-"%ISCC%" %DEFINES% scripts\installer_premium.iss
+if exist "%OUTNEXT%" rmdir /s /q "%OUTNEXT%"
+mkdir "%OUTNEXT%"
+"%ISCC%" %DEFINES% "/O%OUTNEXT%" scripts\installer_premium.iss
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Build FAILED with exit code %ERRORLEVEL%.
@@ -169,10 +177,16 @@ if /I "%MODE%"=="signed" (
     echo [sign] Setup and uninstaller signed and structurally verified.
 ) else (
     REM Internal naming was done by ISCC OutputBaseFilename. Just drop the marker.
-    "%PY%" -m scripts.release.installer_gate write-marker "dist_premium\installer" "%APPVER%"
+    "%PY%" -m scripts.release.installer_gate write-marker "%OUTNEXT%" "%APPVER%"
     if errorlevel 1 ( echo ERROR: internal marker write failed. & exit /b 1 )
     echo [internal] Setup and slices named INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
 )
+
+REM ---- Seal the EXACT artifact set, then promote it rollback-safely --------
+"%PY%" -m scripts.release.installer_gate seal-output "%OUTNEXT%" "%SETUP_NAME%"
+if errorlevel 1 ( echo ERROR: installer output is not an exact artifact set. & exit /b 1 )
+"%PY%" -m scripts.release.installer_gate promote-output "dist_premium" "%OUTNEXT%"
+if errorlevel 1 ( echo ERROR: installer output promote failed. & exit /b 1 )
 
 echo.
 echo ============================================

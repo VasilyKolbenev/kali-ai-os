@@ -261,6 +261,10 @@ def mk_dist(repo: Path, version: str, exe_bytes: bytes = b"fresh-exe",
     (dist / f"KALI-Premium-Setup-{version}.exe").write_bytes(exe_bytes)
     for i, data in enumerate(bin_bytes, start=1):
         (dist / f"KALI-Premium-Setup-{version}-{i}.bin").write_bytes(data)
+    # H6-5: a real installer build always seals the exact artifact list; publish reads
+    # that manifest instead of globbing, so the fixture must model it.
+    from scripts.release import installer_gate
+    installer_gate.write_installer_manifest(dist, f"KALI-Premium-Setup-{version}.exe")
     return dist
 
 
