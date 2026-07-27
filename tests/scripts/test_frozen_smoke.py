@@ -231,6 +231,54 @@ def test_tail_missing_file(tmp_path: Path) -> None:
     assert fs._tail(tmp_path / "nope.log") == ""
 
 
+# ── H3.4: хвост читается seek-ом от конца, а не Path.read_bytes целиком ──────
+class _CountingFile:
+    """Обёртка файла, считающая, СКОЛЬКО байт реально прочитано."""
+
+    def __init__(self, fh, counter: dict) -> None:
+        self._fh = fh
+        self._counter = counter
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._fh.read(size)
+        self._counter["read"] += len(data)
+        return data
+
+    def seek(self, *args) -> int:
+        return self._fh.seek(*args)
+
+    def tell(self) -> int:
+        return self._fh.tell()
+
+    def __enter__(self) -> _CountingFile:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._fh.close()
+
+
+def test_tail_reads_only_the_last_bytes_of_a_huge_log(tmp_path: Path, monkeypatch) -> None:
+    log = tmp_path / "backend.err.log"
+    size = 16 * 1024 * 1024  # 16 MiB: слурпать целиком ради 100 байт недопустимо
+    with log.open("wb") as fh:
+        fh.seek(size - 5)
+        fh.write(b"TAILZ")
+    counter = {"read": 0}
+    real_open = Path.open
+
+    def _counting_open(self: Path, *args, **kwargs):  # noqa: ANN202
+        return _CountingFile(real_open(self, *args, **kwargs), counter)
+
+    def _forbidden_read_bytes(self: Path) -> bytes:
+        raise AssertionError("_tail must not slurp the whole log via Path.read_bytes")
+
+    monkeypatch.setattr(Path, "open", _counting_open)
+    monkeypatch.setattr(Path, "read_bytes", _forbidden_read_bytes)
+    tail = fs._tail(log, n_bytes=100)
+    assert tail.endswith("TAILZ") and len(tail) == 100
+    assert counter["read"] <= 100, f"read {counter['read']} bytes for a 100-byte tail"
+
+
 def test_main_does_not_use_undrained_pipe() -> None:
     src = Path(fs.__file__).read_text(encoding="utf-8")
     assert "stdout=subprocess.PIPE" not in src and "stderr=subprocess.PIPE" not in src

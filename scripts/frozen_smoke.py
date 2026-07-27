@@ -345,9 +345,16 @@ def _terminate_owned(proc: subprocess.Popen) -> None:
 
 
 def _tail(path: Path, n_bytes: int = 4000) -> str:
-    """Last ``n_bytes`` of a log file, decoded leniently (bounded output on error)."""
-    data = path.read_bytes() if path.is_file() else b""
-    return data[-n_bytes:].decode(errors="replace")
+    """Last ``n_bytes`` of a log file, read by SEEKING from the end (H3.4).
+
+    A backend that logged gigabytes before failing would otherwise be slurped whole
+    into memory just to print a 4 KB tail."""
+    if not path.is_file():
+        return ""
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, fh.tell() - n_bytes))
+        return fh.read(n_bytes).decode(errors="replace")
 
 
 if __name__ == "__main__":

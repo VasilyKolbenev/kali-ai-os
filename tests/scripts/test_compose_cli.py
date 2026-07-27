@@ -87,6 +87,34 @@ def test_build_signing_signed_fail_closed_without_contract() -> None:
         cc.build_signing("signed", env={})  # fail-closed BEFORE any compose/stage mutation
 
 
+def test_build_signing_signed_ok_via_windows_kits_fallback(monkeypatch, tmp_path: Path) -> None:
+    # H3.2: signtool отсутствует в PATH, но лежит в Windows Kits — signed preflight
+    # обязан пройти (композер и .bat используют один резолвер).
+    from scripts.release import signing_gate
+    kit = tmp_path / "10.0.22621.0" / "x64"
+    kit.mkdir(parents=True)
+    (kit / "signtool.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(signing_gate, "_KITS_ROOT", tmp_path)
+    monkeypatch.setattr(signing_gate.shutil, "which", lambda name: None)
+    signer = cc.build_signing("signed", env={
+        "KALI_SIGN_THUMBPRINT": "ABCD1234",
+        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
+    })
+    assert callable(signer)
+
+
+def test_build_signing_signed_fails_when_signtool_nowhere(monkeypatch, tmp_path: Path) -> None:
+    from scripts.release import signing_gate
+    monkeypatch.setattr(signing_gate, "_KITS_ROOT", tmp_path)
+    monkeypatch.setattr(signing_gate.shutil, "which", lambda name: None)
+    with pytest.raises(signing_gate.SigningGateError) as exc:
+        cc.build_signing("signed", env={
+            "KALI_SIGN_THUMBPRINT": "ABCD1234",
+            "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
+        })
+    assert "SIGNTOOL" in str(exc.value)
+
+
 def test_build_signing_signed_ok_with_full_contract() -> None:
     signer = cc.build_signing("signed", env={
         "KALI_SIGN_THUMBPRINT": "ABCD1234",

@@ -53,9 +53,14 @@ for /f "usebackq delims=" %%G in (`git rev-parse HEAD`) do set "GIT_SHA=%%G"
 echo Build mode: %MODE%
 
 REM ---- Resolve signtool.exe, needed only for a signed build ----------------
+REM Same order as scripts\release\signing_gate.resolve_signtool: explicit env, then
+REM PATH, then Windows Kits. The result is exported back into KALI_SIGN_SIGNTOOL so
+REM the composer signs with the SAME binary this script verified with.
 set "SIGNTOOL="
-for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
+if defined KALI_SIGN_SIGNTOOL set "SIGNTOOL=%KALI_SIGN_SIGNTOOL%"
+if not defined SIGNTOOL for %%S in (signtool.exe) do if not defined SIGNTOOL set "SIGNTOOL=%%~$PATH:S"
 if not defined SIGNTOOL if exist "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" set "SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
+if defined SIGNTOOL set "KALI_SIGN_SIGNTOOL=%SIGNTOOL%"
 if not defined KALI_SIGN_TR_URL set "KALI_SIGN_TR_URL=http://timestamp.digicert.com"
 
 set "ISCC="

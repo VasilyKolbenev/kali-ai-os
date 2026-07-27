@@ -181,6 +181,36 @@ def test_mark_internal_unsigned_removed() -> None:
     assert not hasattr(sg, "mark_internal_unsigned")
 
 
+# ── H3.1: ЕДИНЫЙ резолвер signtool (env → PATH → Windows Kits) ──────────────
+def test_resolve_signtool_prefers_explicit_env() -> None:
+    assert sg.resolve_signtool({"KALI_SIGN_SIGNTOOL": "X:/own/signtool.exe"},
+                               which=lambda n: "C:/path/signtool.exe") == "X:/own/signtool.exe"
+
+
+def test_resolve_signtool_uses_path_when_no_env() -> None:
+    assert sg.resolve_signtool({}, which=lambda n: "C:/path/signtool.exe") == "C:/path/signtool.exe"
+
+
+def test_resolve_signtool_falls_back_to_windows_kits(tmp_path: Path) -> None:
+    # .bat знал про Windows Kits, а композер — нет: signed-билд проходил .bat и падал
+    # на preflight композера. Теперь резолвер один.
+    kit = tmp_path / "10.0.22621.0" / "x64"
+    kit.mkdir(parents=True)
+    (kit / "signtool.exe").write_bytes(b"MZ")
+    found = sg.resolve_signtool({}, which=lambda n: None, kits_root=tmp_path)
+    assert found == str(kit / "signtool.exe")
+
+
+def test_resolve_signtool_none_when_nowhere(tmp_path: Path) -> None:
+    assert sg.resolve_signtool({}, which=lambda n: None, kits_root=tmp_path) is None
+
+
+# ── H3.3: docstring не должен обещать `signtool verify /pa` ─────────────────
+def test_module_docstring_matches_structured_verify() -> None:
+    assert "signtool verify /pa" not in (sg.__doc__ or "")
+    assert "Get-AuthenticodeSignature" in (sg.__doc__ or "")
+
+
 # ── G7: apostrophe-safe inspection (EncodedCommand + doubled PS quote) ───────
 def test_inspect_command_apostrophe_path_is_safe(tmp_path: Path) -> None:
     import base64

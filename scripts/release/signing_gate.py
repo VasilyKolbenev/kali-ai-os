@@ -8,11 +8,14 @@ command runner — no real signtool/cert needed):
   missing/unknown mode is refused (there is NO default release mode).
 * **selector** — exactly one credential source: a PFX file OR a Windows
   certificate-store / HSM thumbprint (both or neither is refused).
+* **signtool** — ONE resolver for the .bat and the composer: an explicit
+  ``KALI_SIGN_SIGNTOOL``, then PATH, then the Windows Kits install.
 * **preflight** — in ``signed`` mode, refuse up front unless a selector, a
   signtool and an expected signer identity are all present.
 * **sign** — SHA256 file digest + an RFC3161 SHA256 timestamp.
-* **verify** — ``signtool verify /pa`` must succeed AND the output must show the
-  expected signer AND a timestamp; anything else raises.
+* **verify** — a STRUCTURED PowerShell ``Get-AuthenticodeSignature`` report must
+  show ``Status=Valid``, the EXACT expected signer thumbprint and a timestamp
+  countersignature; anything else raises (no free-text substring matching).
 * **internal marker** — an unsigned build is renamed to an explicit
   ``…-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE`` artifact with a marker file.
 
@@ -21,12 +24,14 @@ check here — it only means a distributable ``signed`` build cannot be produced
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
 MODES = ("signed", "internal")
 INTERNAL_SUFFIX = "-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
 INTERNAL_MARKER = "INTERNAL-UNSIGNED.txt"
+_KITS_ROOT = Path(r"C:\Program Files (x86)\Windows Kits\10\bin")
 
 # runner(cmd) -> (returncode, combined_output)
 Runner = Callable[[list[str]], "tuple[int, str]"]
@@ -60,6 +65,33 @@ def resolve_selector(*, pfx: str | None, pfx_pass: str | None,
     if pfx:
         return {"kind": "pfx", "pfx": pfx, "pass": pfx_pass}
     return {"kind": "thumbprint", "thumbprint": thumbprint}
+
+
+def _kit_candidates(kits_root: Path) -> list[Path]:
+    """signtool.exe locations inside a Windows SDK install (newest layout first)."""
+    versioned = sorted(kits_root.glob("*/x64/signtool.exe"), reverse=True)
+    return [*versioned, kits_root / "x64" / "signtool.exe", kits_root / "x86" / "signtool.exe"]
+
+
+def resolve_signtool(env: dict[str, str], *, which: Callable[[str], str | None] | None = None,
+                     kits_root: Path | None = None) -> str | None:
+    """The ONE signtool resolver (H3.1): explicit env, then PATH, then Windows Kits.
+
+    The .bat and the composer used to resolve independently — only the .bat knew the
+    Windows Kits fallback — so a machine without signtool on PATH passed the .bat's
+    own check and then failed the composer's preflight (or, worse, the two could pick
+    different binaries). Both now call this."""
+    explicit = env.get("KALI_SIGN_SIGNTOOL")
+    if explicit:
+        return explicit
+    lookup = which or shutil.which
+    found = lookup("signtool") or lookup("signtool.exe")
+    if found:
+        return found
+    for candidate in _kit_candidates(kits_root or _KITS_ROOT):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def preflight(mode: str, *, selector: dict[str, Any] | None, signtool: str | None,

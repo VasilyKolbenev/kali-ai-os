@@ -64,8 +64,8 @@ def _real_materializer(stage: Path) -> None:
 
 
 def _resolve_signtool(env: dict[str, str]) -> str | None:
-    import shutil
-    return env.get("KALI_SIGN_SIGNTOOL") or shutil.which("signtool") or shutil.which("signtool.exe")
+    """Shared resolver (H3.1) — env, PATH, Windows Kits; identical to the .bat's."""
+    return signing_gate.resolve_signtool(env)
 
 
 def build_signing(mode: str, *, env: dict[str, str]) -> Signer:

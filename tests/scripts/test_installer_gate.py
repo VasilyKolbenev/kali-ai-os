@@ -240,6 +240,16 @@ def test_bat_cmd_invocation_accepts_valid_mode_past_gate() -> None:
     assert "build mode: internal" in out          # the validated mode was set (for/f ran)
 
 
+def test_real_bat_exports_signtool_to_the_composer(tmp_path: Path) -> None:
+    # H3.1: .bat обязан передать разрешённый signtool композеру через
+    # KALI_SIGN_SIGNTOOL ДО compose, иначе резолверы разойдутся.
+    text = BAT.read_text(encoding="utf-8")
+    export = text.find('set "KALI_SIGN_SIGNTOOL=%SIGNTOOL%"')
+    compose = text.find("scripts.release.compose_cli")
+    assert export != -1, "the .bat never exports KALI_SIGN_SIGNTOOL"
+    assert compose != -1 and export < compose, "export must happen BEFORE compose"
+
+
 def test_main_write_marker(tmp_path: Path) -> None:
     # F4#7: naming is done by ISCC OutputBaseFilename — the CLI only drops the marker
     rc = ig.main(["write-marker", str(tmp_path), "1.0.0-rc3"])
