@@ -60,33 +60,108 @@ def test_require_signing_by_mode() -> None:
 
 # ── preflight (fail-closed in signed mode; expects a signer THUMBPRINT) ──────
 def test_preflight_internal_ok_without_anything() -> None:
-    sg.preflight("internal", selector=None, signtool=None, expected_thumbprint=None)  # ok
+    sg.preflight("internal", selector=None, signtool=None, expected_thumbprint=None,
+                 timestamp_url="")  # internal нужен пустой контракт
 
 
 def test_preflight_signed_fails_without_selector() -> None:
     with pytest.raises(sg.SigningGateError) as exc:
         sg.preflight("signed", selector=None, signtool="signtool.exe",
-                     expected_thumbprint=THUMB)
+                     expected_thumbprint=THUMB, timestamp_url=TS)
     assert "SELECTOR" in str(exc.value)
 
 
-def test_preflight_signed_fails_without_signtool() -> None:
-    sel = sg.resolve_selector(pfx="c.pfx", pfx_pass=None, thumbprint=None)
+def test_preflight_signed_fails_without_signtool(tmp_path: Path) -> None:
+    sel = sg.resolve_selector(pfx=str(_pfx(tmp_path)), pfx_pass=None, thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool=None, expected_thumbprint=THUMB)
+        sg.preflight("signed", selector=sel, signtool=None, expected_thumbprint=THUMB,
+                     timestamp_url=TS)
     assert "SIGNTOOL" in str(exc.value)
 
 
-def test_preflight_signed_fails_without_expected_thumbprint() -> None:
-    sel = sg.resolve_selector(pfx="c.pfx", pfx_pass=None, thumbprint=None)
+def test_preflight_signed_fails_without_expected_thumbprint(tmp_path: Path) -> None:
+    sel = sg.resolve_selector(pfx=str(_pfx(tmp_path)), pfx_pass=None, thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_thumbprint="")
+        sg.preflight("signed", selector=sel, signtool="signtool.exe",
+                     expected_thumbprint="", timestamp_url=TS)
     assert "SIGNER" in str(exc.value)
 
 
-def test_preflight_signed_ok_when_complete() -> None:
-    sel = sg.resolve_selector(pfx="c.pfx", pfx_pass="p", thumbprint=None)
-    sg.preflight("signed", selector=sel, signtool="signtool.exe", expected_thumbprint=THUMB)
+def _pfx(tmp_path: Path) -> Path:
+    pfx = tmp_path / "cert.pfx"
+    pfx.write_bytes(b"PFX")
+    return pfx
+
+
+def test_preflight_signed_ok_when_complete(tmp_path: Path) -> None:
+    sel = sg.resolve_selector(pfx=str(_pfx(tmp_path)), pfx_pass="p", thumbprint=None)
+    sg.preflight("signed", selector=sel, signtool="signtool.exe",
+                 expected_thumbprint=THUMB, timestamp_url=TS, probe=lambda s: None)
+
+
+# ── H6-6: полнота preflight (всё проверяется ДО compose) ────────────────────
+def _real_exe() -> str:
+    import sys as _sys
+    return _sys.executable
+
+
+def test_preflight_rejects_missing_pfx(tmp_path: Path) -> None:
+    sel = sg.resolve_selector(pfx=str(tmp_path / "nope.pfx"), pfx_pass="p", thumbprint=None)
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+                     expected_thumbprint=THUMB, timestamp_url=TS)
+    assert "SELECTOR" in str(exc.value)
+
+
+def test_preflight_rejects_a_directory_as_pfx(tmp_path: Path) -> None:
+    sel = sg.resolve_selector(pfx=str(tmp_path), pfx_pass=None, thumbprint=None)
+    with pytest.raises(sg.SigningGateError):
+        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+                     expected_thumbprint=THUMB, timestamp_url=TS)
+
+
+def test_preflight_rejects_a_non_executable_signtool(tmp_path: Path) -> None:
+    fake = tmp_path / "signtool.exe"
+    fake.write_bytes(b"not a real PE image")
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.preflight("signed", selector=sel, signtool=str(fake),
+                     expected_thumbprint=THUMB, timestamp_url=TS)
+    assert "SIGNTOOL" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-url", "ftp://ts.example", "timestamp.digicert.com"])
+def test_preflight_rejects_invalid_timestamp_url(bad: str) -> None:
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+                     expected_thumbprint=THUMB, timestamp_url=bad)
+    assert "TR_URL" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["ZZZZ", THUMB[:-1], THUMB + "AB", "not hex at all!!"])
+def test_preflight_rejects_malformed_expected_thumbprint(bad: str) -> None:
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+                     expected_thumbprint=bad, timestamp_url=TS)
+    assert "SIGNER" in str(exc.value)
+
+
+def test_preflight_accepts_a_complete_contract(tmp_path: Path) -> None:
+    pfx = tmp_path / "cert.pfx"
+    pfx.write_bytes(b"PFX")
+    sel = sg.resolve_selector(pfx=str(pfx), pfx_pass="p", thumbprint=None)
+    sg.preflight("signed", selector=sel, signtool=_real_exe(),
+                 expected_thumbprint=THUMB, timestamp_url=TS)  # не поднимает
+
+
+def test_probe_signtool_is_bounded(tmp_path: Path) -> None:
+    # зависший signtool не должен вешать сборку — проба ограничена по времени
+    slow = [_real_exe(), "-c", "import time; time.sleep(30)"]
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(slow[0], args=slow[1:], timeout=0.5)
+    assert "SIGNTOOL" in str(exc.value)
 
 
 # ── sign command: SHA256 digest + RFC3161 SHA256 timestamp ──────────────────

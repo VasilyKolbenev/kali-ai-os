@@ -83,7 +83,8 @@ def build_signing(mode: str, *, env: dict[str, str]) -> Signer:
     expected_thumbprint = env.get("KALI_SIGN_EXPECTED_THUMBPRINT", "")
     timestamp_url = env.get("KALI_SIGN_TR_URL", "http://timestamp.digicert.com")
     signing_gate.preflight("signed", selector=selector, signtool=signtool,
-                           expected_thumbprint=expected_thumbprint)
+                           expected_thumbprint=expected_thumbprint,
+                           timestamp_url=timestamp_url)
 
     def _sign(stage: Path, m: str) -> None:
         for exe in (stage / "kali-desktop.exe", stage / "kali-backend" / "kali-backend.exe"):

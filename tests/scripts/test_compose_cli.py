@@ -96,9 +96,10 @@ def test_build_signing_signed_ok_via_windows_kits_fallback(monkeypatch, tmp_path
     (kit / "signtool.exe").write_bytes(b"MZ")
     monkeypatch.setattr(signing_gate, "_KITS_ROOT", tmp_path)
     monkeypatch.setattr(signing_gate.shutil, "which", lambda name: None)
+    monkeypatch.setattr(signing_gate, "probe_signtool", lambda s, **k: None)
     signer = cc.build_signing("signed", env={
         "KALI_SIGN_THUMBPRINT": "ABCD1234",
-        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
+        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
     })
     assert callable(signer)
 
@@ -116,14 +117,39 @@ def test_build_signing_signed_fails_when_signtool_nowhere(monkeypatch, tmp_path:
 
 
 def test_build_signing_signed_ok_with_full_contract(tmp_path: Path) -> None:
-    signtool = tmp_path / "signtool.exe"
-    signtool.write_bytes(b"MZ")
+    import sys as _sys
     signer = cc.build_signing("signed", env={
         "KALI_SIGN_THUMBPRINT": "ABCD1234",
-        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
-        "KALI_SIGN_SIGNTOOL": str(signtool),
+        "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
+        "KALI_SIGN_SIGNTOOL": _sys.executable,  # реальный исполняемый файл: проба пройдёт
     })
     assert callable(signer)
+
+
+def test_build_signing_signed_rejects_a_fake_signtool(tmp_path: Path) -> None:
+    # H6-6: is_file() мало — подделка обязана упасть в preflight, а не при подписи
+    from scripts.release import signing_gate
+    fake = tmp_path / "signtool.exe"
+    fake.write_bytes(b"not a real PE image")
+    with pytest.raises(signing_gate.SigningGateError) as exc:
+        cc.build_signing("signed", env={
+            "KALI_SIGN_THUMBPRINT": "ABCD1234",
+            "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
+            "KALI_SIGN_SIGNTOOL": str(fake),
+        })
+    assert "SIGNTOOL" in str(exc.value)
+
+
+def test_build_signing_signed_rejects_a_missing_pfx(tmp_path: Path) -> None:
+    import sys as _sys
+    from scripts.release import signing_gate
+    with pytest.raises(signing_gate.SigningGateError) as exc:
+        cc.build_signing("signed", env={
+            "KALI_SIGN_PFX": str(tmp_path / "nope.pfx"),
+            "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
+            "KALI_SIGN_SIGNTOOL": _sys.executable,
+        })
+    assert "SELECTOR" in str(exc.value)
 
 
 def test_build_signing_signed_rejects_stale_signtool_path(tmp_path: Path) -> None:

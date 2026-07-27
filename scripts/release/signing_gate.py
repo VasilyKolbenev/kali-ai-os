@@ -24,9 +24,13 @@ check here — it only means a distributable ``signed`` build cannot be produced
 """
 from __future__ import annotations
 
+import re
 import shutil
+import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
+
+_THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
 
 MODES = ("signed", "internal")
 INTERNAL_SUFFIX = "-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
@@ -99,10 +103,54 @@ def resolve_signtool(env: dict[str, str], *, which: Callable[[str], str | None] 
     return None
 
 
+def assert_pfx_selector(selector: dict[str, Any]) -> None:
+    """A PFX selector must point at an EXISTING regular file (H6-6)."""
+    if selector.get("kind") != "pfx":
+        return
+    pfx = Path(str(selector.get("pfx") or ""))
+    if not pfx.is_file():
+        raise SigningGateError(f"SELECTOR: PFX is not an existing file: {pfx}")
+
+
+def assert_expected_thumbprint(value: str) -> None:
+    """An expected signer thumbprint is a SHA-1 fingerprint: exactly 40 hex chars."""
+    if not _THUMBPRINT_RE.match(value or ""):
+        raise SigningGateError(
+            f"SIGNER: expected signer thumbprint must be 40 hex chars, got {value!r}")
+
+
+def assert_timestamp_url(url: str) -> None:
+    """The RFC3161 timestamp endpoint must be an absolute http(s) URL."""
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise SigningGateError(f"TR_URL: invalid RFC3161 timestamp URL: {url!r}")
+
+
+def probe_signtool(signtool: str, *, args: list[str] | None = None,
+                   timeout: float = 20.0) -> None:
+    """BOUNDED executable probe: the resolved signtool must actually run (H6-6).
+
+    is_file() only proves a name exists — a text file, a stub or a moved SDK would sail
+    past it and fail hours later, mid-signing, after the multi-GB stage copy. stdin is
+    closed so an interactive binary cannot block, and the timeout bounds a hung one."""
+    import subprocess
+    try:
+        subprocess.run([signtool, *(args or [])], capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=timeout)
+    except OSError as e:
+        raise SigningGateError(f"SIGNTOOL: {signtool} is not executable: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise SigningGateError(
+            f"SIGNTOOL: {signtool} did not respond within {timeout}s") from e
+
+
 def preflight(mode: str, *, selector: dict[str, Any] | None, signtool: str | None,
-              expected_thumbprint: str | None) -> None:
+              expected_thumbprint: str | None, timestamp_url: str,
+              probe: Callable[[str], None] | None = None) -> None:
     """Fail-closed pre-build check: an internal build needs nothing; a signed build
-    refuses unless selector + signtool + expected signer THUMBPRINT are all present."""
+    refuses unless the WHOLE contract holds — selector present and usable, signtool
+    present and executable, a well-formed signer thumbprint and a valid timestamp URL.
+    Everything here runs BEFORE any stage mutation."""
     if not require_signing(mode):
         return
     if selector is None:
@@ -111,6 +159,10 @@ def preflight(mode: str, *, selector: dict[str, Any] | None, signtool: str | Non
         raise SigningGateError("SIGNTOOL: signed build requires signtool.exe")
     if not expected_thumbprint:
         raise SigningGateError("SIGNER: signed build requires an expected signer thumbprint")
+    assert_pfx_selector(selector)
+    assert_expected_thumbprint(expected_thumbprint)
+    assert_timestamp_url(timestamp_url)
+    (probe or probe_signtool)(signtool)
 
 
 def build_sign_command(file: Path, *, selector: dict[str, Any], timestamp_url: str,
