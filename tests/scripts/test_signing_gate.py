@@ -182,9 +182,20 @@ def test_mark_internal_unsigned_removed() -> None:
 
 
 # ── H3.1: ЕДИНЫЙ резолвер signtool (env → PATH → Windows Kits) ──────────────
-def test_resolve_signtool_prefers_explicit_env() -> None:
-    assert sg.resolve_signtool({"KALI_SIGN_SIGNTOOL": "X:/own/signtool.exe"},
-                               which=lambda n: "C:/path/signtool.exe") == "X:/own/signtool.exe"
+def test_resolve_signtool_prefers_explicit_env(tmp_path: Path) -> None:
+    own = tmp_path / "own-signtool.exe"
+    own.write_bytes(b"MZ")
+    assert sg.resolve_signtool({"KALI_SIGN_SIGNTOOL": str(own)},
+                               which=lambda n: "C:/path/signtool.exe") == str(own)
+
+
+def test_resolve_signtool_rejects_missing_explicit_path(tmp_path: Path) -> None:
+    # H5: иначе .bat-guard «abort ДО compose» пропускает опечатку/переехавший SDK,
+    # и падение случается уже после ~9 ГБ копирования, в момент подписи.
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.resolve_signtool({"KALI_SIGN_SIGNTOOL": str(tmp_path / "nope.exe")},
+                            which=lambda n: "C:/path/signtool.exe")
+    assert "KALI_SIGN_SIGNTOOL" in str(exc.value)
 
 
 def test_resolve_signtool_uses_path_when_no_env() -> None:

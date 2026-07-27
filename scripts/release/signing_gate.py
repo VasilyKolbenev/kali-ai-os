@@ -83,6 +83,11 @@ def resolve_signtool(env: dict[str, str], *, which: Callable[[str], str | None] 
     different binaries). Both now call this."""
     explicit = env.get("KALI_SIGN_SIGNTOOL")
     if explicit:
+        if not Path(explicit).is_file():
+            # A stale/mistyped path would otherwise satisfy the .bat's pre-compose
+            # guard and only fail at signing time, after the multi-GB stage copy.
+            raise SigningGateError(
+                f"SIGNTOOL: KALI_SIGN_SIGNTOOL points at a missing file: {explicit}")
         return explicit
     lookup = which or shutil.which
     found = lookup("signtool") or lookup("signtool.exe")

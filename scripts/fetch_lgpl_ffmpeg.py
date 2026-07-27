@@ -109,12 +109,22 @@ def install_target(dist_premium: Path) -> Path:
 
 
 def require_sot(dist_premium: Path) -> Path:
-    """Fail closed BEFORE the download when the premium_assets SoT is not bootstrapped."""
-    sot, _ = asset_bootstrap.sot_paths(dist_premium)
+    """Fail closed BEFORE the download: the SoT must exist AND be sealed.
+
+    Checking only the directory left the SOT_UNSEALED refusal until after ~70 MB had
+    already been fetched, verified and extracted."""
+    sot, manifest = asset_bootstrap.sot_paths(dist_premium)
     if not sot.is_dir():
         raise SystemExit(
             f"premium_assets SoT not found: {sot} — run "
             "`python -m scripts.release.asset_bootstrap` first"
+        )
+    if not manifest.is_file():
+        raise SystemExit(
+            f"SOT_UNSEALED: {manifest} is missing, so the SoT cannot be trusted. "
+            "Only the bootstrap mints a seal, and it needs the legacy dist_premium/models "
+            "junction; restore the manifest from the machine that sealed this SoT, or "
+            "re-create the SoT from the legacy layout."
         )
     return sot
 
@@ -169,19 +179,23 @@ def main() -> None:
     dist_premium = Path(args.dist)
     require_sot(dist_premium)  # refuse BEFORE downloading ~70 MB
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        zip_path = tmp_path / "ffmpeg-lgpl.zip"
-        print(f"Downloading {ASSET_URL} ...")
-        urllib.request.urlretrieve(ASSET_URL, zip_path)  # noqa: S310 — trusted release host
-        verify_download_sha256(zip_path, ASSET_SHA256)  # G5: fail-closed integrity pin
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(tmp_path)
-        build_dir = next(tmp_path.glob("ffmpeg-*-win64-lgpl-shared-*"))
-        _verify_lgpl(build_dir / "LICENSE.txt")
-        print("Verified LICENSE is LGPL (not GPL).")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / "ffmpeg-lgpl.zip"
+            print(f"Downloading {ASSET_URL} ...")
+            urllib.request.urlretrieve(ASSET_URL, zip_path)  # noqa: S310 — trusted host
+            verify_download_sha256(zip_path, ASSET_SHA256)  # G5: fail-closed integrity pin
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_path)
+            build_dir = next(tmp_path.glob("ffmpeg-*-win64-lgpl-shared-*"))
+            _verify_lgpl(build_dir / "LICENSE.txt")
+            print("Verified LICENSE is LGPL (not GPL).")
 
-        install_into_sot(build_dir, dist_premium)
+            install_into_sot(build_dir, dist_premium)
+    except asset_bootstrap.BootstrapError as e:
+        # A drifted SoT is a fail-closed refusal, not an operator-facing traceback.
+        raise SystemExit(str(e)) from e
 
     print("Done. Re-run with the F5 engine to confirm torchcodec loads the LGPL DLLs.")
 

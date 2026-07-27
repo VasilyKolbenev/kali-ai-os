@@ -152,6 +152,16 @@ def test_assert_iss_handles_line_continuations() -> None:
     ig.assert_iss_stage_only(ok)  # продолжение строки не ломает разбор
 
 
+def test_assert_iss_rejects_toplevel_include() -> None:
+    # H5: обычное место ISPP-#include — ВНЕ [Files]; он может принести вторую секцию
+    # [Files], которой гейт не видит, и verify-iss всё равно скажет «ok».
+    text = ('#include "extra-files.iss"\n[Setup]\nAppName=x\n\n[Files]\n'
+            'Source: "..\\dist_premium\\premium_stage\\*"; DestDir: "{app}"\n')
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_stage_only(text)
+    assert "ISS_UNRESOLVED_INCLUDE" in str(exc.value)
+
+
 def test_assert_iss_rejects_unresolvable_include_in_files() -> None:
     # ISPP #include подтягивает записи, которых парсер не видит → fail-closed
     bad = _files('#include "extra-files.iss"',

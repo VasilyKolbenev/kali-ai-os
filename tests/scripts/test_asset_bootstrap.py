@@ -263,6 +263,82 @@ def test_ffmpeg_install_does_not_launder_drift(tmp_path: Path) -> None:
         ab.verify_sot_integrity(sot, manifest)  # не отмыто
 
 
+def _fake_asset_zip(tmp_path: Path) -> tuple[Path, str]:
+    """Настоящий zip той же формы, что BtbN-ассет (offline-замена скачивания)."""
+    import hashlib
+    import zipfile
+
+    import scripts.fetch_lgpl_ffmpeg as fl
+    build = "ffmpeg-n8.1-win64-lgpl-shared-8.1"
+    zpath = tmp_path / "asset.zip"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr(f"{build}/LICENSE.txt", "GNU LESSER GENERAL PUBLIC LICENSE\nversion 2.1")
+        for name in fl.EXPECTED_DLLS:
+            zf.writestr(f"{build}/bin/{name}", "LGPL")
+    return zpath, hashlib.sha256(zpath.read_bytes()).hexdigest()
+
+
+def _wire_offline_fetch(monkeypatch, tmp_path: Path) -> dict:
+    """Подменяет скачивание локальным zip; считает попытки сетевого доступа."""
+    import shutil as _shutil
+
+    import scripts.fetch_lgpl_ffmpeg as fl
+    zpath, digest = _fake_asset_zip(tmp_path)
+    calls = {"download": 0}
+
+    def _spy(url, dst):  # noqa: ANN001
+        calls["download"] += 1
+        _shutil.copy2(zpath, dst)
+
+    monkeypatch.setattr(fl.urllib.request, "urlretrieve", _spy)
+    monkeypatch.setattr(fl, "ASSET_SHA256", digest)
+    return calls
+
+
+def test_ffmpeg_main_end_to_end_offline(monkeypatch, tmp_path: Path) -> None:
+    # весь путь main() без сети: SoT-проверка → «скачивание» → SHA → LGPL → install → re-seal
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    calls = _wire_offline_fetch(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["fetch_lgpl_ffmpeg.py", "--dist", str(dist)])
+    fl.main()
+    assert calls["download"] == 1
+    sot, manifest = ab.sot_paths(dist)
+    assert (sot / "ffmpeg" / "avcodec-62.dll").read_bytes() == b"LGPL"
+    ab.verify_sot_integrity(sot, manifest)
+
+
+def test_ffmpeg_main_reports_drift_cleanly_not_as_traceback(monkeypatch, tmp_path: Path) -> None:
+    # H5: SOT_DRIFT после скачивания обязан быть SystemExit с сообщением, а не голым
+    # BootstrapError-traceback (main() не имел обработчика).
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, _manifest = ab.sot_paths(dist)
+    (sot / "model.bin").write_bytes(b"TAMPERED")
+    _wire_offline_fetch(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["fetch_lgpl_ffmpeg.py", "--dist", str(dist)])
+    with pytest.raises(SystemExit) as exc:
+        fl.main()
+    assert "SOT_DRIFT" in str(exc.value)
+
+
+def test_ffmpeg_main_requires_seal_before_downloading(monkeypatch, tmp_path: Path) -> None:
+    # H5: печать проверяется ДО скачивания — иначе ~70 МБ качаются впустую
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    _sot, manifest = ab.sot_paths(dist)
+    manifest.unlink()
+    calls = _wire_offline_fetch(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["fetch_lgpl_ffmpeg.py", "--dist", str(dist)])
+    with pytest.raises(SystemExit) as exc:
+        fl.main()
+    assert "SOT_UNSEALED" in str(exc.value)
+    assert calls["download"] == 0
+
+
 def test_ffmpeg_main_requires_sot_before_downloading(monkeypatch, tmp_path: Path) -> None:
     # проверка SoT обязана быть ДО скачивания ~100 МБ
     import scripts.fetch_lgpl_ffmpeg as fl

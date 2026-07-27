@@ -115,13 +115,26 @@ def test_build_signing_signed_fails_when_signtool_nowhere(monkeypatch, tmp_path:
     assert "SIGNTOOL" in str(exc.value)
 
 
-def test_build_signing_signed_ok_with_full_contract() -> None:
+def test_build_signing_signed_ok_with_full_contract(tmp_path: Path) -> None:
+    signtool = tmp_path / "signtool.exe"
+    signtool.write_bytes(b"MZ")
     signer = cc.build_signing("signed", env={
         "KALI_SIGN_THUMBPRINT": "ABCD1234",
         "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
-        "KALI_SIGN_SIGNTOOL": "signtool.exe",
+        "KALI_SIGN_SIGNTOOL": str(signtool),
     })
     assert callable(signer)
+
+
+def test_build_signing_signed_rejects_stale_signtool_path(tmp_path: Path) -> None:
+    # H5: явный, но несуществующий путь обязан упасть в preflight, а не при подписи
+    from scripts.release import signing_gate
+    with pytest.raises(signing_gate.SigningGateError):
+        cc.build_signing("signed", env={
+            "KALI_SIGN_THUMBPRINT": "ABCD1234",
+            "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4",
+            "KALI_SIGN_SIGNTOOL": str(tmp_path / "moved-sdk" / "signtool.exe"),
+        })
 
 
 # ── G5: premium_assets SoT integrity is load-bearing (drift stops compose) ──

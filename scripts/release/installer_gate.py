@@ -106,16 +106,23 @@ def _iss_sources(iss_text: str) -> list[str]:
     for line in _logical_lines(_files_section(iss_text)):
         if line.lstrip().startswith(";"):
             continue  # a comment line
-        if line.lstrip().lower().startswith("#include"):
-            # ISPP pulls in entries this gate cannot see — fail closed rather than
-            # certify a [Files] section whose real content lives in another file.
-            raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line.strip()!r}")
         for match in _SOURCE_KEY_RE.finditer(line):
             quoted = _QUOTED_RE.match(line[match.end():])
             if not quoted:
                 raise InstallerGateError(f"ISS_SOURCE_UNQUOTED: {line.strip()!r}")
             sources.append(quoted.group(1))
     return sources
+
+
+def _assert_no_include(iss_text: str) -> None:
+    """ISPP ``#include`` pulls in entries this gate cannot see — anywhere in the file.
+
+    The usual placement is at the TOP level (not inside [Files]), where an included
+    file can declare a whole second [Files] section that the section scan never sees,
+    so restricting the check to the [Files] body would certify an unseen manifest."""
+    for line in iss_text.splitlines():
+        if line.lstrip().lower().startswith("#include"):
+            raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line.strip()!r}")
 
 
 def _normalize_source(raw: str) -> tuple[str, ...]:
@@ -146,6 +153,7 @@ def assert_iss_stage_only(iss_text: str) -> None:
 
     This is a real path check, not a substring one: ``premium_stage_evil`` and
     ``premium_stage\\..\\..\\scripts`` are both outside the sealed stage."""
+    _assert_no_include(iss_text)
     sources = _iss_sources(iss_text)
     if not sources:
         raise InstallerGateError("ISS_NO_SOURCE: [Files] declares no Source")

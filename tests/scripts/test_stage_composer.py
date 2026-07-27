@@ -433,6 +433,29 @@ def test_compose_pins_asset_manifest_digest_in_stage_manifest(tmp_path: Path) ->
     stage_policy.validate_manifest_schema(manifest)
 
 
+def test_compose_rejects_escaping_symlink_in_backend(tmp_path: Path) -> None:
+    # H5: mutation-killer для F2-гарда. Без assert_source_symlinks_contained
+    # copytree(symlinks=False) разыменует ссылку и ЧУЖИЕ байты попадут в sealed stage
+    # (и будут запечатаны в манифест как «свои»). SoT-проверка это НЕ ловит: она
+    # смотрит только на assets, а ссылка лежит в backend.
+    dist = _dist(tmp_path)
+    inputs = _mk_inputs(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.dll").write_bytes(b"SECRET-FROM-OUTSIDE")
+    try:
+        (inputs["backend"] / "_internal" / "plugin.dll").symlink_to(outside / "secret.dll")
+    except OSError:
+        pytest.skip("no symlink privilege")
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    with pytest.raises(stage_policy.ReparseError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "escapes source" in str(exc.value)
+    _assert_dist_untouched(dist)
+
+
 def test_compose_rejects_reparse_after_materialize(tmp_path: Path) -> None:
     dist = _dist(tmp_path)
 
