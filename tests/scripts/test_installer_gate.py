@@ -671,7 +671,9 @@ def test_load_installer_manifest_detects_a_slice_appearing_later(tmp_path: Path)
 
 # ── H7-5: crash-safe локированная транзакция вывода инсталлятора ───────────
 _INST_CHILD = Path(__file__).resolve().parent / "_installer_crash_child.py"
-_SETUP = "KALI-Premium-Setup-1.0.0-rc3.exe"
+# H8-3: build_output requires a mode, and an internal build's Setup name must say so
+_SETUP = f"KALI-Premium-Setup-1.0.0-rc3-{ig.INTERNAL_NAME}.exe"
+_INTERNAL_ARGS = {"mode": "internal", "internal_version": "1.0.0-rc3"}
 
 
 def _last_good_installer(tmp_path: Path) -> tuple[Path, Path]:
@@ -694,7 +696,7 @@ def _fake_iscc(cmd):  # noqa: ANN001
 
 def test_build_output_seals_and_promotes_under_one_lock(tmp_path: Path) -> None:
     dist, final = _last_good_installer(tmp_path)
-    result = ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+    result = ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS, iscc_cmd=["iscc", "x.iss"],
                              runner=_fake_iscc)
     assert result == final
     assert (final / _SETUP).read_bytes() == b"NEW-SETUP"
@@ -739,7 +741,7 @@ def test_build_output_refuses_a_symlinked_installer_root(tmp_path: Path) -> None
     _mklink("/J", dist / "installer", outside)
     calls = []
     with pytest.raises(ig.InstallerGateError) as exc:
-        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+        ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS, iscc_cmd=["iscc", "x.iss"],
                         runner=lambda *a, **k: calls.append(a))
     assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
     assert calls == [], "ISCC не должен был запуститься"
@@ -747,12 +749,22 @@ def test_build_output_refuses_a_symlinked_installer_root(tmp_path: Path) -> None
 
 def test_build_output_verify_gates_the_promote(tmp_path: Path) -> None:
     # H7-R3: подпись обязана проверяться ДО подмены live-каталога
+    from types import SimpleNamespace
+
+    from scripts.release import signing_gate as sg
     dist, final = _last_good_installer(tmp_path)
     before = sorted(p.name for p in final.iterdir())
-    from scripts.release import signing_gate as sg
+    signed_setup = "KALI-Premium-Setup-1.0.0-rc3.exe"
+
+    def _iscc(cmd):  # noqa: ANN001
+        out = Path(cmd[-1][2:])
+        (out / signed_setup).write_bytes(b"NEW-SETUP")
+        (out / f"{signed_setup[:-4]}-1.bin").write_bytes(b"NEW-1")
+        return SimpleNamespace(returncode=0)
+
     with pytest.raises(sg.SigningGateError):
-        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
-                        runner=_fake_iscc,
+        ig.build_output(dist, mode="signed", setup_name=signed_setup,
+                        iscc_cmd=["iscc", "x.iss"], runner=_iscc,
                         verify_thumbprint="A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2")
     assert sorted(p.name for p in final.iterdir()) == before  # last-good не тронут
     assert not list(dist.glob("installer.next-*"))
@@ -768,7 +780,7 @@ def test_build_output_refuses_while_another_holds_the_lock(tmp_path: Path) -> No
     dist, _final = _last_good_installer(tmp_path)
     with ig.installer_lock(dist):
         with pytest.raises(ig.InstallerGateError) as exc:
-            ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+            ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS, iscc_cmd=["iscc", "x.iss"],
                             runner=_fake_iscc)
     assert "INSTALLER_LOCKED" in str(exc.value)
 
@@ -778,7 +790,7 @@ def test_build_output_keeps_last_good_when_iscc_fails(tmp_path: Path) -> None:
     dist, final = _last_good_installer(tmp_path)
     before = sorted(p.name for p in final.iterdir())
     with pytest.raises(ig.InstallerGateError):
-        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+        ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS, iscc_cmd=["iscc", "x.iss"],
                         runner=lambda cmd: SimpleNamespace(returncode=1))
     assert sorted(p.name for p in final.iterdir()) == before
     assert not list(dist.glob("installer.next-*"))
@@ -813,7 +825,7 @@ def test_installer_recovery_runs_before_cleaning_next(tmp_path: Path) -> None:
                    capture_output=True, text=True)
     assert not final.exists()  # last-good уехал в backup
     with pytest.raises(ig.InstallerGateError):  # новая транзакция падает на ISCC
-        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+        ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS, iscc_cmd=["iscc", "x.iss"],
                         runner=lambda cmd: SimpleNamespace(returncode=1))
     assert final.is_dir() and sorted(p.name for p in final.iterdir()) == before
 
@@ -838,31 +850,91 @@ def test_real_bat_delegates_the_whole_output_transaction() -> None:
     assert "%ISCC%\" %DEFINES%" not in text, "ISCC больше не запускается .bat'ом напрямую"
 
 
-def test_promote_installer_output_replaces_the_previous_dir(tmp_path: Path) -> None:
+# ── H8-3: ЕДИНСТВЕННЫЙ вход + контракт режима ───────────────────────────────
+def test_legacy_promotion_entrypoints_are_gone(capsys) -> None:
+    assert not hasattr(ig, "promote_installer_output")
+    for legacy in ("seal-output", "promote-output"):
+        with pytest.raises(SystemExit) as exc:
+            ig.main([legacy, "a", "b"])
+        assert exc.value.code != 0
+        # именно «удалено», а не «неизвестная команда»: иначе возврат ветки незаметен
+        assert "removed" in capsys.readouterr().err
+
+
+def test_build_output_requires_an_explicit_mode(tmp_path: Path) -> None:
     dist = tmp_path / "dist_premium"
-    old = dist / "installer"
-    old.mkdir(parents=True)
-    (old / "KALI-Premium-Setup-0.9.9.exe").write_bytes(b"OLD")
-    (old / "KALI-Premium-Setup-0.9.9-9.bin").write_bytes(b"STALE-SLICE")
-    nxt = dist / "installer.next-1"
-    setup = _mk_output(nxt)
-    ig.write_installer_manifest(nxt, setup)
-    final = ig.promote_installer_output(dist, nxt)
-    assert final == old and not nxt.exists()
-    assert not (final / "KALI-Premium-Setup-0.9.9-9.bin").exists()  # stale не пережил
+    dist.mkdir()
+    with pytest.raises(TypeError):
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        internal_version="1.0.0-rc3", runner=lambda *a, **k: None)
+
+
+def test_signed_without_a_thumbprint_is_refused_on_a_clean_name() -> None:
+    # имя корректное для signed ⇒ отказать может ТОЛЬКО отсутствие thumbprint
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_output_contract("signed", "KALI-Premium-Setup-1.0.0-rc3.exe",
+                                  internal_version=None, verify_thumbprint=None)
+    assert "requires a thumbprint" in str(exc.value)
+
+
+@pytest.mark.parametrize("kwargs, why", [
+    ({"mode": None}, "MODE"),
+    ({"mode": "release"}, "MODE"),
+    ({"mode": "signed"}, "OUTPUT_CONTRACT"),                       # без thumbprint
+    ({"mode": "signed", "verify_thumbprint": "A" * 40,
+      "internal_version": "1.0.0"}, "OUTPUT_CONTRACT"),            # оба сразу
+    ({"mode": "internal"}, "OUTPUT_CONTRACT"),                     # без версии
+    ({"mode": "internal", "internal_version": "1.0.0",
+      "verify_thumbprint": "A" * 40}, "OUTPUT_CONTRACT"),          # оба сразу
+])
+def test_build_output_refuses_a_broken_contract_before_iscc(tmp_path: Path,
+                                                            kwargs: dict, why: str) -> None:
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    calls = []
+    with pytest.raises(Exception) as exc:
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        runner=lambda *a, **k: calls.append(a), **kwargs)
+    assert why in str(exc.value)
+    assert calls == [], "ISCC не должен был запуститься"
+
+
+def test_signed_setup_must_not_be_named_internal() -> None:
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_output_contract("signed", _SETUP, internal_version=None,
+                                  verify_thumbprint="A" * 40)
+    assert "OUTPUT_CONTRACT" in str(exc.value)
+
+
+def test_internal_setup_must_be_named_internal() -> None:
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_output_contract("internal", "KALI-Premium-Setup-1.0.0-rc3.exe",
+                                  internal_version="1.0.0-rc3", verify_thumbprint=None)
+    assert "OUTPUT_CONTRACT" in str(exc.value)
+
+
+def test_valid_contracts_are_accepted() -> None:
+    assert ig.assert_output_contract("internal", _SETUP, internal_version="1.0.0-rc3",
+                                     verify_thumbprint=None) == "internal"
+    assert ig.assert_output_contract("signed", "KALI-Premium-Setup-1.0.0-rc3.exe",
+                                     internal_version=None,
+                                     verify_thumbprint="A" * 40) == "signed"
+
+
+def test_real_bat_passes_the_mode_to_the_single_entrypoint() -> None:
+    text = BAT.read_text(encoding="utf-8")
+    assert 'build-output "%MODE%"' in text
+    assert "seal-output" not in text and "promote-output" not in text
+
+
+def test_the_only_promotion_path_drops_stale_slices(tmp_path: Path) -> None:
+    # заменяет прежние promote_installer_output-тесты: путь теперь ровно один
+    dist, final = _last_good_installer(tmp_path)
+    (final / "KALI-Premium-Setup-0.9.9-9.bin").write_bytes(b"STALE-SLICE")
+    ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS,
+                    iscc_cmd=["iscc", "x.iss"], runner=_fake_iscc)
+    assert not (final / "KALI-Premium-Setup-0.9.9-9.bin").exists()
     ig.load_installer_manifest(final)
-
-
-def test_promote_refuses_an_unsealed_output(tmp_path: Path) -> None:
-    dist = tmp_path / "dist_premium"
-    old = dist / "installer"
-    old.mkdir(parents=True)
-    (old / "keep.txt").write_bytes(b"LASTGOOD")
-    nxt = dist / "installer.next-1"
-    _mk_output(nxt)  # без INSTALLER_ARTIFACTS.json
-    with pytest.raises(ig.InstallerGateError):
-        ig.promote_installer_output(dist, nxt)
-    assert (old / "keep.txt").read_bytes() == b"LASTGOOD"
 
 
 def test_real_bat_builds_into_a_next_output_dir_and_promotes() -> None:

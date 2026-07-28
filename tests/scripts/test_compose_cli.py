@@ -122,17 +122,36 @@ def test_build_signing_signed_fails_when_signtool_nowhere(monkeypatch, tmp_path:
     assert "SIGNTOOL" in str(exc.value)
 
 
-def test_build_signing_signed_ok_with_full_contract(tmp_path: Path) -> None:
-    # H7-6: проба требует, чтобы инструмент опознавался как SignTool
-    tool = tmp_path / "signtool.cmd"
-    tool.write_text("@echo off\r\necho SignTool Error: none.\r\n"
-                    "echo Commands: sign timestamp verify\r\n", encoding="ascii")
+def test_build_signing_signed_ok_with_full_contract(monkeypatch, tmp_path: Path) -> None:
+    # H8-3: физический .exe + PE + OriginalFilename; .cmd-подделка больше не проходит
+    import sys as _sys
+
+    from scripts.release import signing_gate
+    tool = Path(_sys.executable)  # настоящий PE, который реально запускается
+    monkeypatch.setattr(signing_gate, "_original_filename", lambda p: "SignTool.exe")
+    monkeypatch.setattr(signing_gate, "probe_signtool",
+                        lambda s, **k: signing_gate.assert_signtool_identity(
+                            s, identity_reader=lambda p: "SignTool.exe"))
     signer = cc.build_signing("signed", env={
         "KALI_SIGN_THUMBPRINT": "B1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B3",
         "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
         "KALI_SIGN_SIGNTOOL": str(tool),
     })
     assert callable(signer)
+
+
+def test_build_signing_signed_rejects_a_spoofed_cmd_signtool(tmp_path: Path) -> None:
+    from scripts.release import signing_gate
+    tool = tmp_path / "signtool.cmd"
+    tool.write_text("@echo off\r\necho SignTool Error: none.\r\n"
+                    "echo Commands: sign timestamp verify\r\n", encoding="ascii")
+    with pytest.raises(signing_gate.SigningGateError) as exc:
+        cc.build_signing("signed", env={
+            "KALI_SIGN_THUMBPRINT": "B1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B3",
+            "KALI_SIGN_EXPECTED_THUMBPRINT": "A1B2C3D4" * 5,
+            "KALI_SIGN_SIGNTOOL": str(tool),
+        })
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
 
 
 def test_build_signing_signed_rejects_a_fake_signtool(tmp_path: Path) -> None:

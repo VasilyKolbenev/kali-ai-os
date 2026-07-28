@@ -30,6 +30,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
 
+from scripts.release import stage_policy
+
 _THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
 # Tokens the real SignTool prints in its own usage banner; a binary that names none of
 # them is not SignTool, however happily it launches.
@@ -134,8 +136,44 @@ def assert_timestamp_url(url: str) -> None:
         raise SigningGateError(f"TR_URL: invalid RFC3161 timestamp URL: {url!r}")
 
 
+def _original_filename(path: str) -> str | None:
+    """The PE VersionInfo OriginalFilename, read via PowerShell (apostrophe-safe)."""
+    import subprocess
+    quoted = path.replace("'", "''")
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+         f"(Get-Item -LiteralPath '{quoted}').VersionInfo.OriginalFilename"],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+    return (proc.stdout or "").strip() or None
+
+
+def assert_signtool_identity(signtool: str, *,
+                             identity_reader: Callable[[str], "str | None"] | None = None
+                             ) -> None:
+    """A minimal IDENTITY contract for the signing tool (H8-3).
+
+    "It started and printed something" is trivially forged by a .cmd or a stub, and the
+    thing this path hands a private key to must not be forgeable that cheaply. The
+    contract: a physical .exe, a real PE image, and a VersionInfo OriginalFilename of
+    SignTool.exe. A genuine SDK signtool is still only proven at the live gate."""
+    path = Path(signtool)
+    if stage_policy.is_reparse_point(path) or not path.is_file():
+        raise SigningGateError(f"SIGNTOOL_IDENTITY: not a physical file: {signtool}")
+    if path.suffix.lower() != ".exe":
+        raise SigningGateError(
+            f"SIGNTOOL_IDENTITY: refusing a script/wrapper, expected a .exe: {signtool}")
+    with path.open("rb") as fh:
+        if fh.read(2) != b"MZ":
+            raise SigningGateError(f"SIGNTOOL_IDENTITY: not a PE image: {signtool}")
+    identity = (identity_reader or _original_filename)(signtool)
+    if (identity or "").strip().lower() != "signtool.exe":
+        raise SigningGateError(
+            f"SIGNTOOL_IDENTITY: OriginalFilename is {identity!r}, expected SignTool.exe")
+
+
 def probe_signtool(signtool: str, *, args: list[str] | None = None,
-                   timeout: float = 20.0) -> None:
+                   timeout: float = 20.0,
+                   identity_reader: Callable[[str], "str | None"] | None = None) -> None:
     """BOUNDED IDENTITY probe: the resolved binary must actually BE SignTool (H7-6).
 
     "It starts" is not a contract — cmd.exe starts, python starts, any executable
@@ -144,6 +182,9 @@ def probe_signtool(signtool: str, *, args: list[str] | None = None,
     rather than at signing time. stdin is closed so an interactive binary cannot block
     and the timeout bounds a hung one."""
     import subprocess
+    # H8-3: identity FIRST — a .cmd/.ps1 or a stub can forge any banner, so the banner
+    # alone is not a contract. Physical .exe + PE image + OriginalFilename=SignTool.exe.
+    assert_signtool_identity(signtool, identity_reader=identity_reader)
     try:
         proc = subprocess.run([signtool, *(args or [])], capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=timeout)

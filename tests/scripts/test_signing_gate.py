@@ -25,11 +25,21 @@ def _write_tool(path: Path, lines: list[str]) -> str:
 
 
 @pytest.fixture
-def fake_signtool(tmp_path: Path) -> str:
-    """Behaves like SignTool: its banner names the tool and its verbs."""
+def spoofed_script(tmp_path: Path) -> str:
+    """H8-3: a .cmd that PRINTS a perfect SignTool banner — forging one costs seconds,
+    which is exactly why a banner is not an identity."""
     return _write_tool(tmp_path / "signtool.cmd",
                        ["SignTool Error: No file is specified.",
                         "Commands: sign timestamp verify catdb remove"])
+
+
+@pytest.fixture
+def fake_signtool() -> str:
+    """A REAL physical .exe (a PE that actually runs); identity injected in the test.
+
+    A copy of python.exe into tmp would not start — it needs its own DLLs — and a probe
+    that cannot execute the tool proves nothing about the banner."""
+    return _real_exe()
 
 
 @pytest.fixture
@@ -127,6 +137,16 @@ def _real_exe() -> str:
     return _sys.executable
 
 
+def _as_signtool(_path: str) -> str:
+    """Инъектированное чтение VersionInfo: «это настоящий SignTool.exe»."""
+    return "SignTool.exe"
+
+
+def _ok_probe(signtool: str) -> None:
+    sg.probe_signtool(signtool, args=["-c", "print('signtool sign verify timestamp')"],
+                      identity_reader=_as_signtool)
+
+
 def test_preflight_rejects_missing_pfx(tmp_path: Path, fake_signtool: str) -> None:
     sel = sg.resolve_selector(pfx=str(tmp_path / "nope.pfx"), pfx_pass="p", thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
@@ -176,17 +196,53 @@ def test_preflight_accepts_a_complete_contract(tmp_path: Path, fake_signtool: st
     pfx.write_bytes(b"PFX")
     sel = sg.resolve_selector(pfx=str(pfx), pfx_pass="p", thumbprint=None)
     sg.preflight("signed", selector=sel, signtool=fake_signtool,
-                 expected_thumbprint=THUMB, timestamp_url=TS)  # не поднимает
+                 expected_thumbprint=THUMB, timestamp_url=TS,
+                 probe=_ok_probe)  # не поднимает
 
 
-# ── H7-6: проба проверяет ЛИЧНОСТЬ инструмента, а не факт запуска ───────────
+# ── H7-6/H8-3: проба проверяет ЛИЧНОСТЬ инструмента, а не факт запуска ──────
 def test_probe_accepts_a_tool_that_identifies_as_signtool(fake_signtool: str) -> None:
-    sg.probe_signtool(fake_signtool)  # не поднимает
+    _ok_probe(fake_signtool)  # не поднимает
 
 
 def test_probe_rejects_an_executable_that_is_not_signtool(not_signtool: str) -> None:
     with pytest.raises(sg.SigningGateError) as exc:
         sg.probe_signtool(not_signtool)
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+@pytest.mark.parametrize("suffix", [".cmd", ".bat", ".ps1"])
+def test_probe_rejects_script_wrappers(tmp_path: Path, suffix: str) -> None:
+    # H8-3: подделать баннер тривиально — расширение отвергается до запуска
+    script = _write_tool(tmp_path / f"signtool{suffix}",
+                         ["SignTool Error: No file is specified.",
+                          "Commands: sign timestamp verify"])
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(script, identity_reader=_as_signtool)
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+def test_probe_rejects_a_spoofed_banner_script(spoofed_script: str) -> None:
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(spoofed_script, identity_reader=_as_signtool)
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+def test_probe_rejects_a_real_exe_with_the_wrong_original_filename(
+        fake_signtool: str) -> None:
+    with pytest.raises(sg.SigningGateError) as exc:
+        # баннер намеренно ИДЕАЛЬНЫЙ: отказать может только несовпавшая identity
+        sg.probe_signtool(fake_signtool,
+                          args=["-c", "print('signtool sign timestamp verify')"],
+                          identity_reader=lambda p: "python.exe")
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+def test_probe_rejects_a_non_pe_file_named_exe(tmp_path: Path) -> None:
+    fake = tmp_path / "signtool.exe"
+    fake.write_bytes(b"MZ-not-really" if False else b"#!/bin/sh\n")
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(str(fake), identity_reader=_as_signtool)
     assert "SIGNTOOL_IDENTITY" in str(exc.value)
 
 

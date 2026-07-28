@@ -35,7 +35,8 @@ def main() -> int:
             (dist / "installer" / f"{setup_name[:-4]}-1.bin").write_bytes(b"CORRUPTED")
         os._exit(9)
 
-    ig.build_output(dist, setup_name=setup_name, iscc_cmd=["iscc", "x.iss"],
+    ig.build_output(dist, mode="internal", internal_version="1.0.0-rc3",
+                    setup_name=setup_name, iscc_cmd=["iscc", "x.iss"],
                     runner=fake_iscc, crash_hook=hook)
     return 0
 

@@ -162,7 +162,7 @@ REM running after the live installer directory has already been replaced.
 set "MARKER="
 if /I "%MODE%"=="internal" set "MARKER=--internal %APPVER%"
 if /I "%MODE%"=="signed" set "MARKER=--verify %KALI_SIGN_EXPECTED_THUMBPRINT%"
-"%PY%" -m scripts.release.installer_gate build-output "dist_premium" "%SETUP_NAME%" "%ISCC%" "scripts\installer_premium.iss" %MARKER% %DEFINES%
+"%PY%" -m scripts.release.installer_gate build-output "%MODE%" "dist_premium" "%SETUP_NAME%" "%ISCC%" "scripts\installer_premium.iss" %MARKER% %DEFINES%
 if errorlevel 1 (
     echo.
     echo ERROR: installer output build/seal/promote failed.

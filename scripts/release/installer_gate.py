@@ -622,8 +622,39 @@ def recover_installer_output(dist_premium: Path) -> str:
     return action
 
 
-def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
-                 token: str = "1", internal_version: str | None = None,
+def assert_output_contract(mode: object, setup_name: str, *,
+                           internal_version: str | None,
+                           verify_thumbprint: str | None) -> str:
+    """The ONE mode contract for an installer output (H8-3), checked before any work.
+
+    signed   -> an expected signer thumbprint is REQUIRED, internal_version FORBIDDEN
+    internal -> an internal version is REQUIRED, a thumbprint FORBIDDEN
+
+    Neither mode may borrow the other's arguments, and the produced Setup name must
+    match the mode: an unsigned build that is not named INTERNAL is exactly the artifact
+    that gets mistaken for a release."""
+    resolved = signing_gate.parse_mode(mode)
+    if resolved == "signed":
+        if not verify_thumbprint:
+            raise InstallerGateError("OUTPUT_CONTRACT: signed output requires a thumbprint")
+        if internal_version is not None:
+            raise InstallerGateError("OUTPUT_CONTRACT: signed output forbids internal_version")
+        if "INTERNAL" in setup_name.upper():
+            raise InstallerGateError(f"OUTPUT_CONTRACT: signed Setup named {setup_name!r}")
+    else:
+        if not internal_version:
+            raise InstallerGateError("OUTPUT_CONTRACT: internal output requires a version")
+        if verify_thumbprint is not None:
+            raise InstallerGateError("OUTPUT_CONTRACT: internal output forbids a thumbprint")
+        if INTERNAL_NAME not in setup_name:
+            raise InstallerGateError(
+                f"OUTPUT_CONTRACT: internal Setup must be named {INTERNAL_NAME}")
+    return resolved
+
+
+def build_output(dist_premium: Path, *, mode: object, setup_name: str,
+                 iscc_cmd: list[str], token: str = "1",
+                 internal_version: str | None = None,
                  verify_thumbprint: str | None = None,
                  runner: Callable[..., Any] = subprocess.run,
                  crash_hook: Callable[[str], None] | None = None) -> Path:
@@ -632,6 +663,9 @@ def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
     The lock is held across ISCC, the seal and the promote, so no second ISCC can write
     into the same tree; the last-good installer directory is not touched until the new
     output has been sealed and proven."""
+    # H8-3: the contract is checked BEFORE the lock, the recovery, ISCC or any disk work
+    assert_output_contract(mode, setup_name, internal_version=internal_version,
+                           verify_thumbprint=verify_thumbprint)
     with installer_lock(dist_premium):
         recover_installer_output(dist_premium)  # BEFORE any clean/create
         next_dir, backup, final = _installer_paths(dist_premium, token)
@@ -682,32 +716,6 @@ def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
         return final
 
 
-def promote_installer_output(dist_premium: Path, next_dir: Path) -> Path:
-    """Rollback-safe promote of a verified output dir to dist_premium/installer."""
-    if not (next_dir / INSTALLER_MANIFEST).is_file():
-        raise InstallerGateError(f"ARTIFACT_MANIFEST_MISSING: {next_dir}")
-    load_installer_manifest(next_dir)  # names + hashes must still hold
-    final = dist_premium / "installer"
-    backup = dist_premium / f"installer.backup-{next_dir.name.split('-')[-1]}"
-    if backup.exists():
-        shutil.rmtree(backup)
-    promoted = False
-    try:
-        if final.exists():
-            os.rename(final, backup)
-        os.rename(next_dir, final)
-        promoted = True
-    except BaseException:
-        if promoted and final.exists():
-            os.rename(final, next_dir)
-        if backup.exists() and not final.exists():
-            os.rename(backup, final)
-        raise
-    if backup.exists():
-        shutil.rmtree(backup)
-    return final
-
-
 def _die(msg: str) -> None:
     print(f"installer_gate: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -738,24 +746,23 @@ def main(argv: list[str] | None = None) -> int:
             print("ok")
             return 0
         if args[0] == "build-output":
-            dist, setup_name, iscc, iss = args[1], args[2], args[3], args[4]
+            # H8-3: the ONLY way an installer output is ever produced or promoted
+            mode, dist, setup_name, iscc, iss = args[1], args[2], args[3], args[4], args[5]
             internal = verify = None
-            rest = args[5:]
+            rest = args[6:]
             while rest and rest[0] in ("--internal", "--verify"):
                 if rest[0] == "--internal":
                     internal, rest = rest[1], rest[2:]
                 else:
                     verify, rest = rest[1], rest[2:]
-            print(build_output(Path(dist), setup_name=setup_name,
+            print(build_output(Path(dist), mode=mode, setup_name=setup_name,
                                iscc_cmd=[iscc, *rest, iss], internal_version=internal,
                                verify_thumbprint=verify))
             return 0
-        if args[0] == "seal-output":
-            print(write_installer_manifest(Path(args[1]), args[2]))
-            return 0
-        if args[0] == "promote-output":
-            print(promote_installer_output(Path(args[1]), Path(args[2])))
-            return 0
+        if args[0] in ("seal-output", "promote-output"):
+            # H8-3: removed. They sealed or promoted OUTSIDE the locked, journalled
+            # transaction, which made the whole transaction bypassable by one CLI call.
+            _die(f"{args[0]} was removed — every promotion goes through build-output")
         if args[0] == "verify-uninstaller":
             count = verify_installed_uninstaller(
                 Path(args[1]), expected_thumbprint=args[2],
