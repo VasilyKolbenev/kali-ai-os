@@ -50,7 +50,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _INSTALLER_LOCK = "installer.lock"
 _INSTALLER_JOURNAL = "installer.journal.json"
-_INSTALLER_PHASES = ("prepare", "sealed", "backed_up", "promoted")
+_INSTALLER_PHASES = ("prepare", "sealed", "backed_up", "promoted", "verified")
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
@@ -596,7 +596,17 @@ def recover_installer_output(dist_premium: Path) -> str:
     if schema != 1 or phase not in _INSTALLER_PHASES or not isinstance(token, str):
         raise InstallerGateError(f"INSTALLER_TXN_JOURNAL: unknown state {state!r}")
     next_dir, backup, final = _installer_paths(dist_premium, token)
+    new_state_ok = False
     if phase == "promoted":
+        # "promoted" means the rename happened, NOT that the promoted directory is sound.
+        # Re-prove the artifact manifest before dropping the last-good backup.
+        try:
+            assert_physical_output(dist_premium, final)
+            load_installer_manifest(final)
+            new_state_ok = True
+        except InstallerGateError:
+            new_state_ok = False
+    if phase == "verified" or new_state_ok:
         shutil.rmtree(backup, ignore_errors=True)
         action = "kept_new"
     else:
@@ -666,6 +676,7 @@ def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
         os.rename(next_dir, final)
         _mark("promoted")
         load_installer_manifest(final)  # prove it again after the swap
+        _mark("verified")  # ONLY this phase rolls forward unconditionally
         shutil.rmtree(backup, ignore_errors=True)
         _installer_journal(dist_premium).unlink(missing_ok=True)
         return final

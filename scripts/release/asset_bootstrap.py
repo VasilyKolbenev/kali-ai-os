@@ -210,6 +210,19 @@ def refresh_asset_manifest(dist_premium: Path, *, owned: str, _held: bool = Fals
         return _refresh_asset_manifest(dist_premium, owned=owned)
 
 
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    """Atomic raw-byte write (temp + flush + fsync + replace).
+
+    Used for the manifest BACKUP: re-serializing a manifest through json would restore
+    equal data with different bytes, and the stage pins the DIGEST of those bytes."""
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def write_manifest_atomic(manifest_path: Path, payload: dict[str, Any]) -> None:
     """Write the SoT manifest atomically: temp + flush + fsync + os.replace (H7-3).
 

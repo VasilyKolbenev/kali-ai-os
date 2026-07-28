@@ -153,9 +153,10 @@ def _write_journal(dist_premium: Path, phase: str, token: str) -> None:
 def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     """Finish or roll back an interrupted FFmpeg subtree transaction (H7-3).
 
-    Runs BEFORE any new operation. Until the new manifest is sealed, the seal on disk
-    still describes the OLD subtree, so every pre-seal phase rolls BACK to last-good;
-    only ``sealed`` rolls forward. Nothing is deleted on an unreadable journal."""
+    Runs BEFORE any new operation. ``sealed`` is only ever written after the new state
+    was proven, and recovery RE-PROVES it anyway before dropping the backup; every
+    earlier phase rolls back to last-good, restoring the old subtree AND the old manifest
+    (raw bytes) together. Nothing is deleted on an unreadable journal."""
     journal = _journal_path(dist_premium)
     if not journal.is_file():
         return "nothing"
@@ -168,10 +169,19 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     if schema != 1 or phase not in _PHASES or not isinstance(token, str):
         raise SystemExit(f"FFMPEG_TXN_JOURNAL: unknown journal state {state!r}")
     work, backup, target = _derived(dist_premium, token)
-    _sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
+    sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
     manifest_backup = manifest_path.with_name(manifest_path.name + f".backup-{token}")
+    new_state_ok = False
     if phase == "sealed":
-        # the manifest already describes the promoted subtree — keep both
+        # "sealed" says the manifest was WRITTEN, not that the result is sound. Prove the
+        # new state before keeping it — a crash can land between the write and the check,
+        # and blindly keeping it would bless a subtree nobody ever verified.
+        try:
+            asset_bootstrap.verify_sot_integrity(sot, manifest_path)
+            new_state_ok = True
+        except asset_bootstrap.BootstrapError:
+            new_state_ok = False
+    if new_state_ok:
         shutil.rmtree(backup, ignore_errors=True)
         manifest_backup.unlink(missing_ok=True)
         action = "kept_new"
@@ -246,15 +256,18 @@ def _finish_transaction(dist_premium: Path, token: str,
     _work, backup, _target = _derived(dist_premium, token)
     sot, manifest = asset_bootstrap.sot_paths(dist_premium)
     manifest_backup = manifest.with_name(manifest.name + f".backup-{token}")
-    asset_bootstrap.write_manifest_atomic(
-        manifest_backup, json.loads(manifest.read_text(encoding="utf-8")))
+    # RAW bytes: the stage pins the digest of these exact bytes, so a re-serialized
+    # backup would restore equal data that no longer matches the pin.
+    asset_bootstrap.write_bytes_atomic(manifest_backup, manifest.read_bytes())
     asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE, _held=True)
     if crash_hook is not None:
         crash_hook("manifest_written")  # the window this backup exists for
+    # "sealed" is written ONLY AFTER the new state is proven, so the phase can never
+    # mean "written but unverified"; recovery still re-proves it rather than trusting it.
+    asset_bootstrap.verify_sot_integrity(sot, manifest)
     _write_journal(dist_premium, "sealed", token)
     if crash_hook is not None:
         crash_hook("sealed")
-    asset_bootstrap.verify_sot_integrity(sot, manifest)  # the seal must hold before cleanup
     shutil.rmtree(backup, ignore_errors=True)
     manifest_backup.unlink(missing_ok=True)
     _journal_path(dist_premium).unlink(missing_ok=True)

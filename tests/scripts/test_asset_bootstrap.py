@@ -509,16 +509,21 @@ _CRASH_CHILD = Path(__file__).resolve().parent / "_ffmpeg_crash_child.py"
 
 def _sealed_stale(tmp_path: Path) -> tuple[Path, Path, bytes, set[str]]:
     """dist с запечатанным last-good поддеревом (мусорным, но согласованным)."""
-    dist = _legacy_layout(tmp_path)
+    import json as _json
+    dist = _legacy_layout(dist_root := tmp_path)
+    assert dist_root
     ab.bootstrap_premium_assets(dist)
     target = _seed_stale_subtree(dist)
     ab.refresh_asset_manifest(dist, owned="ffmpeg")
     _sot, manifest = ab.sot_paths(dist)
+    # перезаписываем печать КОМПАКТНЫМ json: содержимое то же, БАЙТЫ другие. Стейдж
+    # пинит digest именно этих байт, поэтому бэкап обязан хранить их дословно.
+    manifest.write_bytes(
+        _json.dumps(_json.loads(manifest.read_text(encoding="utf-8"))).encode("utf-8"))
     return dist, target, manifest.read_bytes(), {p.name for p in target.iterdir()}
 
 
-@pytest.mark.parametrize("phase", ["prepare", "backed_up", "promoted",
-                                   "manifest_written", "sealed"])
+@pytest.mark.parametrize("phase", ["prepare", "backed_up", "promoted", "manifest_written"])
 def test_ffmpeg_transaction_survives_a_crash_in_every_window(tmp_path: Path, phase: str) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl
     dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
@@ -535,6 +540,35 @@ def test_ffmpeg_transaction_survives_a_crash_in_every_window(tmp_path: Path, pha
     else:  # печать ещё описывала старое → откат к last-good
         assert {p.name for p in target.iterdir()} == before_names
         assert manifest.read_bytes() == before_manifest
+
+
+def test_corruption_after_the_sealed_mark_restores_last_good(tmp_path: Path) -> None:
+    # H8-2: "sealed" = манифест ЗАПИСАН, а не «состояние доказано». Порча после отметки
+    # обязана быть замечена при recovery, иначе мы благословим непроверенное поддерево.
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+    proc = subprocess.run(
+        [sys.executable, str(_CRASH_CHILD), str(dist), str(build), "sealed", "corrupt"],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert fl.recover_ffmpeg_transaction(dist) == "restored_backup"
+    sot, manifest = ab.sot_paths(dist)
+    assert {p.name for p in target.iterdir()} == before_names
+    assert manifest.read_bytes() == before_manifest  # ТЕ ЖЕ байты, не re-serialized
+    ab.verify_sot_integrity(sot, manifest)
+
+
+def test_intact_state_after_the_sealed_mark_rolls_forward(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, _before_manifest, _before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+    subprocess.run([sys.executable, str(_CRASH_CHILD), str(dist), str(build), "sealed"],
+                   capture_output=True, text=True)
+    assert fl.recover_ffmpeg_transaction(dist) == "kept_new"
+    sot, manifest = ab.sot_paths(dist)
+    ab.verify_sot_integrity(sot, manifest)
+    assert {p.name for p in target.iterdir()} == set(fl.EXPECTED_DLLS) | {"LICENSE.txt"}
 
 
 def test_recovery_runs_before_a_new_transaction(tmp_path: Path) -> None:

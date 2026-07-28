@@ -20,10 +20,16 @@ from scripts import fetch_lgpl_ffmpeg as fl  # noqa: E402
 
 def main() -> int:
     dist, build_dir, phase = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+    corrupt = len(sys.argv) > 4 and sys.argv[4] == "corrupt"
 
     def hook(reached: str) -> None:
-        if reached == phase:
-            os._exit(9)
+        if reached != phase:
+            return
+        if corrupt:  # the new state is damaged BEFORE the crash — recovery must notice
+            target = fl.install_target(dist)
+            victim = next(iter(sorted(target.iterdir())))
+            victim.unlink()
+        os._exit(9)
 
     fl.install_into_sot(build_dir, dist, crash_hook=hook)
     return 0

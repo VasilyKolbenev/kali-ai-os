@@ -20,6 +20,7 @@ from scripts.release import installer_gate as ig  # noqa: E402
 
 def main() -> int:
     dist, setup_name, phase = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+    corrupt = len(sys.argv) > 4 and sys.argv[4] == "corrupt"
 
     def fake_iscc(cmd):  # noqa: ANN001 — stands in for ISCC: writes the artifacts
         out = Path(cmd[-1][2:])  # the /O<dir> argument this transaction appended
@@ -28,8 +29,11 @@ def main() -> int:
         return SimpleNamespace(returncode=0)
 
     def hook(reached: str) -> None:
-        if reached == phase:
-            os._exit(9)
+        if reached != phase:
+            return
+        if corrupt:  # damage the promoted output BEFORE the crash
+            (dist / "installer" / f"{setup_name[:-4]}-1.bin").write_bytes(b"CORRUPTED")
+        os._exit(9)
 
     ig.build_output(dist, setup_name=setup_name, iscc_cmd=["iscc", "x.iss"],
                     runner=fake_iscc, crash_hook=hook)

@@ -703,6 +703,33 @@ def test_build_output_seals_and_promotes_under_one_lock(tmp_path: Path) -> None:
     ig.load_installer_manifest(final)
 
 
+def test_corruption_after_the_promoted_mark_restores_last_good(tmp_path: Path) -> None:
+    # H8-2: "promoted" = переименование состоялось, а не «каталог доказан».
+    import subprocess
+    import sys as _sys
+    dist, final = _last_good_installer(tmp_path)
+    before = {p.name: p.read_bytes() for p in final.iterdir()}
+    child = Path(__file__).resolve().parent / "_installer_crash_child.py"
+    proc = subprocess.run(
+        [_sys.executable, str(child), str(dist), _SETUP, "promoted", "corrupt"],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert ig.recover_installer_output(dist) == "restored_backup"
+    assert {p.name: p.read_bytes() for p in final.iterdir()} == before
+
+
+def test_intact_output_after_the_promoted_mark_rolls_forward(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+    dist, final = _last_good_installer(tmp_path)
+    child = Path(__file__).resolve().parent / "_installer_crash_child.py"
+    subprocess.run([_sys.executable, str(child), str(dist), _SETUP, "promoted"],
+                   capture_output=True, text=True)
+    assert ig.recover_installer_output(dist) == "kept_new"
+    assert (final / _SETUP).read_bytes() == b"NEW-SETUP"
+    ig.load_installer_manifest(final)
+
+
 def test_build_output_refuses_a_symlinked_installer_root(tmp_path: Path) -> None:
     # H8-1: транзакция обязана отказать ДО запуска ISCC, если live-каталог подменён
     dist = tmp_path / "dist_premium"
