@@ -517,7 +517,8 @@ def _sealed_stale(tmp_path: Path) -> tuple[Path, Path, bytes, set[str]]:
     return dist, target, manifest.read_bytes(), {p.name for p in target.iterdir()}
 
 
-@pytest.mark.parametrize("phase", ["prepare", "backed_up", "promoted", "sealed"])
+@pytest.mark.parametrize("phase", ["prepare", "backed_up", "promoted",
+                                   "manifest_written", "sealed"])
 def test_ffmpeg_transaction_survives_a_crash_in_every_window(tmp_path: Path, phase: str) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl
     dist, target, before_manifest, before_names = _sealed_stale(tmp_path)

@@ -168,12 +168,18 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     if schema != 1 or phase not in _PHASES or not isinstance(token, str):
         raise SystemExit(f"FFMPEG_TXN_JOURNAL: unknown journal state {state!r}")
     work, backup, target = _derived(dist_premium, token)
+    _sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
+    manifest_backup = manifest_path.with_name(manifest_path.name + f".backup-{token}")
     if phase == "sealed":
-        # the manifest already describes the promoted subtree — keep it
+        # the manifest already describes the promoted subtree — keep both
         shutil.rmtree(backup, ignore_errors=True)
+        manifest_backup.unlink(missing_ok=True)
         action = "kept_new"
     else:
-        # prepare / backed_up / promoted: the seal still describes the OLD subtree
+        # prepare / backed_up / promoted: roll the tree back to last-good AND put the
+        # manifest back with it. The manifest is written before the journal reaches
+        # "sealed", so a crash in that window would otherwise leave a NEW manifest
+        # describing a subtree recovery just rolled BACK — matching neither side.
         shutil.rmtree(work, ignore_errors=True)
         if backup.is_dir():
             if target.exists():
@@ -182,6 +188,8 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
             action = "restored_backup"
         else:
             action = "nothing_to_restore"
+        if manifest_backup.is_file():
+            os.replace(manifest_backup, manifest_path)
     journal.unlink()
     return action
 
@@ -230,15 +238,25 @@ def replace_owned_subtree(build_dir: Path, dist_premium: Path, *, token: str = "
 
 def _finish_transaction(dist_premium: Path, token: str,
                         crash_hook: Callable[[str], None] | None = None) -> None:
-    """Seal the new manifest, prove it, and only THEN drop the backup."""
+    """Seal the new manifest, prove it, and only THEN drop the backups.
+
+    The OLD manifest is copied aside atomically BEFORE the re-seal, so the window
+    between "manifest written" and journal="sealed" is recoverable: recovery restores
+    the old subtree and the old manifest together."""
     _work, backup, _target = _derived(dist_premium, token)
+    sot, manifest = asset_bootstrap.sot_paths(dist_premium)
+    manifest_backup = manifest.with_name(manifest.name + f".backup-{token}")
+    asset_bootstrap.write_manifest_atomic(
+        manifest_backup, json.loads(manifest.read_text(encoding="utf-8")))
     asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE, _held=True)
+    if crash_hook is not None:
+        crash_hook("manifest_written")  # the window this backup exists for
     _write_journal(dist_premium, "sealed", token)
     if crash_hook is not None:
         crash_hook("sealed")
-    sot, manifest = asset_bootstrap.sot_paths(dist_premium)
     asset_bootstrap.verify_sot_integrity(sot, manifest)  # the seal must hold before cleanup
     shutil.rmtree(backup, ignore_errors=True)
+    manifest_backup.unlink(missing_ok=True)
     _journal_path(dist_premium).unlink(missing_ok=True)
 
 

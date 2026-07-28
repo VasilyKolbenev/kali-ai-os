@@ -40,6 +40,8 @@ _DIRECTIVE_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*
 _UNINS_EXE_RE = re.compile(r"^unins\d{3}\.exe$")
 SIGNED_DEFINES = frozenset({"SignSetup"})
 INTERNAL_DEFINES = frozenset({"Internal"})
+KNOWN_BUILD_DEFINES = SIGNED_DEFINES | INTERNAL_DEFINES  # what the .bat passes via /D
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*")
 INTERNAL_NAME = "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
 INSTALLER_MANIFEST = "INSTALLER_ARTIFACTS.json"
 _SLICE_RE = re.compile(r"^(?P<base>.+)-(?P<n>\d+)\.bin$")
@@ -203,6 +205,34 @@ def _parse_directives(lines: list[str]) -> list[tuple[str, str]]:
     return out
 
 
+def _define_name(rest: str) -> str | None:
+    """The identifier a ``#define``/``#ifdef`` argument names.
+
+    ISPP allows a function-macro form (``#define Extra(str S) ...``) and an assignment
+    form (``#define Extra = 1``); taking the first whitespace-delimited token learned
+    ``Extra(str`` and made the gate disagree with ISCC about what is defined."""
+    match = _IDENTIFIER_RE.match(rest.strip())
+    return match.group(0) if match else None
+
+
+def _declared_defines(iss_text: str) -> set[str]:
+    """Every identifier this .iss ``#define``s ANYWHERE, active branch or not.
+
+    Used only to tell "this file knows the name" from "nobody here defines it": a name
+    defined inside an inactive branch is legitimately undefined, while a name that
+    appears nowhere may still be defined by ISPPBuiltins and must fail closed."""
+    names: set[str] = set()
+    for raw in iss_text.splitlines():
+        line = raw.strip()
+        if not line.lower().startswith("#define"):
+            continue
+        parts = line.split(None, 1)
+        name = _define_name(parts[1]) if len(parts) > 1 else None
+        if name:
+            names.add(name)
+    return names
+
+
 def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
     """Evaluate ISPP conditionals for a GIVEN define set and return the surviving lines.
 
@@ -213,6 +243,9 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
     than being skipped, because a skipped conditional silently changes what ships."""
     frames: list[tuple[bool, bool]] = []  # (this branch active, any branch taken yet)
     live = set(defines)
+    # "known" means the .iss defines it somewhere OR the .bat can pass it via /D —
+    # NOT merely "defined in this view", or the signed view would refuse #ifdef Internal
+    declared = _declared_defines(iss_text) | KNOWN_BUILD_DEFINES | set(defines)
     out: list[str] = []
     for raw in iss_text.splitlines():
         line = raw.strip()
@@ -220,14 +253,26 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
             continue
         enclosing_active = all(active for active, _ in frames)
         if line.startswith("#"):
-            word = line.split(None, 1)[0].lower()
-            rest = line.split(None, 1)[1].strip() if " " in line else ""
+            # ONE split: ISPP separates a directive from its argument by ANY whitespace,
+            # so keying off a literal space silently dropped tab-separated #define/#undef
+            # and made the gate's define set disagree with the one ISCC computes.
+            parts = line.split(None, 1)
+            word = parts[0].lower()
+            rest = parts[1].strip() if len(parts) > 1 else ""
             if word in ("#ifdef", "#ifndef"):
-                if not rest:
+                name = _define_name(rest)
+                if not name:
                     raise InstallerGateError(f"ISS_BAD_CONDITIONAL: {line!r}")
+                if name not in declared:
+                    # ISCC auto-includes ISPPBuiltins.iss, so names this file never
+                    # defines can still be defined for the compiler. Guessing "undefined"
+                    # would hide whatever the block contains — refuse instead.
+                    raise InstallerGateError(
+                        f"ISS_UNKNOWN_DEFINE: {name!r} is never #defined in this .iss and "
+                        f"is not a modelled build define {sorted(KNOWN_BUILD_DEFINES)}")
                 # only this frame's own condition is stored; enclosing frames are ANDed
                 # in per line, so an inactive outer frame keeps everything inside it off
-                taken = (rest in live) if word == "#ifdef" else (rest not in live)
+                taken = (name in live) if word == "#ifdef" else (name not in live)
                 frames.append((taken, taken))
                 continue
             if word == "#else":
@@ -242,12 +287,18 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
                 frames.pop()
                 continue
             if word == "#define":
-                if enclosing_active and rest:
-                    live.add(rest.split(None, 1)[0].strip())
+                name = _define_name(rest)
+                if not name:
+                    raise InstallerGateError(f"ISS_BAD_DEFINE: {line!r}")
+                if enclosing_active:
+                    live.add(name)
                 continue
             if word == "#undef":
-                if enclosing_active and rest:
-                    live.discard(rest.split(None, 1)[0].strip())
+                name = _define_name(rest)
+                if not name:
+                    raise InstallerGateError(f"ISS_BAD_DEFINE: {line!r}")
+                if enclosing_active:
+                    live.discard(name)
                 continue
             if word == "#include":
                 raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line!r}")
@@ -526,6 +577,7 @@ def recover_installer_output(dist_premium: Path) -> str:
 
 def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
                  token: str = "1", internal_version: str | None = None,
+                 verify_thumbprint: str | None = None,
                  runner: Callable[..., Any] = subprocess.run,
                  crash_hook: Callable[[str], None] | None = None) -> Path:
     """Build, seal and promote the installer output inside ONE locked transaction (H7-5).
@@ -557,6 +609,12 @@ def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
             write_installer_manifest(next_dir, setup_name)
             _mark("sealed")
             load_installer_manifest(next_dir)  # names, hashes, schema — before promoting
+            if verify_thumbprint:
+                # The Authenticode gate must GATE the promote: verifying after the swap
+                # would only tell us the live installer directory is already wrong.
+                signing_gate.verify_signed(next_dir / setup_name,
+                                           expected_thumbprint=verify_thumbprint,
+                                           inspector=signing_gate.powershell_inspector)
         except BaseException:
             shutil.rmtree(next_dir, ignore_errors=True)
             _installer_journal(dist_premium).unlink(missing_ok=True)
@@ -629,12 +687,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args[0] == "build-output":
             dist, setup_name, iscc, iss = args[1], args[2], args[3], args[4]
-            internal = None
+            internal = verify = None
             rest = args[5:]
-            if rest and rest[0] == "--internal":
-                internal, rest = rest[1], rest[2:]
+            while rest and rest[0] in ("--internal", "--verify"):
+                if rest[0] == "--internal":
+                    internal, rest = rest[1], rest[2:]
+                else:
+                    verify, rest = rest[1], rest[2:]
             print(build_output(Path(dist), setup_name=setup_name,
-                               iscc_cmd=[iscc, *rest, iss], internal_version=internal))
+                               iscc_cmd=[iscc, *rest, iss], internal_version=internal,
+                               verify_thumbprint=verify))
             return 0
         if args[0] == "seal-output":
             print(write_installer_manifest(Path(args[1]), args[2]))

@@ -157,8 +157,11 @@ if /I "%MODE%"=="internal" set "SETUP_EXE=%OUTNEXT%\KALI-Premium-Setup-%APPVER%-
 REM H7-5: ISCC, the artifact seal and the promote all happen inside ONE python process
 REM that holds the installer OS-lock and journals every window, so a crash can never
 REM leave the live installer directory half-replaced and two ISCC runs cannot overlap.
+REM The signed Authenticode check is passed IN, so it gates the promote instead of
+REM running after the live installer directory has already been replaced.
 set "MARKER="
 if /I "%MODE%"=="internal" set "MARKER=--internal %APPVER%"
+if /I "%MODE%"=="signed" set "MARKER=--verify %KALI_SIGN_EXPECTED_THUMBPRINT%"
 "%PY%" -m scripts.release.installer_gate build-output "dist_premium" "%SETUP_NAME%" "%ISCC%" "scripts\installer_premium.iss" %MARKER% %DEFINES%
 if errorlevel 1 (
     echo.
@@ -168,11 +171,10 @@ if errorlevel 1 (
 set "SETUP_EXE=dist_premium\installer\%SETUP_NAME%"
 
 if /I "%MODE%"=="signed" (
-    REM ISCC signed the Setup and uninstaller. Re-verify the final Setup with the
-    REM same structured Authenticode gate: exact thumbprint, valid chain, timestamp.
-    "%PY%" -m scripts.release.installer_gate verify-setup "%SETUP_EXE%" "%KALI_SIGN_EXPECTED_THUMBPRINT%"
-    if errorlevel 1 ( echo ERROR: structured signature verify failed for the Setup. & exit /b 1 )
-    echo [sign] Setup and uninstaller signed and structurally verified.
+    REM build-output already verified the Setup structurally BEFORE promoting it:
+    REM exact thumbprint, valid chain, timestamp. A failure there left the previous
+    REM installer directory in place.
+    echo [sign] Setup and uninstaller signed and structurally verified before promote.
 ) else (
     echo [internal] Setup and slices named INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
 )

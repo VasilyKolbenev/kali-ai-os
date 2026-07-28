@@ -256,6 +256,55 @@ def test_define_inside_an_inactive_block_does_not_take_effect() -> None:
     assert ig.active_directives(text, INTERNAL) == [("a", "1")]
 
 
+# ── H7-R1: ISPP-разделители, ISPPBuiltins и macro-форма #define ─────────────
+_HIDDEN = ('[Files]\nSource: "..\\dist_premium\\premium_stage\\*"; DestDir: "{app}"\n'
+           '#ifdef {guard}\nSource: "..\\..\\secrets\\*"; DestDir: "{{app}}"\n#endif\n')
+
+
+def _iss_with_hidden_source(define_line: str, guard: str) -> str:
+    return ("[Setup]\n" + define_line + "\n"
+            "#ifdef SignSetup\nSignTool=kali\nSignedUninstaller=yes\n#endif\n"
+            "#ifdef Internal\nOutputBaseFilename=x-" + ig.INTERNAL_NAME + "\n#endif\n"
+            + _HIDDEN.replace("{guard}", guard))
+
+
+@pytest.mark.parametrize("define_line", [
+    "#define\tExtraFiles",          # TAB-разделитель — ISPP его принимает
+    "#define ExtraFiles",           # контроль: пробел
+    "#define ExtraFiles = 1",       # форма присваивания
+    "#define ExtraFiles(str S) S",  # функция-макрос
+])
+def test_hidden_source_behind_any_define_form_is_refused(define_line: str) -> None:
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_stage_only(_iss_with_hidden_source(define_line, "ExtraFiles"))
+    assert "ISS_SOURCE_OUTSIDE_STAGE" in str(exc.value)
+
+
+@pytest.mark.parametrize("guard", ["NULL", "Yes", "True", "MaxInt"])
+def test_guard_named_by_isppbuiltins_fails_closed(guard: str) -> None:
+    # ISCC авто-подключает ISPPBuiltins.iss, поэтому такие имена ОПРЕДЕЛЕНЫ для него;
+    # «считать неопределённым» = спрятать содержимое блока.
+    text = ("[Setup]\n#ifdef SignSetup\nSignTool=kali\nSignedUninstaller=yes\n#endif\n"
+            "#ifdef Internal\nOutputBaseFilename=x-" + ig.INTERNAL_NAME + "\n#endif\n"
+            + _HIDDEN.replace("{guard}", guard))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_stage_only(text)
+    assert "ISS_UNKNOWN_DEFINE" in str(exc.value)
+
+
+def test_tab_separated_conditional_is_evaluated_not_refused() -> None:
+    text = "#ifdef\tSignSetup\nA=1\n#endif\n"
+    assert ig.active_directives(text, SIGNED) == [("a", "1")]
+    assert ig.active_directives(text, INTERNAL) == []
+
+
+def test_define_in_an_inactive_branch_is_still_a_known_name() -> None:
+    # объявлено в файле, но неактивно → корректно «не определено», а не fail-closed
+    text = ("#ifdef Internal\n#define Extra\n#endif\n#ifdef Extra\nA=1\n#endif\n")
+    assert ig.active_directives(text, SIGNED) == []
+    assert ig.active_directives(text, INTERNAL) == [("a", "1")]
+
+
 def test_real_iss_passes_both_views() -> None:
     text = ISS.read_text(encoding="utf-8")
     ig.verify_iss(text)  # не поднимает
@@ -575,6 +624,25 @@ def test_build_output_seals_and_promotes_under_one_lock(tmp_path: Path) -> None:
     assert not (final / "KALI-Premium-Setup-0.9.9.exe").exists()  # stale не пережил
     assert not list(dist.glob("installer.next-*")) and not list(dist.glob("installer.backup-*"))
     ig.load_installer_manifest(final)
+
+
+def test_build_output_verify_gates_the_promote(tmp_path: Path) -> None:
+    # H7-R3: подпись обязана проверяться ДО подмены live-каталога
+    dist, final = _last_good_installer(tmp_path)
+    before = sorted(p.name for p in final.iterdir())
+    from scripts.release import signing_gate as sg
+    with pytest.raises(sg.SigningGateError):
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        runner=_fake_iscc,
+                        verify_thumbprint="A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2")
+    assert sorted(p.name for p in final.iterdir()) == before  # last-good не тронут
+    assert not list(dist.glob("installer.next-*"))
+
+
+def test_real_bat_verifies_before_promoting() -> None:
+    text = BAT.read_text(encoding="utf-8")
+    assert "--verify %KALI_SIGN_EXPECTED_THUMBPRINT%" in text
+    assert "installer_gate verify-setup" not in text, "проверка после promote не гейтит его"
 
 
 def test_build_output_refuses_while_another_holds_the_lock(tmp_path: Path) -> None:
