@@ -524,11 +524,25 @@ def _validate_artifact_manifest(data: object, out_dir: Path) -> dict:
     return {"setup": setup_name, "files": files}
 
 
-def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict:
+def assert_physical_lock_anchor(root: Path, anchor: Path) -> None:
+    """A lock anchor must sit on a physical chain (H9-1).
+
+    Acquiring the lock CREATES this file, so a reparse point anywhere above it would
+    plant the anchor outside the tree before any other check could run."""
+    assert_physical_chain(root, anchor)
+
+
+def load_installer_manifest(out_dir: Path, *, trusted_root: Path | None = None,
+                            strict_extra: bool = True) -> dict:
     """Read the sealed artifact list and prove every entry still matches on disk.
+
+    H9-1 — the READ proves containment itself instead of inheriting a check some earlier
+    build_output may or may not have run: publish and every other reader get the same
+    guarantee. ``trusted_root`` defaults to the output directory's parent (dist_premium).
 
     ``strict_extra`` also refuses anything else in the directory; publish turns it off
     because its own DIRTY_TREE gate owns that rule and reports it with its own reason."""
+    assert_physical_output(trusted_root or out_dir.parent, out_dir)
     path = out_dir / INSTALLER_MANIFEST
     if stage_policy.is_reparse_point(path):  # H8-1: the seal itself must be physical
         raise InstallerGateError(f"ARTIFACT_MANIFEST_REPARSE: {path}")
@@ -675,13 +689,14 @@ def build_output(dist_premium: Path, *, mode: object, setup_name: str,
     # H8-3: the contract is checked BEFORE the lock, the recovery, ISCC or any disk work
     assert_output_contract(mode, setup_name, internal_version=internal_version,
                            verify_thumbprint=verify_thumbprint)
+    next_dir, backup, final = _installer_paths(dist_premium, token)
+    # H8-1/H9-1: a junction anywhere from dist_premium down would silently redirect the
+    # build, the seal and the promote outside the tree. This runs BEFORE the lock —
+    # acquiring it CREATES the anchor file, which is itself a write.
+    for candidate in (next_dir, backup, final):
+        assert_physical_output(dist_premium, candidate)
+    assert_physical_lock_anchor(dist_premium, dist_premium / _INSTALLER_LOCK)
     with installer_lock(dist_premium):
-        next_dir, backup, final = _installer_paths(dist_premium, token)
-        # H8-1: a junction anywhere from dist_premium down would silently redirect the
-        # build, the seal and the promote outside the tree. This runs BEFORE recovery,
-        # which is itself a disk-mutating step.
-        for candidate in (next_dir, backup, final):
-            assert_physical_output(dist_premium, candidate)
         recover_installer_output(dist_premium)  # BEFORE any clean/create
         for leftover in (next_dir, backup):
             if leftover.exists():

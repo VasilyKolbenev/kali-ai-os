@@ -361,7 +361,9 @@ def test_manifest_that_is_a_reparse_point_is_refused(tmp_path: Path) -> None:
     assert setup
     with pytest.raises(ig.InstallerGateError) as exc:
         ig.load_installer_manifest(out)
-    assert "ARTIFACT_MANIFEST_REPARSE" in str(exc.value)
+    # H9-1: граница чтения ловит это ещё раньше (OUTPUT_REPARSE_IN_TREE) — принимаем
+    # любой containment-отказ, но отказ обязателен
+    assert "REPARSE" in str(exc.value)
 
 
 def test_dangling_reparse_point_is_refused(tmp_path: Path) -> None:
@@ -426,6 +428,63 @@ def test_verified_mark_is_re_proven_before_dropping_the_backup(tmp_path: Path) -
         '{"schema": 1, "phase": "verified", "token": "1"}', encoding="utf-8")
     assert ig.recover_installer_output(dist) == "restored_backup"
     assert {p.name: p.read_bytes() for p in final.iterdir()} == before
+
+
+# ── H9-1: граница проверяется на ЧТЕНИИ и ДО открытия замка ────────────────
+def test_load_manifest_refuses_a_root_linked_outside(tmp_path: Path) -> None:
+    # installer -> outside, внутри валидные Setup + slice + manifest
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    setup = _mk_output(outside)
+    ig.write_installer_manifest(outside, setup)
+    _mklink("/J", dist / "installer", outside)
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(dist / "installer")
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_publish_collect_assets_refuses_a_root_linked_outside(tmp_path: Path) -> None:
+    import scripts.publish_release as pr
+    version = "1.0.1"
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / f"KALI-Premium-Setup-{version}.exe").write_bytes(b"exe")
+    (outside / f"KALI-Premium-Setup-{version}-1.bin").write_bytes(b"bin")
+    ig.write_installer_manifest(outside, f"KALI-Premium-Setup-{version}.exe")
+    _mklink("/J", dist / "installer", outside)
+    with pytest.raises(SystemExit):
+        pr.collect_assets(dist / "installer", version)
+
+
+def test_build_output_refuses_before_creating_the_lock_anchor(tmp_path: Path) -> None:
+    # dist_premium -> outside: замок нельзя открывать до проверки цепочки
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _mklink("/J", root / "dist_premium", outside)
+    calls = []
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.build_output(root / "dist_premium", setup_name=_SETUP, **_INTERNAL_ARGS,
+                        iscc_cmd=["iscc", "x.iss"], runner=lambda *a, **k: calls.append(a))
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+    assert calls == []
+    assert not (outside / "installer.lock").exists(), "якорь замка появился снаружи"
+    assert not any(outside.iterdir()), "в подменённом каталоге ничего не создано"
+
+
+def test_lock_anchor_that_is_a_reparse_point_is_refused(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    elsewhere = tmp_path / "elsewhere.lock"
+    elsewhere.write_bytes(b"")
+    _mklink("", dist / "installer.lock", elsewhere)
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_physical_lock_anchor(dist, dist / "installer.lock")
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
 
 
 def test_physical_chain_accepts_a_clean_tree(tmp_path: Path) -> None:

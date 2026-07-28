@@ -438,7 +438,8 @@ def test_publish_refuses_on_symlink_escape(tmp_path: Path, caplog) -> None:
     # H7-2 ловит это ещё раньше: символьная ссылка в манифесте — ARTIFACT_REPARSE
     reasons = caplog.text
     assert any(token in reasons for token in
-               ("ARTIFACT_REPARSE", "ARTIFACT_HASH_MISMATCH", "FROZEN_HASH"))
+               ("OUTPUT_REPARSE_IN_TREE", "ARTIFACT_REPARSE", "ARTIFACT_HASH_MISMATCH",
+                "FROZEN_HASH"))
 
 
 # ── 16. всё зелёное → guard пропускает, publish отрабатывает ─────────────────
