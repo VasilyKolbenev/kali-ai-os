@@ -20,10 +20,13 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Callable, Iterator
 
-from scripts.release import signing_gate, stage_policy
+from scripts.release import file_lock, signing_gate, stage_policy
 
 _SECTION_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
 _SOURCE_KEY_RE = re.compile(r"(?i)(?:^|;)\s*Source\s*:\s*")
@@ -42,6 +45,20 @@ INSTALLER_MANIFEST = "INSTALLER_ARTIFACTS.json"
 _SLICE_RE = re.compile(r"^(?P<base>.+)-(?P<n>\d+)\.bin$")
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_INSTALLER_LOCK = "installer.lock"
+_INSTALLER_JOURNAL = "installer.journal.json"
+_INSTALLER_PHASES = ("prepare", "sealed", "backed_up", "promoted")
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    """temp + flush + fsync + replace — a torn journal must never be observable."""
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 class InstallerGateError(Exception):
@@ -447,6 +464,114 @@ def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict
     return data
 
 
+@contextmanager
+def installer_lock(dist_premium: Path) -> Iterator[int]:
+    """One writer of the installer output at a time (H7-5) — held across ISCC."""
+    path = dist_premium / _INSTALLER_LOCK
+    try:
+        fd = file_lock.acquire(path)
+    except file_lock.LockBusy as e:
+        raise InstallerGateError(f"INSTALLER_LOCKED: {e}") from e
+    try:
+        yield fd
+    finally:
+        file_lock.release(fd)
+
+
+def _installer_paths(dist_premium: Path, token: str) -> tuple[Path, Path, Path]:
+    """(next, backup, final) DERIVED from a validated token."""
+    if not _TOKEN_RE.match(token):
+        raise InstallerGateError(f"INSTALLER_TXN_TOKEN: unsafe token {token!r}")
+    return (dist_premium / f"installer.next-{token}",
+            dist_premium / f"installer.backup-{token}",
+            dist_premium / "installer")
+
+
+def _installer_journal(dist_premium: Path) -> Path:
+    return dist_premium / _INSTALLER_JOURNAL
+
+
+def recover_installer_output(dist_premium: Path) -> str:
+    """Finish or roll back an interrupted installer-output transaction (H7-5).
+
+    Runs BEFORE the next directory is cleaned or created, so the evidence of the
+    previous crash is never destroyed first. Only ``promoted`` rolls forward; every
+    earlier phase restores the last-good installer directory."""
+    journal = _installer_journal(dist_premium)
+    if not journal.is_file():
+        return "nothing"
+    try:
+        state = json.loads(journal.read_text(encoding="utf-8"))
+        phase, token, schema = state["phase"], state["token"], state["schema"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+        raise InstallerGateError(f"INSTALLER_TXN_JOURNAL: unreadable (fail-closed): {e}") from e
+    if schema != 1 or phase not in _INSTALLER_PHASES or not isinstance(token, str):
+        raise InstallerGateError(f"INSTALLER_TXN_JOURNAL: unknown state {state!r}")
+    next_dir, backup, final = _installer_paths(dist_premium, token)
+    if phase == "promoted":
+        shutil.rmtree(backup, ignore_errors=True)
+        action = "kept_new"
+    else:
+        shutil.rmtree(next_dir, ignore_errors=True)
+        if backup.is_dir():
+            if final.exists():
+                shutil.rmtree(final)
+            os.rename(backup, final)
+            action = "restored_backup"
+        else:
+            action = "nothing_to_restore"
+    journal.unlink()
+    return action
+
+
+def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
+                 token: str = "1", internal_version: str | None = None,
+                 runner: Callable[..., Any] = subprocess.run,
+                 crash_hook: Callable[[str], None] | None = None) -> Path:
+    """Build, seal and promote the installer output inside ONE locked transaction (H7-5).
+
+    The lock is held across ISCC, the seal and the promote, so no second ISCC can write
+    into the same tree; the last-good installer directory is not touched until the new
+    output has been sealed and proven."""
+    with installer_lock(dist_premium):
+        recover_installer_output(dist_premium)  # BEFORE any clean/create
+        next_dir, backup, final = _installer_paths(dist_premium, token)
+        for leftover in (next_dir, backup):
+            if leftover.exists():
+                shutil.rmtree(leftover)
+        next_dir.mkdir(parents=True)
+
+        def _mark(phase: str) -> None:
+            _write_json_atomic(_installer_journal(dist_premium),
+                               {"schema": 1, "phase": phase, "token": token})
+            if crash_hook is not None:
+                crash_hook(phase)
+
+        _mark("prepare")
+        try:
+            proc = runner([*iscc_cmd, f"/O{next_dir}"])
+            if getattr(proc, "returncode", 1) != 0:
+                raise InstallerGateError(f"ISCC_FAILED: exit code {proc.returncode}")
+            if internal_version is not None:
+                signing_gate.write_internal_marker(next_dir, version=internal_version)
+            write_installer_manifest(next_dir, setup_name)
+            _mark("sealed")
+            load_installer_manifest(next_dir)  # names, hashes, schema — before promoting
+        except BaseException:
+            shutil.rmtree(next_dir, ignore_errors=True)
+            _installer_journal(dist_premium).unlink(missing_ok=True)
+            raise  # last-good was never touched
+        if final.exists():
+            os.rename(final, backup)
+        _mark("backed_up")
+        os.rename(next_dir, final)
+        _mark("promoted")
+        load_installer_manifest(final)  # prove it again after the swap
+        shutil.rmtree(backup, ignore_errors=True)
+        _installer_journal(dist_premium).unlink(missing_ok=True)
+        return final
+
+
 def promote_installer_output(dist_premium: Path, next_dir: Path) -> Path:
     """Rollback-safe promote of a verified output dir to dist_premium/installer."""
     if not (next_dir / INSTALLER_MANIFEST).is_file():
@@ -501,6 +626,15 @@ def main(argv: list[str] | None = None) -> int:
         if args[0] == "verify-iss":
             verify_iss(Path(args[1]).read_text(encoding="utf-8"))
             print("ok")
+            return 0
+        if args[0] == "build-output":
+            dist, setup_name, iscc, iss = args[1], args[2], args[3], args[4]
+            internal = None
+            rest = args[5:]
+            if rest and rest[0] == "--internal":
+                internal, rest = rest[1], rest[2:]
+            print(build_output(Path(dist), setup_name=setup_name,
+                               iscc_cmd=[iscc, *rest, iss], internal_version=internal))
             return 0
         if args[0] == "seal-output":
             print(write_installer_manifest(Path(args[1]), args[2]))

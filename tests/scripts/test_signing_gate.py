@@ -13,7 +13,29 @@ from scripts.release import signing_gate as sg
 
 SIGNER = "KALI Labs LLC"
 THUMB = "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"  # expected signer thumbprint
+SELECTOR_THUMB = "B1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B3"  # store/HSM selector
 TS = "http://timestamp.digicert.com"
+
+
+def _write_tool(path: Path, lines: list[str]) -> str:
+    """A runnable .cmd standing in for a signing tool (no real SDK in tests)."""
+    body = "@echo off\r\n" + "".join(f"echo {line}\r\n" for line in lines)
+    path.write_text(body, encoding="ascii")
+    return str(path)
+
+
+@pytest.fixture
+def fake_signtool(tmp_path: Path) -> str:
+    """Behaves like SignTool: its banner names the tool and its verbs."""
+    return _write_tool(tmp_path / "signtool.cmd",
+                       ["SignTool Error: No file is specified.",
+                        "Commands: sign timestamp verify catdb remove"])
+
+
+@pytest.fixture
+def not_signtool(tmp_path: Path) -> str:
+    """Launches perfectly happily and is not SignTool at all."""
+    return _write_tool(tmp_path / "definitely-signtool.cmd", ["hello from some other tool"])
 
 
 # ── mode: обязателен, без default ───────────────────────────────────────────
@@ -36,7 +58,7 @@ def test_selector_pfx_only_ok() -> None:
 
 
 def test_selector_thumbprint_only_ok() -> None:
-    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=SELECTOR_THUMB)
     assert sel["kind"] == "thumbprint"
 
 
@@ -105,25 +127,25 @@ def _real_exe() -> str:
     return _sys.executable
 
 
-def test_preflight_rejects_missing_pfx(tmp_path: Path) -> None:
+def test_preflight_rejects_missing_pfx(tmp_path: Path, fake_signtool: str) -> None:
     sel = sg.resolve_selector(pfx=str(tmp_path / "nope.pfx"), pfx_pass="p", thumbprint=None)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+        sg.preflight("signed", selector=sel, signtool=fake_signtool,
                      expected_thumbprint=THUMB, timestamp_url=TS)
     assert "SELECTOR" in str(exc.value)
 
 
-def test_preflight_rejects_a_directory_as_pfx(tmp_path: Path) -> None:
+def test_preflight_rejects_a_directory_as_pfx(tmp_path: Path, fake_signtool: str) -> None:
     sel = sg.resolve_selector(pfx=str(tmp_path), pfx_pass=None, thumbprint=None)
     with pytest.raises(sg.SigningGateError):
-        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+        sg.preflight("signed", selector=sel, signtool=fake_signtool,
                      expected_thumbprint=THUMB, timestamp_url=TS)
 
 
 def test_preflight_rejects_a_non_executable_signtool(tmp_path: Path) -> None:
     fake = tmp_path / "signtool.exe"
     fake.write_bytes(b"not a real PE image")
-    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=SELECTOR_THUMB)
     with pytest.raises(sg.SigningGateError) as exc:
         sg.preflight("signed", selector=sel, signtool=str(fake),
                      expected_thumbprint=THUMB, timestamp_url=TS)
@@ -131,29 +153,66 @@ def test_preflight_rejects_a_non_executable_signtool(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bad", ["", "not-a-url", "ftp://ts.example", "timestamp.digicert.com"])
-def test_preflight_rejects_invalid_timestamp_url(bad: str) -> None:
-    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+def test_preflight_rejects_invalid_timestamp_url(bad: str, fake_signtool: str) -> None:
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=SELECTOR_THUMB)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+        sg.preflight("signed", selector=sel, signtool=fake_signtool,
                      expected_thumbprint=THUMB, timestamp_url=bad)
     assert "TR_URL" in str(exc.value)
 
 
 @pytest.mark.parametrize("bad", ["ZZZZ", THUMB[:-1], THUMB + "AB", "not hex at all!!"])
-def test_preflight_rejects_malformed_expected_thumbprint(bad: str) -> None:
-    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+def test_preflight_rejects_malformed_expected_thumbprint(bad: str,
+                                                         fake_signtool: str) -> None:
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=SELECTOR_THUMB)
     with pytest.raises(sg.SigningGateError) as exc:
-        sg.preflight("signed", selector=sel, signtool=_real_exe(),
+        sg.preflight("signed", selector=sel, signtool=fake_signtool,
                      expected_thumbprint=bad, timestamp_url=TS)
     assert "SIGNER" in str(exc.value)
 
 
-def test_preflight_accepts_a_complete_contract(tmp_path: Path) -> None:
+def test_preflight_accepts_a_complete_contract(tmp_path: Path, fake_signtool: str) -> None:
     pfx = tmp_path / "cert.pfx"
     pfx.write_bytes(b"PFX")
     sel = sg.resolve_selector(pfx=str(pfx), pfx_pass="p", thumbprint=None)
-    sg.preflight("signed", selector=sel, signtool=_real_exe(),
+    sg.preflight("signed", selector=sel, signtool=fake_signtool,
                  expected_thumbprint=THUMB, timestamp_url=TS)  # не поднимает
+
+
+# ── H7-6: проба проверяет ЛИЧНОСТЬ инструмента, а не факт запуска ───────────
+def test_probe_accepts_a_tool_that_identifies_as_signtool(fake_signtool: str) -> None:
+    sg.probe_signtool(fake_signtool)  # не поднимает
+
+
+def test_probe_rejects_an_executable_that_is_not_signtool(not_signtool: str) -> None:
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(not_signtool)
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+def test_probe_rejects_cmd_exe() -> None:
+    import os
+    import sys as _sys
+    if _sys.platform != "win32":
+        pytest.skip("windows only")
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                       "System32", "cmd.exe"), args=["/c", "ver"])
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+def test_probe_rejects_the_python_interpreter() -> None:
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.probe_signtool(_real_exe(), args=["-c", "print('hello')"])
+    assert "SIGNTOOL_IDENTITY" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["ABCD1234", "", "zz" * 20, SELECTOR_THUMB[:-1],
+                                 SELECTOR_THUMB + "AB"])
+def test_selector_thumbprint_must_be_40_hex(bad: str) -> None:
+    with pytest.raises(sg.SigningGateError) as exc:
+        sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=bad)
+    assert "SELECTOR" in str(exc.value)
 
 
 def test_probe_signtool_is_bounded(tmp_path: Path) -> None:
@@ -181,9 +240,9 @@ def test_sign_command_uses_sha256_and_rfc3161_timestamp(tmp_path: Path) -> None:
 
 def test_sign_command_thumbprint_selector(tmp_path: Path) -> None:
     f = tmp_path / "app.exe"; f.write_bytes(b"x")
-    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint="ABCD1234")
+    sel = sg.resolve_selector(pfx=None, pfx_pass=None, thumbprint=SELECTOR_THUMB)
     cmd = sg.build_sign_command(f, selector=sel, timestamp_url=TS, signtool="st.exe")
-    assert "/sha1" in cmd and cmd[cmd.index("/sha1") + 1] == "ABCD1234"
+    assert "/sha1" in cmd and cmd[cmd.index('/sha1') + 1] == SELECTOR_THUMB
     assert "/f" not in cmd
 
 

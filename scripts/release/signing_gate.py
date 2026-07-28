@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 _THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
+# Tokens the real SignTool prints in its own usage banner; a binary that names none of
+# them is not SignTool, however happily it launches.
+_SIGNTOOL_CONTRACT = ("signtool", "sign", "timestamp", "verify")
 
 MODES = ("signed", "internal")
 INTERNAL_SUFFIX = "-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
@@ -68,6 +71,11 @@ def resolve_selector(*, pfx: str | None, pfx_pass: str | None,
         )
     if pfx:
         return {"kind": "pfx", "pfx": pfx, "pass": pfx_pass}
+    # H7-6: a store/HSM selector is a SHA-1 fingerprint — a malformed one must fail here,
+    # not as an opaque signtool error after the stage has already been copied.
+    if not _THUMBPRINT_RE.match(thumbprint or ""):
+        raise SigningGateError(
+            f"SELECTOR: KALI_SIGN_THUMBPRINT must be 40 hex chars, got {thumbprint!r}")
     return {"kind": "thumbprint", "thumbprint": thumbprint}
 
 
@@ -128,20 +136,28 @@ def assert_timestamp_url(url: str) -> None:
 
 def probe_signtool(signtool: str, *, args: list[str] | None = None,
                    timeout: float = 20.0) -> None:
-    """BOUNDED executable probe: the resolved signtool must actually run (H6-6).
+    """BOUNDED IDENTITY probe: the resolved binary must actually BE SignTool (H7-6).
 
-    is_file() only proves a name exists — a text file, a stub or a moved SDK would sail
-    past it and fail hours later, mid-signing, after the multi-GB stage copy. stdin is
-    closed so an interactive binary cannot block, and the timeout bounds a hung one."""
+    "It starts" is not a contract — cmd.exe starts, python starts, any executable
+    starts. The probe requires the tool's own usage banner to name SignTool and its
+    verbs, so a wrong or spoofed binary is refused before the multi-GB stage copy
+    rather than at signing time. stdin is closed so an interactive binary cannot block
+    and the timeout bounds a hung one."""
     import subprocess
     try:
-        subprocess.run([signtool, *(args or [])], capture_output=True,
-                       stdin=subprocess.DEVNULL, timeout=timeout)
+        proc = subprocess.run([signtool, *(args or [])], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=timeout)
     except OSError as e:
         raise SigningGateError(f"SIGNTOOL: {signtool} is not executable: {e}") from e
     except subprocess.TimeoutExpired as e:
         raise SigningGateError(
             f"SIGNTOOL: {signtool} did not respond within {timeout}s") from e
+    banner = ((proc.stdout or "") + (proc.stderr or "")).lower()
+    missing = [token for token in _SIGNTOOL_CONTRACT if token not in banner]
+    if missing:
+        raise SigningGateError(
+            f"SIGNTOOL_IDENTITY: {signtool} does not identify as SignTool "
+            f"(its output names none of {missing})")
 
 
 def preflight(mode: str, *, selector: dict[str, Any] | None, signtool: str | None,

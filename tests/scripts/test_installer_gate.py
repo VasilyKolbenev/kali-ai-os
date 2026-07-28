@@ -543,6 +543,114 @@ def test_load_installer_manifest_detects_a_slice_appearing_later(tmp_path: Path)
     assert "STRAY_OUTPUT" in str(exc.value)
 
 
+# ── H7-5: crash-safe локированная транзакция вывода инсталлятора ───────────
+_INST_CHILD = Path(__file__).resolve().parent / "_installer_crash_child.py"
+_SETUP = "KALI-Premium-Setup-1.0.0-rc3.exe"
+
+
+def _last_good_installer(tmp_path: Path) -> tuple[Path, Path]:
+    dist = tmp_path / "dist_premium"
+    final = dist / "installer"
+    final.mkdir(parents=True)
+    (final / "KALI-Premium-Setup-0.9.9.exe").write_bytes(b"OLD-SETUP")
+    (final / "KALI-Premium-Setup-0.9.9-1.bin").write_bytes(b"OLD-1")
+    ig.write_installer_manifest(final, "KALI-Premium-Setup-0.9.9.exe")
+    return dist, final
+
+
+def _fake_iscc(cmd):  # noqa: ANN001
+    from types import SimpleNamespace
+    out = Path(cmd[-1][2:])
+    (out / _SETUP).write_bytes(b"NEW-SETUP")
+    (out / f"{_SETUP[:-4]}-1.bin").write_bytes(b"NEW-1")
+    return SimpleNamespace(returncode=0)
+
+
+def test_build_output_seals_and_promotes_under_one_lock(tmp_path: Path) -> None:
+    dist, final = _last_good_installer(tmp_path)
+    result = ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                             runner=_fake_iscc)
+    assert result == final
+    assert (final / _SETUP).read_bytes() == b"NEW-SETUP"
+    assert not (final / "KALI-Premium-Setup-0.9.9.exe").exists()  # stale не пережил
+    assert not list(dist.glob("installer.next-*")) and not list(dist.glob("installer.backup-*"))
+    ig.load_installer_manifest(final)
+
+
+def test_build_output_refuses_while_another_holds_the_lock(tmp_path: Path) -> None:
+    dist, _final = _last_good_installer(tmp_path)
+    with ig.installer_lock(dist):
+        with pytest.raises(ig.InstallerGateError) as exc:
+            ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                            runner=_fake_iscc)
+    assert "INSTALLER_LOCKED" in str(exc.value)
+
+
+def test_build_output_keeps_last_good_when_iscc_fails(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    dist, final = _last_good_installer(tmp_path)
+    before = sorted(p.name for p in final.iterdir())
+    with pytest.raises(ig.InstallerGateError):
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        runner=lambda cmd: SimpleNamespace(returncode=1))
+    assert sorted(p.name for p in final.iterdir()) == before
+    assert not list(dist.glob("installer.next-*"))
+
+
+@pytest.mark.parametrize("phase", ["prepare", "sealed", "backed_up", "promoted"])
+def test_installer_output_survives_a_crash_in_every_window(tmp_path: Path, phase: str) -> None:
+    import subprocess
+    import sys as _sys
+    dist, final = _last_good_installer(tmp_path)
+    before = sorted(p.name for p in final.iterdir())
+    proc = subprocess.run([_sys.executable, str(_INST_CHILD), str(dist), _SETUP, phase],
+                          capture_output=True, text=True)
+    assert proc.returncode != 0, f"дочерний процесс обязан был умереть: {proc.stdout}"
+    assert ig.recover_installer_output(dist) != "nothing"
+    assert final.is_dir()  # final существует в ЛЮБОМ случае
+    ig.load_installer_manifest(final)
+    if phase == "promoted":
+        assert (final / _SETUP).read_bytes() == b"NEW-SETUP"
+    else:
+        assert sorted(p.name for p in final.iterdir()) == before  # last-good восстановлен
+    assert not list(dist.glob("installer.next-*")) and not list(dist.glob("installer.backup-*"))
+
+
+def test_installer_recovery_runs_before_cleaning_next(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+    from types import SimpleNamespace
+    dist, final = _last_good_installer(tmp_path)
+    before = sorted(p.name for p in final.iterdir())
+    subprocess.run([_sys.executable, str(_INST_CHILD), str(dist), _SETUP, "backed_up"],
+                   capture_output=True, text=True)
+    assert not final.exists()  # last-good уехал в backup
+    with pytest.raises(ig.InstallerGateError):  # новая транзакция падает на ISCC
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        runner=lambda cmd: SimpleNamespace(returncode=1))
+    assert final.is_dir() and sorted(p.name for p in final.iterdir()) == before
+
+
+@pytest.mark.parametrize("state", [
+    '{ not json', '{"schema": 9, "phase": "prepare", "token": "1"}',
+    '{"schema": 1, "phase": "WAT", "token": "1"}',
+    '{"schema": 1, "phase": "prepare", "token": "..\\\\..\\\\precious"}',
+])
+def test_installer_recovery_fails_closed_on_a_bad_journal(tmp_path: Path, state: str) -> None:
+    dist, final = _last_good_installer(tmp_path)
+    before = sorted(p.name for p in final.iterdir())
+    (dist / "installer.journal.json").write_text(state, encoding="utf-8")
+    with pytest.raises(ig.InstallerGateError):
+        ig.recover_installer_output(dist)
+    assert sorted(p.name for p in final.iterdir()) == before
+
+
+def test_real_bat_delegates_the_whole_output_transaction() -> None:
+    text = BAT.read_text(encoding="utf-8")
+    assert "installer_gate build-output" in text
+    assert "%ISCC%\" %DEFINES%" not in text, "ISCC больше не запускается .bat'ом напрямую"
+
+
 def test_promote_installer_output_replaces_the_previous_dir(tmp_path: Path) -> None:
     dist = tmp_path / "dist_premium"
     old = dist / "installer"
@@ -571,13 +679,13 @@ def test_promote_refuses_an_unsealed_output(tmp_path: Path) -> None:
 
 
 def test_real_bat_builds_into_a_next_output_dir_and_promotes() -> None:
+    # H7-5: сборка/печать/promote выполняются ОДНОЙ локированной командой, поэтому
+    # .bat больше не запускает ISCC сам и не собирает next-каталог вручную.
     text = BAT.read_text(encoding="utf-8")
-    assert "installer.next-" in text, ".bat обязан собирать в чистый next-каталог"
-    iscc_line = next(ln for ln in text.splitlines() if "%ISCC%" in ln and ".iss" in ln)
-    assert "/O%OUTNEXT%" in iscc_line, "ISCC обязан писать в next-каталог, а не поверх live"
-    seal, promote, iscc = (text.find("seal-output"), text.find("promote-output"),
-                           text.find("%ISCC%"))
-    assert iscc != -1 and seal > iscc and promote > seal
+    build = text.find("installer_gate build-output")
+    assert build != -1
+    assert '"%SETUP_NAME%"' in text and '"%ISCC%"' in text
+    assert "rmdir /s /q \"%OUTNEXT%\"" not in text
 
 
 # ── CLI main() (consumed by the .bat) ───────────────────────────────────────

@@ -154,20 +154,18 @@ if /I "%MODE%"=="internal" (
 )
 if /I "%MODE%"=="internal" set "SETUP_EXE=%OUTNEXT%\KALI-Premium-Setup-%APPVER%-INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.exe"
 
-if exist "%OUTNEXT%" rmdir /s /q "%OUTNEXT%"
-mkdir "%OUTNEXT%"
-"%ISCC%" %DEFINES% "/O%OUTNEXT%" scripts\installer_premium.iss
-if %ERRORLEVEL% NEQ 0 (
+REM H7-5: ISCC, the artifact seal and the promote all happen inside ONE python process
+REM that holds the installer OS-lock and journals every window, so a crash can never
+REM leave the live installer directory half-replaced and two ISCC runs cannot overlap.
+set "MARKER="
+if /I "%MODE%"=="internal" set "MARKER=--internal %APPVER%"
+"%PY%" -m scripts.release.installer_gate build-output "dist_premium" "%SETUP_NAME%" "%ISCC%" "scripts\installer_premium.iss" %MARKER% %DEFINES%
+if errorlevel 1 (
     echo.
-    echo Build FAILED with exit code %ERRORLEVEL%.
-    exit /b %ERRORLEVEL%
-)
-
-if not exist "%SETUP_EXE%" (
-    echo ERROR: expected installer not found: %SETUP_EXE%
-    echo ISCC reported success. Version mismatch between .iss and this script?
+    echo ERROR: installer output build/seal/promote failed.
     exit /b 1
 )
+set "SETUP_EXE=dist_premium\installer\%SETUP_NAME%"
 
 if /I "%MODE%"=="signed" (
     REM ISCC signed the Setup and uninstaller. Re-verify the final Setup with the
@@ -176,17 +174,8 @@ if /I "%MODE%"=="signed" (
     if errorlevel 1 ( echo ERROR: structured signature verify failed for the Setup. & exit /b 1 )
     echo [sign] Setup and uninstaller signed and structurally verified.
 ) else (
-    REM Internal naming was done by ISCC OutputBaseFilename. Just drop the marker.
-    "%PY%" -m scripts.release.installer_gate write-marker "%OUTNEXT%" "%APPVER%"
-    if errorlevel 1 ( echo ERROR: internal marker write failed. & exit /b 1 )
     echo [internal] Setup and slices named INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE.
 )
-
-REM ---- Seal the EXACT artifact set, then promote it rollback-safely --------
-"%PY%" -m scripts.release.installer_gate seal-output "%OUTNEXT%" "%SETUP_NAME%"
-if errorlevel 1 ( echo ERROR: installer output is not an exact artifact set. & exit /b 1 )
-"%PY%" -m scripts.release.installer_gate promote-output "dist_premium" "%OUTNEXT%"
-if errorlevel 1 ( echo ERROR: installer output promote failed. & exit /b 1 )
 
 echo.
 echo ============================================
