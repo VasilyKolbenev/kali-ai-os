@@ -230,6 +230,28 @@ def test_collect_toolchain_uses_real_command_output() -> None:
     assert tc.startswith("python=") and "Python" in tc  # real output, not a label
 
 
+def test_receipt_records_the_asset_manifest_digest(tmp_path: Path) -> None:
+    # H7-4: receipt фиксирует, с какой печатью premium_assets собран артефакт
+    art = tmp_path / "a.bin"
+    art.write_bytes(b"A")
+    receipt = rc.create_receipt(art, git_sha="a" * 40, version="v", dirty=False,
+                                build_kind="k", toolchain="t",
+                                asset_manifest_sha256="c" * 64)
+    assert receipt["asset_manifest_sha256"] == "c" * 64
+    rc.verify_receipt(art, receipt)
+
+
+@pytest.mark.parametrize("bad", ["", "zz" * 32, "c" * 63, 12345])
+def test_receipt_schema_rejects_a_malformed_asset_digest(tmp_path: Path, bad) -> None:
+    art = tmp_path / "a.bin"
+    art.write_bytes(b"A")
+    receipt = rc.create_receipt(art, git_sha="a" * 40, version="v", dirty=False,
+                                build_kind="k", toolchain="t")
+    receipt["asset_manifest_sha256"] = bad
+    with pytest.raises(rc.ReceiptError):
+        rc.verify_receipt(art, receipt)
+
+
 def test_finalize_refuses_a_build_that_started_dirty(tmp_path: Path) -> None:
     # H6-3: дерево могло стать чистым к концу сборки — receipt всё равно запрещён,
     # артефакт собран из непрокоммиченного состояния.

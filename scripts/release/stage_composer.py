@@ -207,9 +207,12 @@ def _copy_inputs(nxt: Path, inputs: dict[str, Path]) -> None:
 
 
 def _verify_receipts(nxt: Path, receipts: dict[str, Path], version: str,
-                     git_sha: str) -> None:
+                     git_sha: str, asset_digest: str) -> None:
     """Both artifacts' receipts must pin the composer's planned commit (== each
-    other, == manifest.git_sha) — no cross-commit backend/desktop mix ships."""
+    other, == manifest.git_sha) — no cross-commit backend/desktop mix ships.
+
+    H7-4: the backend additionally carries the premium_assets seal it was built from;
+    a backend built against assets A can never be staged with assets B."""
     be = rc.require_receipt(nxt / "kali-backend", receipts["backend"],
                             expected_version=version, expected_git_sha=git_sha)
     dt = rc.require_receipt(nxt / "kali-desktop.exe", receipts["desktop"],
@@ -217,6 +220,14 @@ def _verify_receipts(nxt: Path, receipts: dict[str, Path], version: str,
     if be["git_sha"] != dt["git_sha"]:
         raise rc.ReceiptError(
             f"GIT_SHA_MISMATCH: backend {be['git_sha']} != desktop {dt['git_sha']}")
+    built_from = be.get("asset_manifest_sha256")
+    if built_from is None:
+        raise rc.ReceiptError(
+            "ASSET_BINDING_MISSING: the backend receipt does not record which "
+            "premium_assets seal it was built from")
+    if built_from != asset_digest:
+        raise rc.ReceiptError(
+            f"ASSET_BINDING_MISMATCH: backend built from {built_from}, staging {asset_digest}")
 
 
 def _apply_exclusions(nxt: Path, exclusions: list[str]) -> None:
@@ -288,7 +299,7 @@ def compose_stage(dist_premium: Path, *, inputs: dict[str, Path],
                 # exclusions touch models/ and long before the swap.
                 asset_bootstrap.verify_against_snapshot(nxt / "models", snapshot,
                                                         what="staged models")
-                _verify_receipts(nxt, receipts, version, git_sha)
+                _verify_receipts(nxt, receipts, version, git_sha, snapshot.digest)
                 _apply_exclusions(nxt, exclusions)
                 materializer(nxt)
                 stage_policy.assert_tree_reparse_free(nxt)  # zero reparse after materialize

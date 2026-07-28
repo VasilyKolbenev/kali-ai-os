@@ -37,9 +37,15 @@ def _layout(tmp_path: Path, *, with_receipts: bool = True) -> tuple[Path, Path, 
     (repo / "scripts").mkdir(parents=True)
     (repo / "scripts" / "install-webview2.ps1").write_bytes(b"PS")
     if with_receipts:
+        import hashlib
+
+        from scripts.release import asset_bootstrap as _ab
+        _sot, _manifest = _ab.sot_paths(dist)
         rc.write_receipt(backend, dist / "kali-backend.BUILD_RECEIPT.json",
                          git_sha="a" * 40, version="1.0.0-rc3", dirty=False,
-                         build_kind="pyinstaller-onedir", toolchain="py3.12")
+                         build_kind="pyinstaller-onedir", toolchain="py3.12",
+                         asset_manifest_sha256=hashlib.sha256(
+                             _manifest.read_bytes()).hexdigest())
         rc.write_receipt(tauri / "kali-desktop.exe",
                          tauri / "kali-desktop.exe.BUILD_RECEIPT.json",
                          git_sha="a" * 40, version="1.0.0-rc3", dirty=False,

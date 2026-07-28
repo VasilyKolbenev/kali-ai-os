@@ -27,13 +27,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -119,38 +122,124 @@ def _stage_exact_subtree(build_dir: Path, work: Path) -> None:
     shutil.copy2(build_dir / "LICENSE.txt", work / "LICENSE.txt")
 
 
-def replace_owned_subtree(build_dir: Path, dist_premium: Path, *, token: str = "1") -> Path:
-    """Transactionally REPLACE models/ffmpeg with an exact, verified subtree.
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_JOURNAL_NAME = "ffmpeg.journal.json"
+_PHASES = ("prepare", "backed_up", "promoted", "sealed")
 
-    The replacement is assembled and proven in a scratch dir that is NOT under the
-    hashed models/ tree, then swapped in. Any failure restores the previous subtree,
-    and the caller only re-seals the manifest after this returns."""
-    target = install_target(dist_premium)
-    scratch = dist_premium / "premium_assets"
-    work = scratch / f"ffmpeg.next-{token}"
-    backup = scratch / f"ffmpeg.backup-{token}"
+
+def _scratch(dist_premium: Path) -> Path:
+    """Transaction scratch space — a SIBLING of models/, never inside the hashed tree."""
+    return dist_premium / "premium_assets"
+
+
+def _journal_path(dist_premium: Path) -> Path:
+    return _scratch(dist_premium) / _JOURNAL_NAME
+
+
+def _derived(dist_premium: Path, token: str) -> tuple[Path, Path, Path]:
+    """(work, backup, target) DERIVED from a validated token — never read from disk."""
+    if not _TOKEN_RE.match(token):
+        raise SystemExit(f"FFMPEG_TXN_TOKEN: refusing unsafe transaction token {token!r}")
+    scratch = _scratch(dist_premium)
+    return (scratch / f"ffmpeg.next-{token}", scratch / f"ffmpeg.backup-{token}",
+            install_target(dist_premium))
+
+
+def _write_journal(dist_premium: Path, phase: str, token: str) -> None:
+    asset_bootstrap.write_manifest_atomic(
+        _journal_path(dist_premium), {"schema": 1, "phase": phase, "token": token})
+
+
+def recover_ffmpeg_transaction(dist_premium: Path) -> str:
+    """Finish or roll back an interrupted FFmpeg subtree transaction (H7-3).
+
+    Runs BEFORE any new operation. Until the new manifest is sealed, the seal on disk
+    still describes the OLD subtree, so every pre-seal phase rolls BACK to last-good;
+    only ``sealed`` rolls forward. Nothing is deleted on an unreadable journal."""
+    journal = _journal_path(dist_premium)
+    if not journal.is_file():
+        return "nothing"
+    try:
+        state = json.loads(journal.read_text(encoding="utf-8"))
+        phase, token = state["phase"], state["token"]
+        schema = state["schema"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+        raise SystemExit(f"FFMPEG_TXN_JOURNAL: unreadable journal (fail-closed): {e}") from e
+    if schema != 1 or phase not in _PHASES or not isinstance(token, str):
+        raise SystemExit(f"FFMPEG_TXN_JOURNAL: unknown journal state {state!r}")
+    work, backup, target = _derived(dist_premium, token)
+    if phase == "sealed":
+        # the manifest already describes the promoted subtree — keep it
+        shutil.rmtree(backup, ignore_errors=True)
+        action = "kept_new"
+    else:
+        # prepare / backed_up / promoted: the seal still describes the OLD subtree
+        shutil.rmtree(work, ignore_errors=True)
+        if backup.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            os.rename(backup, target)
+            action = "restored_backup"
+        else:
+            action = "nothing_to_restore"
+    journal.unlink()
+    return action
+
+
+def replace_owned_subtree(build_dir: Path, dist_premium: Path, *, token: str = "1",
+                          crash_hook: Callable[[str], None] | None = None) -> Path:
+    """Crash-safe transactional replacement of models/ffmpeg (H7-3).
+
+    Journalled at every window; the backup survives until the caller has sealed AND
+    verified the new manifest, so an interruption anywhere leaves the next run able to
+    restore last-good. ``crash_hook`` is a test seam fired right after each journal
+    write so a child process can die exactly inside a chosen window."""
+    work, backup, target = _derived(dist_premium, token)
     for leftover in (work, backup):
         if leftover.exists():
             shutil.rmtree(leftover)
     _stage_exact_subtree(build_dir, work)
     assert_exact_ffmpeg_subtree(work)
+
+    def _mark(phase: str) -> None:
+        _write_journal(dist_premium, phase, token)
+        if crash_hook is not None:
+            crash_hook(phase)
+
+    _mark("prepare")
     promoted = False
     try:
         if target.exists():
             os.rename(target, backup)
+        _mark("backed_up")
         os.rename(work, target)
         promoted = True
+        _mark("promoted")
         assert_exact_ffmpeg_subtree(target)
     except BaseException:
         if promoted and target.exists():
-            os.rename(target, work)  # undo the promotion
-        if backup.exists() and not target.exists():
+            shutil.rmtree(target)
+        if backup.is_dir() and not target.exists():
             os.rename(backup, target)  # restore the last-good subtree
         shutil.rmtree(work, ignore_errors=True)
+        _journal_path(dist_premium).unlink(missing_ok=True)
         raise
-    shutil.rmtree(backup, ignore_errors=True)
     print(f"Replaced models/ffmpeg with the exact LGPL set -> {target}")
     return target
+
+
+def _finish_transaction(dist_premium: Path, token: str,
+                        crash_hook: Callable[[str], None] | None = None) -> None:
+    """Seal the new manifest, prove it, and only THEN drop the backup."""
+    _work, backup, _target = _derived(dist_premium, token)
+    asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE, _held=True)
+    _write_journal(dist_premium, "sealed", token)
+    if crash_hook is not None:
+        crash_hook("sealed")
+    sot, manifest = asset_bootstrap.sot_paths(dist_premium)
+    asset_bootstrap.verify_sot_integrity(sot, manifest)  # the seal must hold before cleanup
+    shutil.rmtree(backup, ignore_errors=True)
+    _journal_path(dist_premium).unlink(missing_ok=True)
 
 
 # The ONLY subtree of the premium_assets SoT this script is authorized to write.
@@ -183,7 +272,8 @@ def require_sot(dist_premium: Path) -> Path:
     return sot
 
 
-def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
+def install_into_sot(build_dir: Path, dist_premium: Path, *, token: str = "1",
+                     crash_hook: Callable[[str], None] | None = None) -> Path:
     """Install the verified LGPL set into the SoT and re-seal its integrity manifest.
 
     The SoT is verified BEFORE it is touched: this script owns ``models/ffmpeg`` and
@@ -191,12 +281,13 @@ def install_into_sot(build_dir: Path, dist_premium: Path) -> Path:
     being laundered into a fresh seal. The whole flow runs under the shared asset lock,
     and the seal is re-written only after the subtree swap succeeded."""
     with asset_bootstrap.asset_lock(dist_premium):
+        recover_ffmpeg_transaction(dist_premium)  # H7-3: finish/roll back BEFORE anything
         sot = require_sot(dist_premium)
         asset_bootstrap.verify_unowned_unchanged(dist_premium, owned=OWNED_SUBTREE,
                                                  _held=True)
-        target = replace_owned_subtree(build_dir, dist_premium)
-        asset_bootstrap.refresh_asset_manifest(dist_premium, owned=OWNED_SUBTREE,
-                                               _held=True)
+        target = replace_owned_subtree(build_dir, dist_premium, token=token,
+                                       crash_hook=crash_hook)
+        _finish_transaction(dist_premium, token, crash_hook)
         print(f"SoT integrity manifest re-sealed for {sot}")
         return target
 

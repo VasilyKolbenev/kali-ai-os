@@ -53,9 +53,13 @@ def artifact_sha256(artifact: Path) -> str:
 
 
 def create_receipt(artifact: Path, *, git_sha: str, version: str, dirty: bool,
-                   build_kind: str, toolchain: str) -> dict[str, Any]:
-    """Build a receipt dict for ``artifact`` (hashes its current content)."""
-    return {
+                   build_kind: str, toolchain: str,
+                   asset_manifest_sha256: str | None = None) -> dict[str, Any]:
+    """Build a receipt dict for ``artifact`` (hashes its current content).
+
+    ``asset_manifest_sha256`` binds the artifact to the premium_assets seal it was
+    built from (H7-4) — the composer refuses a backend built against other assets."""
+    receipt = {
         "git_sha": git_sha,
         "version": version,
         "dirty": dirty,
@@ -63,6 +67,9 @@ def create_receipt(artifact: Path, *, git_sha: str, version: str, dirty: bool,
         "toolchain": toolchain,
         "sha256": artifact_sha256(artifact),
     }
+    if asset_manifest_sha256 is not None:
+        receipt["asset_manifest_sha256"] = asset_manifest_sha256
+    return receipt
 
 
 def write_receipt(artifact: Path, receipt_path: Path, **fields: Any) -> dict[str, Any]:
@@ -91,6 +98,11 @@ def _validate_schema(receipt: dict[str, Any]) -> None:
             raise ReceiptError(f"RECEIPT_SCHEMA: {field} must be a non-empty string")
     if not isinstance(receipt["dirty"], bool):
         raise ReceiptError("RECEIPT_SCHEMA: 'dirty' must be a bool")
+    asset_digest = receipt.get("asset_manifest_sha256")
+    if asset_digest is not None and not (
+            isinstance(asset_digest, str) and len(asset_digest) == 64
+            and _HEX_RE.match(asset_digest)):
+        raise ReceiptError("RECEIPT_SCHEMA: asset_manifest_sha256 must be 64 hex chars")
 
 
 def verify_receipt(artifact: Path, receipt: dict[str, Any], *,
@@ -198,7 +210,8 @@ def collect_toolchain(commands: list[tuple[str, list[str]]]) -> str:
 
 def finalize_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, version: str,
                            build_kind: str, toolchain: str, head_before: str,
-                           clean_before: bool) -> dict[str, Any]:
+                           clean_before: bool,
+                           asset_manifest_sha256: str | None = None) -> dict[str, Any]:
     """Write a BUILD_RECEIPT after a successful build, refusing if HEAD moved during it
     (the artifact then would not match the committed source).
 
@@ -211,7 +224,9 @@ def finalize_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, ve
     if head_after != head_before:
         raise ReceiptError(f"HEAD_MOVED: {head_before} -> {head_after} during the build")
     receipt = create_receipt(artifact, git_sha=head_after, version=version,
-                             dirty=not clean_after, build_kind=build_kind, toolchain=toolchain)
+                             dirty=not clean_after, build_kind=build_kind,
+                             toolchain=toolchain,
+                             asset_manifest_sha256=asset_manifest_sha256)
     receipt_path.write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8"
     )

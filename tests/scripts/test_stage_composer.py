@@ -220,11 +220,15 @@ def _mk_inputs(tmp_path: Path) -> dict:
 
 
 def _mk_receipts(tmp_path: Path, inputs: dict, version: str) -> dict:
+    import hashlib
     rd = tmp_path / "receipts"
     rd.mkdir()
     be = rd / "backend.receipt.json"
+    # H7-4: a real backend receipt records the premium_assets seal it was built from
+    asset_digest = hashlib.sha256(inputs["assets_manifest"].read_bytes()).hexdigest()
     rc.write_receipt(inputs["backend"], be, git_sha="a" * 40, version=version,
-                     dirty=False, build_kind="pyinstaller-onedir", toolchain="py3.12")
+                     dirty=False, build_kind="pyinstaller-onedir", toolchain="py3.12",
+                     asset_manifest_sha256=asset_digest)
     dt = rd / "desktop.receipt.json"
     rc.write_receipt(inputs["desktop_exe"], dt, git_sha="a" * 40, version=version,
                      dirty=False, build_kind="tauri-release", toolchain="rust")
@@ -372,6 +376,41 @@ def test_compose_refuses_while_the_assets_are_locked(tmp_path: Path) -> None:
     _assert_last_good_intact(dist)
 
 
+# ── H7-4: стейдж принимает только backend, собранный с ЭТИМИ ассетами ───────
+def test_compose_rejects_a_backend_built_from_other_assets(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    _last_good(dist)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    # backend собран с ассетами A, стейджим ассеты B (манифест пере-запечатан)
+    (inputs["assets"] / "model.bin").write_bytes(b"ASSETS-B")
+    inputs["assets_manifest"].write_text(
+        json.dumps({"entries": stage_policy.file_content_hashes(inputs["assets"])}),
+        encoding="utf-8")
+    with pytest.raises(rc.ReceiptError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "ASSET_BINDING_MISMATCH" in str(exc.value)
+    _assert_last_good_intact(dist)
+
+
+def test_compose_rejects_a_backend_receipt_without_asset_binding(tmp_path: Path) -> None:
+    dist = _dist(tmp_path)
+    _last_good(dist)
+    inputs = _mk_inputs(tmp_path)
+    receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    stripped = json.loads(receipts["backend"].read_text(encoding="utf-8"))
+    stripped.pop("asset_manifest_sha256")
+    receipts["backend"].write_text(json.dumps(stripped), encoding="utf-8")
+    with pytest.raises(rc.ReceiptError) as exc:
+        sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
+                         git_sha="a" * 40, mode="internal", exclusions=[],
+                         materializer=lambda p: None, signer=lambda p, m: None, token="1")
+    assert "ASSET_BINDING_MISSING" in str(exc.value)
+    _assert_last_good_intact(dist)
+
+
 def test_compose_pins_the_digest_of_the_bytes_it_verified(tmp_path: Path) -> None:
     import hashlib
     dist = _dist(tmp_path)
@@ -450,8 +489,8 @@ def test_compose_requires_assets_manifest(tmp_path: Path) -> None:
     from scripts.release import asset_bootstrap as ab
     dist = _dist(tmp_path)
     inputs = _mk_inputs(tmp_path)
-    del inputs["assets_manifest"]  # раньше это молча означало «не проверять SoT»
     receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    del inputs["assets_manifest"]  # раньше это молча означало «не проверять SoT»
     with pytest.raises(ab.BootstrapError) as exc:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
                          git_sha="a" * 40, mode="internal", exclusions=[],
@@ -464,8 +503,8 @@ def test_compose_rejects_missing_assets_manifest_file(tmp_path: Path) -> None:
     from scripts.release import asset_bootstrap as ab
     dist = _dist(tmp_path)
     inputs = _mk_inputs(tmp_path)
-    inputs["assets_manifest"].unlink()
     receipts = _mk_receipts(tmp_path, inputs, "1.0.0-rc3")
+    inputs["assets_manifest"].unlink()
     with pytest.raises(ab.BootstrapError) as exc:
         sc.compose_stage(dist, inputs=inputs, receipts=receipts, version="1.0.0-rc3",
                          git_sha="a" * 40, mode="internal", exclusions=[],

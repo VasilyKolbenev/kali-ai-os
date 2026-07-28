@@ -210,13 +210,24 @@ def refresh_asset_manifest(dist_premium: Path, *, owned: str, _held: bool = Fals
         return _refresh_asset_manifest(dist_premium, owned=owned)
 
 
+def write_manifest_atomic(manifest_path: Path, payload: dict[str, Any]) -> None:
+    """Write the SoT manifest atomically: temp + flush + fsync + os.replace (H7-3).
+
+    A torn manifest is worse than a stale one — every gate downstream treats it as the
+    truth about what the SoT contains, so it must never be observable half-written."""
+    tmp = manifest_path.with_name(manifest_path.name + ".tmp")
+    data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    with tmp.open("wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, manifest_path)
+
+
 def _refresh_asset_manifest(dist_premium: Path, *, owned: str) -> Path:
     _verify_unowned_unchanged(dist_premium, owned=owned)
     sot, manifest_path = sot_paths(dist_premium)
-    manifest_path.write_text(
-        json.dumps({"entries": _dir_hashes(sot)}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_manifest_atomic(manifest_path, {"entries": _dir_hashes(sot)})
     return manifest_path
 
 

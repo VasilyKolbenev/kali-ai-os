@@ -55,6 +55,20 @@ def missing_lgpl_files(lgpl_dir: Path) -> list[str]:
     return [name for name in required if not (lgpl_dir / name).is_file()]
 
 
+def assert_snapshot_covers_lgpl_set(snapshot: "ab.AssetSnapshot") -> None:
+    """The validated snapshot must pin every DLL the swap is about to copy (H7-4).
+
+    Binding the build to the snapshot is what lets the composer prove the backend was
+    built from the SAME premium_assets the stage ships — a swap that copied whatever
+    happened to be on disk could not be tied to anything."""
+    required = [f"ffmpeg/{soname}.dll" for soname in _FFMPEG_SONAMES] + ["ffmpeg/LICENSE.txt"]
+    missing = [rel for rel in required if rel not in snapshot.entries]
+    if missing:
+        raise BuildError(
+            f"LGPL_SET_UNPINNED: the premium_assets snapshot does not pin {missing}. "
+            "Re-run `python scripts/fetch_lgpl_ffmpeg.py` so the SoT seal covers them.")
+
+
 def assert_lgpl_set_available() -> None:
     """Preflight the av.libs swap BEFORE the build, not after it (H4/D2).
 
@@ -243,7 +257,17 @@ _FFMPEG_SONAMES = (
 )
 
 
-def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def swap_avlibs_to_lgpl(out_dir: Path, *,
+                        snapshot: "ab.AssetSnapshot | None" = None) -> list[str]:
     """Replace PyAV's vendored GPL FFmpeg in av.libs with the LGPL build.
 
     KALI's proprietary installer must not ship GPL codecs, but PyAV wheels
@@ -263,6 +287,8 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
 
     Args:
         out_dir: The PyInstaller onedir output (contains ``_internal/av.libs``).
+        snapshot: The validated premium_assets snapshot this build is bound to; every
+            copied DLL must match it byte-for-byte (H7-4).
 
     Returns:
         Human-readable actions taken (empty if av.libs is absent).
@@ -278,6 +304,13 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
             "run scripts/fetch_lgpl_ffmpeg.py first; shipping the GPL av.libs "
             "is not an option."
         )
+    if snapshot is not None:  # H7-4: copy exactly what the validated snapshot pins
+        drifted = [name for name in [f"{s}.dll" for s in _FFMPEG_SONAMES] + ["LICENSE.txt"]
+                   if _sha256_file(lgpl_dir / name) != snapshot.entries.get(f"ffmpeg/{name}")]
+        if drifted:
+            raise SystemExit(
+                f"LGPL_SET_DRIFTED: {drifted} do not match the asset snapshot this build "
+                "is bound to — the SoT changed under the build.")
 
     actions: list[str] = []
     # Map soname -> mangled filename before deleting anything.
@@ -306,9 +339,25 @@ def swap_avlibs_to_lgpl(out_dir: Path) -> list[str]:
 
 
 def main(*, runner: Runner = subprocess.run) -> int:
+    # H7-4: the whole build runs under the SHARED asset lock, reading ONE validated
+    # snapshot — nothing may swap the SoT out from under a 20-minute build, and the
+    # receipt records exactly which premium_assets seal the artifact was built from.
+    try:
+        with ab.asset_lock(DIST):
+            return _build(runner=runner)
+    except (BuildError, ab.BootstrapError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
+def _build(*, runner: Runner) -> int:
     try:
         assert_lgpl_set_available()  # H4/D2: refuse before the expensive build
-    except BuildError as e:
+        _sot, manifest_path = ab.sot_paths(DIST)
+        snapshot = ab.load_asset_snapshot(manifest_path)
+        ab.verify_against_snapshot(_sot, snapshot, what="premium_assets SoT")
+        assert_snapshot_covers_lgpl_set(snapshot)
+    except (BuildError, ab.BootstrapError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     cmd = [
@@ -378,7 +427,7 @@ def main(*, runner: Runner = subprocess.run) -> int:
         return 1
     # Swap PyAV's vendored GPL FFmpeg for the LGPL build (deleting alone breaks
     # av._core — see swap_avlibs_to_lgpl docstring).
-    actions = swap_avlibs_to_lgpl(out_dir)
+    actions = swap_avlibs_to_lgpl(out_dir, snapshot=snapshot)
     print(f"av.libs LGPL swap: {len(actions)} actions")
     total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
     print(f"\nSuccess! Built Premium backend at {out_dir}")
@@ -396,7 +445,8 @@ def main(*, runner: Runner = subprocess.run) -> int:
     receipt_path = DIST / f"{NAME}.BUILD_RECEIPT.json"
     rc.finalize_build_receipt(out_dir, receipt_path, repo=ROOT, version=version,
                               build_kind="pyinstaller-onedir", toolchain=toolchain,
-                              head_before=head_before, clean_before=clean_before)
+                              head_before=head_before, clean_before=clean_before,
+                              asset_manifest_sha256=snapshot.digest)
     print(f"BUILD_RECEIPT written: {receipt_path}")
     return 0
 

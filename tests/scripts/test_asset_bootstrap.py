@@ -503,6 +503,121 @@ def test_ffmpeg_failed_update_preserves_last_good_subtree_and_manifest(
     assert manifest.read_bytes() == before_manifest            # печать не тронута
 
 
+# ── H7-3: crash-safe транзакция (process-level, все окна журнала) ───────────
+_CRASH_CHILD = Path(__file__).resolve().parent / "_ffmpeg_crash_child.py"
+
+
+def _sealed_stale(tmp_path: Path) -> tuple[Path, Path, bytes, set[str]]:
+    """dist с запечатанным last-good поддеревом (мусорным, но согласованным)."""
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    target = _seed_stale_subtree(dist)
+    ab.refresh_asset_manifest(dist, owned="ffmpeg")
+    _sot, manifest = ab.sot_paths(dist)
+    return dist, target, manifest.read_bytes(), {p.name for p in target.iterdir()}
+
+
+@pytest.mark.parametrize("phase", ["prepare", "backed_up", "promoted", "sealed"])
+def test_ffmpeg_transaction_survives_a_crash_in_every_window(tmp_path: Path, phase: str) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+    proc = subprocess.run([sys.executable, str(_CRASH_CHILD), str(dist), str(build), phase],
+                          capture_output=True, text=True)
+    assert proc.returncode != 0, f"дочерний процесс обязан был умереть: {proc.stdout}"
+
+    assert fl.recover_ffmpeg_transaction(dist) != "nothing"  # журнал был, recovery сработал
+    sot, manifest = ab.sot_paths(dist)
+    ab.verify_sot_integrity(sot, manifest)  # состояние согласовано в ЛЮБОМ случае
+    if phase == "sealed":  # печать уже описывала новое поддерево → катимся вперёд
+        assert {p.name for p in target.iterdir()} == set(fl.EXPECTED_DLLS) | {"LICENSE.txt"}
+    else:  # печать ещё описывала старое → откат к last-good
+        assert {p.name for p in target.iterdir()} == before_names
+        assert manifest.read_bytes() == before_manifest
+
+
+def test_recovery_runs_before_a_new_transaction(tmp_path: Path) -> None:
+    # Различающий тест: следующий запуск обязан ВОССТАНОВИТЬ last-good ДО того, как
+    # начнёт свою транзакцию. Если он этого не сделает, очистка leftover'ов снесёт
+    # backup — и упавшая новая транзакция оставит SoT вообще без поддерева.
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+    subprocess.run([sys.executable, str(_CRASH_CHILD), str(dist), str(build), "backed_up"],
+                   capture_output=True, text=True)
+    assert not target.exists()  # поддерево уехало в backup, журнал на backed_up
+    broken = tmp_path / "broken-build"
+    broken.mkdir()  # без bin/ → новая транзакция упадёт на сборке точного набора
+    with pytest.raises(SystemExit):
+        fl.install_into_sot(broken, dist)
+    assert target.is_dir() and {p.name for p in target.iterdir()} == before_names
+    sot, manifest = ab.sot_paths(dist)
+    assert manifest.read_bytes() == before_manifest
+    ab.verify_sot_integrity(sot, manifest)
+
+
+def test_next_run_completes_the_update_after_a_crash(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, _before_manifest, _before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+    subprocess.run([sys.executable, str(_CRASH_CHILD), str(dist), str(build), "promoted"],
+                   capture_output=True, text=True)
+    fl.install_into_sot(build, dist)
+    sot, manifest = ab.sot_paths(dist)
+    ab.verify_sot_integrity(sot, manifest)
+    assert {p.name for p in target.iterdir()} == set(fl.EXPECTED_DLLS) | {"LICENSE.txt"}
+
+
+def test_failed_manifest_write_keeps_last_good_recoverable(monkeypatch, tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
+    build = _fake_lgpl_build(tmp_path)
+
+    def _boom(*a, **k):  # noqa: ANN002, ANN003
+        raise OSError("disk full while sealing")
+
+    # ломаем именно запечатывание, не запись журнала (иначе тест проверял бы не то)
+    monkeypatch.setattr(ab, "refresh_asset_manifest", _boom)
+    with pytest.raises(OSError):
+        fl.install_into_sot(build, dist)
+    monkeypatch.undo()
+    assert fl.recover_ffmpeg_transaction(dist) == "restored_backup"
+    sot, manifest = ab.sot_paths(dist)
+    assert {p.name for p in target.iterdir()} == before_names
+    assert manifest.read_bytes() == before_manifest
+    ab.verify_sot_integrity(sot, manifest)
+
+
+def test_manifest_is_written_atomically(monkeypatch, tmp_path: Path) -> None:
+    # H7-3: сбой на подмене не должен оставить усечённый манифест
+    manifest = tmp_path / "PREMIUM_ASSETS.sha256.json"
+    manifest.write_text('{"entries": {"old.bin": "%s"}}' % ("a" * 64), encoding="utf-8")
+    before = manifest.read_bytes()
+
+    def _boom(*a, **k):  # noqa: ANN002, ANN003
+        raise OSError("crash between write and replace")
+
+    monkeypatch.setattr(ab.os, "replace", _boom)
+    with pytest.raises(OSError):
+        ab.write_manifest_atomic(manifest, {"entries": {"new.bin": "b" * 64}})
+    assert manifest.read_bytes() == before  # старый манифест цел
+
+
+@pytest.mark.parametrize("state", [
+    '{ not json', '{"schema": 2, "phase": "prepare", "token": "1"}',
+    '{"schema": 1, "phase": "WAT", "token": "1"}',
+    '{"schema": 1, "phase": "prepare", "token": "..\\\\..\\\\precious"}',
+    '{"schema": 1, "phase": "prepare"}',
+])
+def test_recovery_fails_closed_on_a_bad_journal(tmp_path: Path, state: str) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, _before_manifest, before_names = _sealed_stale(tmp_path)
+    (dist / "premium_assets" / "ffmpeg.journal.json").write_text(state, encoding="utf-8")
+    with pytest.raises(SystemExit):
+        fl.recover_ffmpeg_transaction(dist)
+    assert {p.name for p in target.iterdir()} == before_names  # ничего не удалено
+
+
 # ── H6-2: один asset-lock на fetcher / bootstrap / composer ─────────────────
 def test_asset_lock_blocks_a_second_holder(tmp_path: Path) -> None:
     dist = tmp_path / "dist_premium"

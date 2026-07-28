@@ -115,12 +115,16 @@ def test_backend_assert_output_accepts_real_onedir(tmp_path: Path) -> None:
 
 
 def _sot_with_lgpl_set(dist: Path) -> Path:
-    """Готовый premium_assets SoT с полным LGPL-набором (предусловие билда)."""
+    """Готовый ЗАПЕЧАТАННЫЙ premium_assets SoT с полным LGPL-набором."""
+    from scripts.release import asset_bootstrap as _ab
+    from scripts.release import stage_policy
     lgpl = dist / "premium_assets" / "models" / "ffmpeg"
     lgpl.mkdir(parents=True)
     for soname in _BB._FFMPEG_SONAMES:
         (lgpl / f"{soname}.dll").write_bytes(b"LGPL")
     (lgpl / "LICENSE.txt").write_text("LESSER GENERAL PUBLIC LICENSE", encoding="utf-8")
+    sot, manifest = _ab.sot_paths(dist)  # H7-4: билд читает запечатанный снимок
+    _ab.write_manifest_atomic(manifest, {"entries": stage_policy.file_content_hashes(sot)})
     return lgpl
 
 
@@ -149,6 +153,51 @@ def test_backend_assert_lgpl_set_names_the_bootstrap_step(monkeypatch, tmp_path:
         _BB.assert_lgpl_set_available()
     message = str(exc.value)
     assert "asset_bootstrap" in message and "fetch_lgpl_ffmpeg" in message
+
+
+def test_backend_swap_refuses_dlls_that_drifted_from_the_snapshot(monkeypatch,
+                                                                  tmp_path: Path) -> None:
+    # H7-4: копируем ровно то, что пинит снимок, — иначе SoT подменили под сборкой
+    from scripts.release import asset_bootstrap as _ab
+    dist = tmp_path / "dist_premium"
+    lgpl = _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    _sot, manifest = _ab.sot_paths(dist)
+    snapshot = _ab.load_asset_snapshot(manifest)
+    (lgpl / f"{_BB._FFMPEG_SONAMES[0]}.dll").write_bytes(b"SWAPPED-UNDER-THE-BUILD")
+    out = tmp_path / "bundle"
+    (out / "_internal" / "av.libs").mkdir(parents=True)
+    (out / "_internal" / "av.libs" / "x.dll").write_bytes(b"X")
+    with pytest.raises(SystemExit) as exc:
+        _BB.swap_avlibs_to_lgpl(out, snapshot=snapshot)
+    assert "LGPL_SET_DRIFTED" in str(exc.value)
+
+
+def test_backend_build_holds_the_asset_lock(monkeypatch, tmp_path: Path) -> None:
+    # H7-4: сборка обязана читать SoT под общим замком — иначе fetcher подменит DLL
+    from scripts.release import asset_bootstrap as _ab
+    dist = tmp_path / "dist_premium"
+    _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    _pretend_clean(monkeypatch, _BB)
+    runner = _Runner(returncode=0)
+    with _ab.asset_lock(dist):  # замок уже держит кто-то другой
+        assert _BB.main(runner=runner) == 1
+    assert runner.calls == [], "сборка не должна стартовать без замка на ассеты"
+
+
+def test_backend_assert_snapshot_covers_lgpl_set(monkeypatch, tmp_path: Path) -> None:
+    from scripts.release import asset_bootstrap as _ab
+    dist = tmp_path / "dist_premium"
+    _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    _sot, manifest = _ab.sot_paths(dist)
+    snapshot = _ab.load_asset_snapshot(manifest)
+    _BB.assert_snapshot_covers_lgpl_set(snapshot)  # не поднимает
+    thin = _ab.AssetSnapshot(digest="a" * 64, entries={"ffmpeg/LICENSE.txt": "b" * 64})
+    with pytest.raises(_BB.BuildError) as exc:
+        _BB.assert_snapshot_covers_lgpl_set(thin)
+    assert "LGPL_SET_UNPINNED" in str(exc.value)
 
 
 def test_backend_assert_lgpl_set_accepts_complete_sot(monkeypatch, tmp_path: Path) -> None:
