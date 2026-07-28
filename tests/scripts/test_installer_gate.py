@@ -364,6 +364,70 @@ def test_manifest_that_is_a_reparse_point_is_refused(tmp_path: Path) -> None:
     assert "ARTIFACT_MANIFEST_REPARSE" in str(exc.value)
 
 
+def test_dangling_reparse_point_is_refused(tmp_path: Path) -> None:
+    # H8-R1: exists() СЛЕДУЕТ по ссылке — висячий junction проскакивал именно ту
+    # проверку, которая для него и написана.
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    target = tmp_path / "gone"
+    target.mkdir()
+    _mklink("/J", dist / "installer", target)
+    target.rmdir()
+    assert not (dist / "installer").exists()  # висячая ссылка
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_physical_output(dist, dist / "installer")
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_recovery_refuses_a_reparse_redirected_tree(tmp_path: Path) -> None:
+    # H8-R2: recovery — тоже мутирующий диск шаг; она обязана отказать, а не rmtree'ить
+    # по ссылке и ронять сырой OSError мимо границы исключений.
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (dist / "installer.backup-1").mkdir()
+    _mklink("/J", dist / "installer", outside)
+    (dist / "installer.journal.json").write_text(
+        '{"schema": 1, "phase": "backed_up", "token": "1"}', encoding="utf-8")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.recover_installer_output(dist)
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+    assert (dist / "installer.backup-1").is_dir()  # last-good не тронут
+
+
+def test_build_output_checks_containment_before_recovery(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (dist / "installer.backup-1").mkdir()
+    _mklink("/J", dist / "installer", outside)
+    (dist / "installer.journal.json").write_text(
+        '{"schema": 1, "phase": "backed_up", "token": "1"}', encoding="utf-8")
+    calls = []
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.build_output(dist, setup_name=_SETUP, **_INTERNAL_ARGS,
+                        iscc_cmd=["iscc", "x.iss"], runner=lambda *a, **k: calls.append(a))
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+    assert calls == [] and (dist / "installer.backup-1").is_dir()
+
+
+def test_verified_mark_is_re_proven_before_dropping_the_backup(tmp_path: Path) -> None:
+    # H8-R3: терминальная отметка «verified» — тоже лишь отметка
+    dist, final = _last_good_installer(tmp_path)
+    before = {p.name: p.read_bytes() for p in final.iterdir()}
+    backup = dist / "installer.backup-1"
+    backup.mkdir()
+    for name, data in before.items():
+        (backup / name).write_bytes(data)
+    (final / "corrupt-extra.bin").write_bytes(b"NOT-IN-THE-MANIFEST")
+    (dist / "installer.journal.json").write_text(
+        '{"schema": 1, "phase": "verified", "token": "1"}', encoding="utf-8")
+    assert ig.recover_installer_output(dist) == "restored_backup"
+    assert {p.name: p.read_bytes() for p in final.iterdir()} == before
+
+
 def test_physical_chain_accepts_a_clean_tree(tmp_path: Path) -> None:
     dist = tmp_path / "dist_premium"
     (dist / "installer").mkdir(parents=True)

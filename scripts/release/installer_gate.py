@@ -447,7 +447,10 @@ def assert_physical_chain(root: Path, target: Path) -> None:
     current = root
     for part in ("", *relative.parts):
         current = current / part if part else current
-        if current.exists() and stage_policy.is_reparse_point(current):
+        # NO exists() guard: exists() FOLLOWS the link, so a DANGLING junction would be
+        # skipped by the very check that is meant to catch it. is_reparse_point already
+        # answers False for a path that is not there at all.
+        if stage_policy.is_reparse_point(current):
             raise InstallerGateError(f"OUTPUT_REPARSE_IN_CHAIN: {current}")
 
 
@@ -596,17 +599,23 @@ def recover_installer_output(dist_premium: Path) -> str:
     if schema != 1 or phase not in _INSTALLER_PHASES or not isinstance(token, str):
         raise InstallerGateError(f"INSTALLER_TXN_JOURNAL: unknown state {state!r}")
     next_dir, backup, final = _installer_paths(dist_premium, token)
+    # Containment BEFORE recovery touches anything: rolling back inside a
+    # reparse-redirected tree would delete and rename at the substituted destination,
+    # and rmtree on the reparse point itself leaks a raw OSError past this boundary.
+    for candidate in (next_dir, backup, final):
+        assert_physical_output(dist_premium, candidate)
     new_state_ok = False
-    if phase == "promoted":
-        # "promoted" means the rename happened, NOT that the promoted directory is sound.
-        # Re-prove the artifact manifest before dropping the last-good backup.
+    if phase in ("promoted", "verified"):
+        # A journal MARK is not proof — neither "promoted" (the rename happened) nor
+        # "verified" (a proof once ran). Re-prove the directory that is on disk NOW
+        # before the last-good backup is dropped.
         try:
             assert_physical_output(dist_premium, final)
             load_installer_manifest(final)
             new_state_ok = True
         except InstallerGateError:
             new_state_ok = False
-    if phase == "verified" or new_state_ok:
+    if new_state_ok:
         shutil.rmtree(backup, ignore_errors=True)
         action = "kept_new"
     else:
@@ -667,12 +676,13 @@ def build_output(dist_premium: Path, *, mode: object, setup_name: str,
     assert_output_contract(mode, setup_name, internal_version=internal_version,
                            verify_thumbprint=verify_thumbprint)
     with installer_lock(dist_premium):
-        recover_installer_output(dist_premium)  # BEFORE any clean/create
         next_dir, backup, final = _installer_paths(dist_premium, token)
         # H8-1: a junction anywhere from dist_premium down would silently redirect the
-        # build, the seal and the promote outside the tree — check before touching disk.
+        # build, the seal and the promote outside the tree. This runs BEFORE recovery,
+        # which is itself a disk-mutating step.
         for candidate in (next_dir, backup, final):
             assert_physical_output(dist_premium, candidate)
+        recover_installer_output(dist_premium)  # BEFORE any clean/create
         for leftover in (next_dir, backup):
             if leftover.exists():
                 shutil.rmtree(leftover)
