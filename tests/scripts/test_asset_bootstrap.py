@@ -571,6 +571,63 @@ def test_intact_state_after_the_sealed_mark_rolls_forward(tmp_path: Path) -> Non
     assert {p.name for p in target.iterdir()} == set(fl.EXPECTED_DLLS) | {"LICENSE.txt"}
 
 
+# ── H9-2: физическая граница ассетов ────────────────────────────────────────
+def _link(kind: str, link: Path, target: Path) -> None:
+    args = ["cmd", "/c", "mklink"] + ([kind] if kind else []) + [str(link), str(target)]
+    if sys.platform != "win32":
+        pytest.skip("windows only")
+    proc = subprocess.run(args, capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip(f"mklink {kind or 'file'} unavailable: {proc.stderr.strip()}")
+
+
+def test_snapshot_refuses_a_reparse_manifest(tmp_path: Path) -> None:
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    _sot, manifest = ab.sot_paths(dist)
+    outside = tmp_path / "elsewhere.json"
+    outside.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+    _link("", manifest, outside)
+    for call in (lambda: ab.load_asset_snapshot(manifest),
+                 lambda: ab.verify_sot_integrity(_sot, manifest)):
+        with pytest.raises(ab.BootstrapError) as exc:
+            call()
+        assert "SOT_MANIFEST_REPARSE" in str(exc.value)
+
+
+def test_recovery_refuses_a_reparse_manifest_backup(tmp_path: Path) -> None:
+    # репро Codex: manifest_backup — ссылка наружу
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist, target, before_manifest, before_names = _sealed_stale(tmp_path)
+    _sot, manifest = ab.sot_paths(dist)
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b'{"entries": {}}')
+    _link("", manifest.with_name(manifest.name + ".backup-1"), outside)
+    (dist / "premium_assets" / "ffmpeg.journal.json").write_text(
+        '{"schema": 1, "phase": "promoted", "token": "1"}', encoding="utf-8")
+    with pytest.raises(ab.BootstrapError) as exc:
+        fl.recover_ffmpeg_transaction(dist)
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+    assert not stage_policy.is_reparse_point(manifest)      # основной манифест цел
+    assert manifest.read_bytes() == before_manifest
+    assert outside.read_bytes() == b'{"entries": {}}'       # внешний файл не тронут
+    assert {p.name for p in target.iterdir()} == before_names
+
+
+def test_asset_lock_refuses_a_reparse_dist_premium(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _link("/J", root / "dist_premium", outside)
+    with pytest.raises(ab.BootstrapError) as exc:
+        with ab.asset_lock(root / "dist_premium"):
+            pass
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+    assert not any(outside.iterdir()), "якорь замка появился снаружи"
+
+
 def test_recovery_runs_before_a_new_transaction(tmp_path: Path) -> None:
     # Различающий тест: следующий запуск обязан ВОССТАНОВИТЬ last-good ДО того, как
     # начнёт свою транзакцию. Если он этого не сделает, очистка leftover'ов снесёт

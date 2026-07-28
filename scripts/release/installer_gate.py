@@ -660,6 +660,9 @@ def assert_output_contract(mode: object, setup_name: str, *,
     if resolved == "signed":
         if not verify_thumbprint:
             raise InstallerGateError("OUTPUT_CONTRACT: signed output requires a thumbprint")
+        # H9-2: the FORMAT is part of the contract, checked here — before the lock and
+        # the runner — not later in preflight
+        signing_gate.assert_expected_thumbprint(verify_thumbprint)
         if internal_version is not None:
             raise InstallerGateError("OUTPUT_CONTRACT: signed output forbids internal_version")
         if "INTERNAL" in setup_name.upper():

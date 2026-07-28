@@ -171,6 +171,13 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     work, backup, target = _derived(dist_premium, token)
     sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
     manifest_backup = manifest_path.with_name(manifest_path.name + f".backup-{token}")
+    # H9-2: prove EVERY path this recovery may rmtree, rename or replace is physical,
+    # BEFORE it touches any of them. A symlinked manifest_backup would otherwise be
+    # os.replace'd over the real manifest, and a redirected tree would be rolled back
+    # at the substituted destination.
+    for candidate in (_scratch(dist_premium), journal, work, backup, target,
+                      manifest_path, manifest_backup):
+        asset_bootstrap.assert_physical_chain(dist_premium, candidate)
     new_state_ok = False
     if phase == "sealed":
         # "sealed" says the manifest was WRITTEN, not that the result is sound. Prove the

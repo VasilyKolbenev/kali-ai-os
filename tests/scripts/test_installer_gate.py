@@ -1022,6 +1022,21 @@ def test_build_output_refuses_a_broken_contract_before_iscc(tmp_path: Path,
     assert calls == [], "ISCC не должен был запуститься"
 
 
+@pytest.mark.parametrize("bad", ["ZZZZ", "A" * 39, "A" * 41, "not hex at all!!", "  "])
+def test_signed_contract_refuses_a_malformed_thumbprint(tmp_path: Path, bad: str) -> None:
+    # H9-2: формат — часть контракта, отказ до lock/runner
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    calls = []
+    with pytest.raises(Exception) as exc:
+        ig.build_output(dist, mode="signed", setup_name="KALI-Premium-Setup-1.0.0-rc3.exe",
+                        iscc_cmd=["iscc", "x.iss"], verify_thumbprint=bad,
+                        runner=lambda *a, **k: calls.append(a))
+    assert "SIGNER" in str(exc.value)
+    assert calls == []
+    assert not (dist / "installer.lock").exists(), "замок открыт до проверки контракта"
+
+
 def test_signed_setup_must_not_be_named_internal() -> None:
     with pytest.raises(ig.InstallerGateError) as exc:
         ig.assert_output_contract("signed", _SETUP, internal_version=None,

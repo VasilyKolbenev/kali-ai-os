@@ -107,6 +107,8 @@ def asset_lock(dist_premium: Path) -> Iterator[int]:
     never be mutated underneath a verify/copy. The composer takes it INSIDE the swap
     lock; nothing takes them in the other order, so there is no cycle."""
     path = dist_premium / _LOCK_NAME
+    # H9-2: acquiring CREATES the anchor — a reparse dist_premium would plant it outside
+    assert_physical_chain(dist_premium, path)
     try:
         fd = file_lock.acquire(path)
     except file_lock.LockBusy as e:
@@ -128,8 +130,28 @@ class AssetSnapshot(NamedTuple):
     entries: dict[str, str]
 
 
+def assert_physical_chain(root: Path, target: Path) -> None:
+    """Every component from ``root`` down to ``target`` must be physical (H9-2).
+
+    ``resolve()`` is not used: it FOLLOWS a reparse point and would report the
+    substituted destination as the real one."""
+    try:
+        relative = target.relative_to(root)
+    except ValueError as e:
+        raise BootstrapError(f"ASSET_PATH_ESCAPES: {target} not under {root}") from e
+    current = root
+    for part in ("", *relative.parts):
+        current = current / part if part else current
+        if stage_policy.is_reparse_point(current):
+            raise BootstrapError(f"ASSET_REPARSE_IN_CHAIN: {current}")
+
+
 def load_asset_snapshot(manifest_path: Path) -> AssetSnapshot:
     """Read the integrity manifest ONCE and freeze it (bytes + parsed entries)."""
+    if stage_policy.is_reparse_point(manifest_path):
+        # H9-2: the seal itself must be physical — a symlinked manifest lets the pin
+        # come from a file nobody validated, exactly what the models-tree check misses.
+        raise BootstrapError(f"SOT_MANIFEST_REPARSE: {manifest_path}")
     if not manifest_path.is_file():
         raise BootstrapError(f"SOT_MISSING: {manifest_path}")
     try:
