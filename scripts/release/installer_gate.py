@@ -23,7 +23,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from scripts.release import signing_gate
+from scripts.release import signing_gate, stage_policy
 
 _SECTION_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
 _SOURCE_KEY_RE = re.compile(r"(?i)(?:^|;)\s*Source\s*:\s*")
@@ -35,11 +35,13 @@ _ISS_BASE = ("<repo>", "scripts")
 _STAGE_PREFIX = ("<repo>", "dist_premium", "premium_stage")
 _DIRECTIVE_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
 _UNINS_EXE_RE = re.compile(r"^unins\d{3}\.exe$")
-_SIGN_GUARD = "SignSetup"
-_INTERNAL_GUARD = "Internal"
+SIGNED_DEFINES = frozenset({"SignSetup"})
+INTERNAL_DEFINES = frozenset({"Internal"})
 INTERNAL_NAME = "INTERNAL-UNSIGNED-DO-NOT-DISTRIBUTE"
 INSTALLER_MANIFEST = "INSTALLER_ARTIFACTS.json"
 _SLICE_RE = re.compile(r"^(?P<base>.+)-(?P<n>\d+)\.bin$")
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class InstallerGateError(Exception):
@@ -71,12 +73,12 @@ def resolve_build_mode(mode_arg: object, *, distributable: bool) -> str:
     return mode
 
 
-def _files_section(iss_text: str) -> list[str]:
-    """The raw lines of the ``[Files]`` section (fail-closed if it is absent)."""
+def _files_section(active: list[str]) -> list[str]:
+    """The ACTIVE lines of the ``[Files]`` section (fail-closed if it is absent)."""
     lines: list[str] = []
     inside = False
     seen = False
-    for raw in iss_text.splitlines():
+    for raw in active:
         section = _SECTION_RE.match(raw)
         if section:
             inside = section.group("name").strip().lower() == "files"
@@ -105,13 +107,13 @@ def _logical_lines(lines: list[str]) -> list[str]:
     return joined
 
 
-def _iss_sources(iss_text: str) -> list[str]:
-    """Every ``Source:`` value declared in [Files], as written.
+def _iss_sources(active: list[str]) -> list[str]:
+    """Every ``Source:`` value declared in the ACTIVE [Files], as written.
 
     A ``Source:`` whose value is not a double-quoted literal is refused rather than
     skipped: an unparsed entry used to slip past the gate entirely."""
     sources: list[str] = []
-    for line in _logical_lines(_files_section(iss_text)):
+    for line in _logical_lines(_files_section(active)):
         if line.lstrip().startswith(";"):
             continue  # a comment line
         for match in _SOURCE_KEY_RE.finditer(line):
@@ -120,17 +122,6 @@ def _iss_sources(iss_text: str) -> list[str]:
                 raise InstallerGateError(f"ISS_SOURCE_UNQUOTED: {line.strip()!r}")
             sources.append(quoted.group(1))
     return sources
-
-
-def _assert_no_include(iss_text: str) -> None:
-    """ISPP ``#include`` pulls in entries this gate cannot see — anywhere in the file.
-
-    The usual placement is at the TOP level (not inside [Files]), where an included
-    file can declare a whole second [Files] section that the section scan never sees,
-    so restricting the check to the [Files] body would certify an unseen manifest."""
-    for line in iss_text.splitlines():
-        if line.lstrip().lower().startswith("#include"):
-            raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line.strip()!r}")
 
 
 def _normalize_source(raw: str) -> tuple[str, ...]:
@@ -161,89 +152,140 @@ def assert_iss_stage_only(iss_text: str) -> None:
 
     This is a real path check, not a substring one: ``premium_stage_evil`` and
     ``premium_stage\\..\\..\\scripts`` are both outside the sealed stage."""
-    _assert_no_include(iss_text)
-    sources = _iss_sources(iss_text)
-    if not sources:
-        raise InstallerGateError("ISS_NO_SOURCE: [Files] declares no Source")
     depth = len(_STAGE_PREFIX)
     lowered_prefix = tuple(p.lower() for p in _STAGE_PREFIX)
-    for raw in sources:
-        parts = _normalize_source(raw)
-        contained = (len(parts) > depth
-                     and tuple(p.lower() for p in parts[:depth]) == lowered_prefix)
-        if not contained:
-            raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {raw}")
+    for defines in (SIGNED_DEFINES, INTERNAL_DEFINES):  # both real build views
+        sources = _iss_sources(active_lines(iss_text, defines))
+        if not sources:
+            raise InstallerGateError(
+                f"ISS_NO_SOURCE: [Files] declares no Source with {sorted(defines)} defined")
+        for raw in sources:
+            parts = _normalize_source(raw)
+            contained = (len(parts) > depth
+                         and tuple(p.lower() for p in parts[:depth]) == lowered_prefix)
+            if not contained:
+                raise InstallerGateError(f"ISS_SOURCE_OUTSIDE_STAGE: {raw}")
 
 
-def active_directives(iss_text: str) -> list[tuple[str, str, tuple[str, ...]]]:
-    """Every ACTIVE ``key=value`` directive as ``(key_lower, value, guards)`` (H6-4).
+def active_directives(iss_text: str, defines: frozenset[str]) -> list[tuple[str, str]]:
+    """Every ACTIVE ``key=value`` directive as ``(key_lower, value)`` under ``defines``.
 
-    Comment lines are inactive, whitespace and case are normalized, and each directive
-    carries the ``#ifdef`` guards it sits under — a commented-out or unguarded
-    SignedUninstaller must never satisfy the signing gate the way a raw substring did."""
-    out: list[tuple[str, str, tuple[str, ...]]] = []
-    guards: list[str] = []
-    for raw in iss_text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith((";", "//")):
-            continue
-        low = line.lower()
-        if low.startswith(("#ifdef ", "#ifndef ")):
-            guards.append(line.split(None, 1)[1].strip())
-            continue
-        if low.startswith("#else"):
-            if guards:
-                guards[-1] = "!" + guards[-1]
-            continue
-        if low.startswith("#endif"):
-            if guards:
-                guards.pop()
-            continue
+    Comment lines are inactive and whitespace/case are normalized; which lines are
+    active at all is decided by the conditional evaluator in :func:`active_lines`."""
+    return _parse_directives(active_lines(iss_text, defines))
+
+
+def _parse_directives(lines: list[str]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for line in lines:
         if line.startswith(("#", "[")):
             continue
         match = _DIRECTIVE_RE.match(line)
         if match:
-            out.append((match.group("key").lower(), match.group("value").strip(),
-                        tuple(guards)))
+            out.append((match.group("key").lower(), match.group("value").strip()))
     return out
 
 
-def _has_directive(directives: list[tuple[str, str, tuple[str, ...]]], key: str, *,
-                   value: str | None = None, contains: str | None = None,
-                   guard: str | None = None) -> bool:
-    for found_key, found_value, guards in directives:
+def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
+    """Evaluate ISPP conditionals for a GIVEN define set and return the surviving lines.
+
+    H7-1 — a real evaluator, not a guard list: ``#ifdef`` and ``#ifndef`` are opposites,
+    ``#else`` inverts its own frame, nesting is honoured, and an inactive outer frame
+    keeps everything inside it inactive. Anything it cannot evaluate — an unknown
+    directive, a stray ``#else``/``#endif`` or an unbalanced file — fails closed rather
+    than being skipped, because a skipped conditional silently changes what ships."""
+    frames: list[tuple[bool, bool]] = []  # (this branch active, any branch taken yet)
+    live = set(defines)
+    out: list[str] = []
+    for raw in iss_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "//")):
+            continue
+        enclosing_active = all(active for active, _ in frames)
+        if line.startswith("#"):
+            word = line.split(None, 1)[0].lower()
+            rest = line.split(None, 1)[1].strip() if " " in line else ""
+            if word in ("#ifdef", "#ifndef"):
+                if not rest:
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: {line!r}")
+                # only this frame's own condition is stored; enclosing frames are ANDed
+                # in per line, so an inactive outer frame keeps everything inside it off
+                taken = (rest in live) if word == "#ifdef" else (rest not in live)
+                frames.append((taken, taken))
+                continue
+            if word == "#else":
+                if not frames:
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: stray {line!r}")
+                _, taken = frames.pop()
+                frames.append((not taken, True))
+                continue
+            if word == "#endif":
+                if not frames:
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: stray {line!r}")
+                frames.pop()
+                continue
+            if word == "#define":
+                if enclosing_active and rest:
+                    live.add(rest.split(None, 1)[0].strip())
+                continue
+            if word == "#undef":
+                if enclosing_active and rest:
+                    live.discard(rest.split(None, 1)[0].strip())
+                continue
+            if word == "#include":
+                raise InstallerGateError(f"ISS_UNRESOLVED_INCLUDE: {line!r}")
+            raise InstallerGateError(f"ISS_UNKNOWN_DIRECTIVE: {line!r}")
+        if enclosing_active:
+            out.append(line)
+    if frames:
+        raise InstallerGateError("ISS_BAD_CONDITIONAL: unbalanced #ifdef/#endif")
+    return out
+
+
+def _has_directive(directives: list[tuple[str, str]], key: str, *,
+                   value: str | None = None, contains: str | None = None) -> bool:
+    for found_key, found_value in directives:
         if found_key != key:
             continue
         if value is not None and found_value.lower() != value.lower():
             continue
         if contains is not None and contains not in found_value:
             continue
-        if guard is not None and guard not in guards:
-            continue
         return True
     return False
 
 
 def assert_iss_signs_setup_and_uninstaller(iss_text: str) -> None:
-    """The .iss must sign both the Setup and the generated uninstaller — with ACTIVE
-    directives under the ``SignSetup`` guard the signed build actually defines."""
-    directives = active_directives(iss_text)
-    if not _has_directive(directives, "signtool", guard=_SIGN_GUARD):
+    """Signing must be ACTIVE in the signed view and INACTIVE in the internal one.
+
+    Active in the internal view too would make an unsigned build demand a SignTool;
+    inactive in the signed view (e.g. written under ``#ifndef SignSetup``) would ship an
+    unsigned Setup while the raw text still 'mentions' the directives."""
+    signed = active_directives(iss_text, SIGNED_DEFINES)
+    internal = active_directives(iss_text, INTERNAL_DEFINES)
+    if not _has_directive(signed, "signtool"):
         raise InstallerGateError(
-            f"NO_SETUP_SIGN: no active SignTool= directive under #ifdef {_SIGN_GUARD}")
-    if not _has_directive(directives, "signeduninstaller", value="yes", guard=_SIGN_GUARD):
+            f"NO_SETUP_SIGN: SignTool= is not active with {sorted(SIGNED_DEFINES)} defined")
+    if not _has_directive(signed, "signeduninstaller", value="yes"):
         raise InstallerGateError(
-            f"NO_UNINSTALLER_SIGN: no active SignedUninstaller=yes under #ifdef {_SIGN_GUARD}")
+            f"NO_UNINSTALLER_SIGN: SignedUninstaller=yes is not active with "
+            f"{sorted(SIGNED_DEFINES)} defined")
+    if _has_directive(internal, "signtool") or _has_directive(internal, "signeduninstaller"):
+        raise InstallerGateError(
+            "SIGN_LEAKS_INTO_INTERNAL: signing directives are active in an internal build")
 
 
 def assert_iss_internal_naming(iss_text: str) -> None:
-    """An internal build must name Setup AND every slice INTERNAL at ISCC time via an
-    ACTIVE OutputBaseFilename under the ``Internal`` guard — never a post-build rename."""
-    if not _has_directive(active_directives(iss_text), "outputbasefilename",
-                          contains=INTERNAL_NAME, guard=_INTERNAL_GUARD):
+    """The INTERNAL OutputBaseFilename must be active ONLY in the internal view."""
+    internal = active_directives(iss_text, INTERNAL_DEFINES)
+    signed = active_directives(iss_text, SIGNED_DEFINES)
+    if not _has_directive(internal, "outputbasefilename", contains=INTERNAL_NAME):
         raise InstallerGateError(
             f"NO_INTERNAL_NAMING: no active OutputBaseFilename containing {INTERNAL_NAME} "
-            f"under #ifdef {_INTERNAL_GUARD}")
+            f"with {sorted(INTERNAL_DEFINES)} defined")
+    if _has_directive(signed, "outputbasefilename", contains=INTERNAL_NAME):
+        raise InstallerGateError(
+            "INTERNAL_NAME_LEAKS_INTO_SIGNED: a signed build would be named INTERNAL")
 
 
 def verify_installed_uninstaller(root: Path, *, expected_thumbprint: str,
@@ -319,6 +361,63 @@ def write_installer_manifest(out_dir: Path, setup_name: str) -> Path:
     return path
 
 
+def _safe_artifact_path(out_dir: Path, name: object) -> Path:
+    """A manifest name must be a SAFE BASENAME resolving to a contained regular file.
+
+    H7-2 — the manifest is a list of names that later get read, hashed and uploaded, so
+    a traversal (``..\\..\\secret``), an absolute path, a separator or a reparse point
+    must be refused before anything touches the filesystem."""
+    if not isinstance(name, str) or not name or not _SAFE_NAME_RE.match(name):
+        raise InstallerGateError(f"ARTIFACT_NAME_UNSAFE: {name!r}")
+    if name in (".", "..") or Path(name).name != name:
+        raise InstallerGateError(f"ARTIFACT_NAME_UNSAFE: {name!r}")
+    item = out_dir / name
+    if stage_policy.is_reparse_point(item):  # checked BEFORE resolve(), which follows it
+        raise InstallerGateError(f"ARTIFACT_REPARSE: {item}")
+    resolved = item.resolve()
+    if resolved.parent != out_dir.resolve():
+        raise InstallerGateError(f"ARTIFACT_ESCAPES_OUTPUT: {name!r}")
+    if not resolved.is_file():
+        raise InstallerGateError(f"ARTIFACT_MISSING: {item}")
+    return item
+
+
+def _validate_artifact_manifest(data: object, out_dir: Path) -> dict:
+    """Strict fail-closed schema for INSTALLER_ARTIFACTS.json (H7-2)."""
+    if not isinstance(data, dict) or set(data) != {"setup", "files"}:
+        raise InstallerGateError("ARTIFACT_MANIFEST_SCHEMA: expected exactly setup + files")
+    setup_name = data["setup"]
+    files = data["files"]
+    if not isinstance(files, list) or not files:
+        raise InstallerGateError("ARTIFACT_MANIFEST_SCHEMA: files must be a non-empty list")
+    seen: set[str] = set()
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"name", "sha256", "size"}:
+            raise InstallerGateError(
+                "ARTIFACT_MANIFEST_SCHEMA: each entry needs exactly name, sha256, size")
+        item = _safe_artifact_path(out_dir, entry["name"])
+        if entry["name"] in seen:
+            raise InstallerGateError(f"ARTIFACT_DUPLICATE: {entry['name']!r}")
+        seen.add(entry["name"])
+        digest = entry["sha256"]
+        if not (isinstance(digest, str) and _SHA256_RE.match(digest)):
+            raise InstallerGateError(f"ARTIFACT_DIGEST_MALFORMED: {entry['name']!r}")
+        size = entry["size"]
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise InstallerGateError(f"ARTIFACT_SIZE_INVALID: {entry['name']!r}")
+        if item.stat().st_size != size:
+            raise InstallerGateError(f"ARTIFACT_SIZE_MISMATCH: {entry['name']!r}")
+    names = [entry["name"] for entry in files]
+    if not isinstance(setup_name, str) or names[0] != setup_name:
+        raise InstallerGateError(
+            f"ARTIFACT_SETUP_MISMATCH: files[0]={names[0]!r} != setup={setup_name!r}")
+    base = setup_name[:-4] if setup_name.lower().endswith(".exe") else setup_name
+    expected = [f"{base}-{i}.bin" for i in range(1, len(names))]
+    if names[1:] != expected:
+        raise InstallerGateError(f"ARTIFACT_SLICES_NOT_CONTIGUOUS: {names[1:]}")
+    return {"setup": setup_name, "files": files}
+
+
 def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict:
     """Read the sealed artifact list and prove every entry still matches on disk.
 
@@ -328,15 +427,14 @@ def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict
     if not path.is_file():
         raise InstallerGateError(f"ARTIFACT_MANIFEST_MISSING: {path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        files = data["files"]
-        names = [str(entry["name"]) for entry in files]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
         raise InstallerGateError(f"ARTIFACT_MANIFEST_MALFORMED: {path}: {e}") from e
+    data = _validate_artifact_manifest(raw, out_dir)
+    files = data["files"]
+    names = [str(entry["name"]) for entry in files]
     for entry in files:
         item = out_dir / str(entry["name"])
-        if not item.is_file():
-            raise InstallerGateError(f"ARTIFACT_MISSING: {item}")
         if _sha256_file(item) != entry["sha256"]:
             raise InstallerGateError(f"ARTIFACT_HASH_MISMATCH: {item}")
     if strict_extra:

@@ -185,6 +185,84 @@ def test_assert_iss_signs_requires_setup_and_uninstaller() -> None:
         ig.assert_iss_signs_setup_and_uninstaller("[Setup]\nAppName=x\n")
 
 
+# ── H7-1: настоящий вычислитель ISPP-условий ────────────────────────────────
+SIGNED = ig.SIGNED_DEFINES
+INTERNAL = ig.INTERNAL_DEFINES
+
+
+def test_ifdef_and_ifndef_are_opposites() -> None:
+    text = "#ifdef SignSetup\nA=1\n#endif\n#ifndef SignSetup\nB=2\n#endif\n"
+    assert ig.active_directives(text, SIGNED) == [("a", "1")]
+    assert ig.active_directives(text, INTERNAL) == [("b", "2")]
+
+
+def test_else_branch_is_evaluated() -> None:
+    text = "#ifdef SignSetup\nA=1\n#else\nB=2\n#endif\n"
+    assert ig.active_directives(text, SIGNED) == [("a", "1")]
+    assert ig.active_directives(text, INTERNAL) == [("b", "2")]
+
+
+def test_nested_block_inside_an_inactive_outer_frame_stays_inactive() -> None:
+    text = "#ifdef Internal\n#ifdef SignSetup\nSignTool=kali\n#endif\n#endif\n"
+    assert ig.active_directives(text, SIGNED) == []
+
+
+def test_signing_under_ifndef_signsetup_is_refused() -> None:
+    text = ("[Setup]\n#ifndef SignSetup\nSignTool=kali\nSignedUninstaller=yes\n#endif\n")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+    assert "NO_SETUP_SIGN" in str(exc.value)
+
+
+def test_signing_nested_in_an_inactive_block_is_refused() -> None:
+    text = ("[Setup]\n#ifdef Internal\n#ifdef SignSetup\nSignTool=kali\n"
+            "SignedUninstaller=yes\n#endif\n#endif\n")
+    with pytest.raises(ig.InstallerGateError):
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+
+
+def test_signing_active_in_the_internal_view_is_refused() -> None:
+    text = "[Setup]\nSignTool=kali\nSignedUninstaller=yes\n"  # без guard'а
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_signs_setup_and_uninstaller(text)
+    assert "SIGN_LEAKS_INTO_INTERNAL" in str(exc.value)
+
+
+def test_internal_naming_leaking_into_the_signed_view_is_refused() -> None:
+    text = f"[Setup]\nOutputBaseFilename=x-{ig.INTERNAL_NAME}\n"
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_iss_internal_naming(text)
+    assert "INTERNAL_NAME_LEAKS_INTO_SIGNED" in str(exc.value)
+
+
+@pytest.mark.parametrize("text", [
+    "#else\nA=1\n",                      # stray #else
+    "#endif\nA=1\n",                     # stray #endif
+    "#ifdef SignSetup\nA=1\n",           # unbalanced
+    "#ifdef\nA=1\n#endif\n",             # #ifdef без имени
+    "#if 1\nA=1\n#endif\n",              # неизвестная условная директива
+    "#elif Internal\nA=1\n",             # неизвестная условная директива
+    "#emit 'x'\n",                       # неизвестная директива
+])
+def test_broken_conditionals_fail_closed(text: str) -> None:
+    with pytest.raises(ig.InstallerGateError):
+        ig.active_directives(text, SIGNED)
+
+
+def test_define_inside_an_inactive_block_does_not_take_effect() -> None:
+    text = ("#ifdef Internal\n#define Extra\n#endif\n"
+            "#ifdef Extra\nA=1\n#endif\n")
+    assert ig.active_directives(text, SIGNED) == []
+    assert ig.active_directives(text, INTERNAL) == [("a", "1")]
+
+
+def test_real_iss_passes_both_views() -> None:
+    text = ISS.read_text(encoding="utf-8")
+    ig.verify_iss(text)  # не поднимает
+    assert ig.active_directives(text, SIGNED)
+    assert ig.active_directives(text, INTERNAL)
+
+
 # ── H6-4: только АКТИВНЫЕ директивы, с учётом guard'ов ──────────────────────
 def _signed_iss(signtool: str = "SignTool=kali",
                 uninst: str = "SignedUninstaller=yes",
@@ -311,11 +389,145 @@ def test_collect_installer_artifacts_rejects_a_stray_file(tmp_path: Path) -> Non
     assert "STRAY_OUTPUT" in str(exc.value)
 
 
+# ── H7-2: строгая схема artifact-манифеста ─────────────────────────────────
+def _sealed(tmp_path: Path, slices: int = 2) -> tuple[Path, str]:
+    out = tmp_path / "out"
+    setup = _mk_output(out, slices=slices)
+    ig.write_installer_manifest(out, setup)
+    return out, setup
+
+
+def _rewrite(out: Path, mutate) -> None:  # noqa: ANN001
+    import json as _json
+    path = out / ig.INSTALLER_MANIFEST
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    mutate(data)
+    path.write_text(_json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", [
+    "..\\..\\secret.bin", "../../secret.bin", "C:\\Windows\\evil.exe",
+    "\\\\host\\share\\x.bin", "sub/dir.bin", ".", "..", "", "  ",
+])
+def test_manifest_refuses_unsafe_names(tmp_path: Path, name: str) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"][1].__setitem__("name", name))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "UNSAFE" in str(exc.value) or "ESCAPES" in str(exc.value)
+
+
+def test_safe_artifact_path_rejects_a_contained_but_unsafe_name(tmp_path: Path) -> None:
+    # правило safe-basename проверяется само по себе: файл существует, лежит внутри
+    # out_dir и не reparse — отвергнуть его может ТОЛЬКО регексп имени.
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "weird name.bin").write_bytes(b"X")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig._safe_artifact_path(out, "weird name.bin")
+    assert "ARTIFACT_NAME_UNSAFE" in str(exc.value)
+
+
+def test_manifest_refuses_a_duplicate_name(tmp_path: Path) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"].append(dict(d["files"][1])))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "DUPLICATE" in str(exc.value) or "CONTIGUOUS" in str(exc.value)
+
+
+def test_manifest_refuses_a_wrong_size(tmp_path: Path) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"][0].__setitem__("size", 999999))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "SIZE_MISMATCH" in str(exc.value)
+
+
+@pytest.mark.parametrize("size", [0, -1, True, "12", 1.5, None])
+def test_manifest_refuses_a_non_positive_int_size(tmp_path: Path, size) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"][0].__setitem__("size", size))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "SIZE_INVALID" in str(exc.value)
+
+
+@pytest.mark.parametrize("digest", ["", "ZZ" * 32, "a" * 63, "A" * 64, 12345, None])
+def test_manifest_refuses_a_malformed_digest(tmp_path: Path, digest) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"][0].__setitem__("sha256", digest))
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "DIGEST_MALFORMED" in str(exc.value)
+
+
+def test_manifest_refuses_when_files0_is_not_the_setup(tmp_path: Path) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, lambda d: d["files"].reverse())
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "SETUP_MISMATCH" in str(exc.value)
+
+
+def test_manifest_refuses_a_gapped_slice_list(tmp_path: Path) -> None:
+    out, _setup = _sealed(tmp_path, slices=2)
+    _rewrite(out, lambda d: d["files"].pop(1))  # остался только -2.bin
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "SLICES_NOT_CONTIGUOUS" in str(exc.value)
+
+
+def test_manifest_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    out, setup = _sealed(tmp_path)
+    (out / f"{setup[:-4]}-2.bin").unlink()
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "MISSING" in str(exc.value)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.pop("setup"),
+    lambda d: d.pop("files"),
+    lambda d: d.__setitem__("extra", 1),
+    lambda d: d["files"][0].pop("size"),
+    lambda d: d["files"][0].__setitem__("unexpected", 1),
+    lambda d: d.__setitem__("files", []),
+    lambda d: d.__setitem__("files", "not-a-list"),
+])
+def test_manifest_schema_is_fail_closed(tmp_path: Path, mutate) -> None:
+    out, _setup = _sealed(tmp_path)
+    _rewrite(out, mutate)
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "ARTIFACT_" in str(exc.value)
+
+
+def test_manifest_refuses_a_reparse_point_artifact(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+    if _sys.platform != "win32":
+        pytest.skip("windows only")
+    out, setup = _sealed(tmp_path)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"S1")
+    slice1 = out / f"{setup[:-4]}-1.bin"
+    slice1.unlink()
+    proc = subprocess.run(["cmd", "/c", "mklink", str(slice1), str(outside)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip("no symlink privilege")
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "REPARSE" in str(exc.value)
+
+
 def test_load_installer_manifest_detects_a_tampered_artifact(tmp_path: Path) -> None:
     out = tmp_path / "out"
     setup = _mk_output(out)
     ig.write_installer_manifest(out, setup)
-    (out / f"{setup[:-4]}-1.bin").write_bytes(b"TAMPERED")
+    # тот же размер — иначе первым сработает SIZE_MISMATCH и хеш-гейт не проверяется
+    (out / f"{setup[:-4]}-1.bin").write_bytes(b"XX")
     with pytest.raises(ig.InstallerGateError) as exc:
         ig.load_installer_manifest(out)
     assert "ARTIFACT_HASH_MISMATCH" in str(exc.value)

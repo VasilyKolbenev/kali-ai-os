@@ -435,8 +435,10 @@ def test_publish_refuses_on_symlink_escape(tmp_path: Path, caplog) -> None:
         pytest.skip("no symlink privilege")
     with caplog.at_level("ERROR"), pytest.raises(SystemExit):
         _guard(b)
+    # H7-2 ловит это ещё раньше: символьная ссылка в манифесте — ARTIFACT_REPARSE
     reasons = caplog.text
-    assert "ARTIFACT_HASH_MISMATCH" in reasons or "FROZEN_HASH" in reasons
+    assert any(token in reasons for token in
+               ("ARTIFACT_REPARSE", "ARTIFACT_HASH_MISMATCH", "FROZEN_HASH"))
 
 
 # ── 16. всё зелёное → guard пропускает, publish отрабатывает ─────────────────
