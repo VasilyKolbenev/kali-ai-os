@@ -241,7 +241,8 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
     keeps everything inside it inactive. Anything it cannot evaluate — an unknown
     directive, a stray ``#else``/``#endif`` or an unbalanced file — fails closed rather
     than being skipped, because a skipped conditional silently changes what ships."""
-    frames: list[tuple[bool, bool]] = []  # (this branch active, any branch taken yet)
+    # (this branch active, any branch taken yet, an #else was already seen in this frame)
+    frames: list[tuple[bool, bool, bool]] = []
     live = set(defines)
     # "known" means the .iss defines it somewhere OR the .bat can pass it via /D —
     # NOT merely "defined in this view", or the signed view would refuse #ifdef Internal
@@ -251,7 +252,7 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
         line = raw.strip()
         if not line or line.startswith((";", "//")):
             continue
-        enclosing_active = all(active for active, _ in frames)
+        enclosing_active = all(active for active, _, _ in frames)
         if line.startswith("#"):
             # ONE split: ISPP separates a directive from its argument by ANY whitespace,
             # so keying off a literal space silently dropped tab-separated #define/#undef
@@ -273,17 +274,20 @@ def active_lines(iss_text: str, defines: frozenset[str]) -> list[str]:
                 # only this frame's own condition is stored; enclosing frames are ANDed
                 # in per line, so an inactive outer frame keeps everything inside it off
                 taken = (name in live) if word == "#ifdef" else (name not in live)
-                frames.append((taken, taken))
+                frames.append((taken, taken, False))
                 continue
             if word == "#else":
-                if not frames:
-                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: stray {line!r}")
-                _, taken = frames.pop()
-                frames.append((not taken, True))
+                if not frames or rest:
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: {line!r}")
+                branch_active, taken, else_seen = frames.pop()
+                if else_seen:  # a second #else would silently flip the branch back
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: duplicate {line!r}")
+                del branch_active
+                frames.append((not taken, True, True))
                 continue
             if word == "#endif":
-                if not frames:
-                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: stray {line!r}")
+                if not frames or rest:
+                    raise InstallerGateError(f"ISS_BAD_CONDITIONAL: {line!r}")
                 frames.pop()
                 continue
             if word == "#define":
@@ -429,6 +433,37 @@ def write_installer_manifest(out_dir: Path, setup_name: str) -> Path:
     return path
 
 
+def assert_physical_chain(root: Path, target: Path) -> None:
+    """Every component from ``root`` down to ``target`` must be physical (H8-1).
+
+    ``resolve()`` is deliberately NOT used: it FOLLOWS a reparse point and would report
+    the substituted destination as if it were the real one. A junction anywhere on the
+    path — dist_premium, installer, or the output dir itself — redirects the whole
+    installer transaction outside the tree we believe we are writing."""
+    try:
+        relative = target.relative_to(root)
+    except ValueError as e:
+        raise InstallerGateError(f"OUTPUT_ESCAPES_DIST: {target} not under {root}") from e
+    current = root
+    for part in ("", *relative.parts):
+        current = current / part if part else current
+        if current.exists() and stage_policy.is_reparse_point(current):
+            raise InstallerGateError(f"OUTPUT_REPARSE_IN_CHAIN: {current}")
+
+
+def assert_physical_output(dist_premium: Path, out_dir: Path) -> None:
+    """The installer output root, its chain from dist_premium, and everything inside it
+    must be physical — a symlinked output root would ship artifacts from elsewhere."""
+    assert_physical_chain(dist_premium, out_dir)
+    if out_dir.is_dir():
+        try:
+            stage_policy.assert_tree_reparse_free(out_dir)
+        except stage_policy.ReparseError as e:
+            # keep ONE exception type at this boundary: the CLI turns InstallerGateError
+            # into a clean nonzero exit, a foreign type would surface as a traceback
+            raise InstallerGateError(f"OUTPUT_REPARSE_IN_TREE: {e}") from e
+
+
 def _safe_artifact_path(out_dir: Path, name: object) -> Path:
     """A manifest name must be a SAFE BASENAME resolving to a contained regular file.
 
@@ -492,6 +527,8 @@ def load_installer_manifest(out_dir: Path, *, strict_extra: bool = True) -> dict
     ``strict_extra`` also refuses anything else in the directory; publish turns it off
     because its own DIRTY_TREE gate owns that rule and reports it with its own reason."""
     path = out_dir / INSTALLER_MANIFEST
+    if stage_policy.is_reparse_point(path):  # H8-1: the seal itself must be physical
+        raise InstallerGateError(f"ARTIFACT_MANIFEST_REPARSE: {path}")
     if not path.is_file():
         raise InstallerGateError(f"ARTIFACT_MANIFEST_MISSING: {path}")
     try:
@@ -588,6 +625,10 @@ def build_output(dist_premium: Path, *, setup_name: str, iscc_cmd: list[str],
     with installer_lock(dist_premium):
         recover_installer_output(dist_premium)  # BEFORE any clean/create
         next_dir, backup, final = _installer_paths(dist_premium, token)
+        # H8-1: a junction anywhere from dist_premium down would silently redirect the
+        # build, the seal and the promote outside the tree — check before touching disk.
+        for candidate in (next_dir, backup, final):
+            assert_physical_output(dist_premium, candidate)
         for leftover in (next_dir, backup):
             if leftover.exists():
                 shutil.rmtree(leftover)

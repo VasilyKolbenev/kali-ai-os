@@ -305,6 +305,83 @@ def test_define_in_an_inactive_branch_is_still_a_known_name() -> None:
     assert ig.active_directives(text, INTERNAL) == [("a", "1")]
 
 
+# ── H8-1: containment вывода инсталлятора + else_seen ───────────────────────
+def _mklink(kind: str, link: Path, target: Path) -> None:
+    import subprocess
+    import sys as _sys
+    if _sys.platform != "win32":
+        pytest.skip("windows only")
+    args = ["cmd", "/c", "mklink"] + ([kind] if kind else []) + [str(link), str(target)]
+    proc = subprocess.run(args, capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip(f"mklink {kind or 'file'} unavailable: {proc.stderr.strip()}")
+
+
+def test_installer_root_symlinked_outside_is_refused(tmp_path: Path) -> None:
+    # репро ревью: installer-каталог — junction наружу
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _mklink("/J", dist / "installer", outside)
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_physical_output(dist, dist / "installer")
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_reparse_anywhere_in_the_chain_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "real").mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    (outside / "installer").mkdir(parents=True)
+    _mklink("/J", root / "link", outside)
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.assert_physical_output(root, root / "link" / "installer")
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_artifact_inside_the_output_tree_must_be_physical(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    out = dist / "installer"
+    out.mkdir(parents=True)
+    outside = tmp_path / "payload.bin"
+    outside.write_bytes(b"X")
+    _mklink("", out / "slice.bin", outside)
+    with pytest.raises(ig.InstallerGateError):
+        ig.assert_physical_output(dist, out)
+
+
+def test_manifest_that_is_a_reparse_point_is_refused(tmp_path: Path) -> None:
+    out, setup = _sealed(tmp_path)
+    real = out / ig.INSTALLER_MANIFEST
+    moved = tmp_path / "elsewhere.json"
+    moved.write_bytes(real.read_bytes())
+    real.unlink()
+    _mklink("", real, moved)
+    assert setup
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.load_installer_manifest(out)
+    assert "ARTIFACT_MANIFEST_REPARSE" in str(exc.value)
+
+
+def test_physical_chain_accepts_a_clean_tree(tmp_path: Path) -> None:
+    dist = tmp_path / "dist_premium"
+    (dist / "installer").mkdir(parents=True)
+    (dist / "installer" / "a.bin").write_bytes(b"A")
+    ig.assert_physical_output(dist, dist / "installer")  # не поднимает
+
+
+@pytest.mark.parametrize("text", [
+    "#ifdef SignSetup\nA=1\n#else\nB=2\n#else\nC=3\n#endif\n",   # повторный #else
+    "#ifdef SignSetup\nA=1\n#else Internal\nB=2\n#endif\n",       # аргумент после #else
+    "#ifdef SignSetup\nA=1\n#endif SignSetup\n",                  # аргумент после #endif
+])
+def test_malformed_else_and_endif_fail_closed(text: str) -> None:
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.active_directives(text, SIGNED)
+    assert "ISS_BAD_CONDITIONAL" in str(exc.value)
+
+
 def test_real_iss_passes_both_views() -> None:
     text = ISS.read_text(encoding="utf-8")
     ig.verify_iss(text)  # не поднимает
@@ -624,6 +701,21 @@ def test_build_output_seals_and_promotes_under_one_lock(tmp_path: Path) -> None:
     assert not (final / "KALI-Premium-Setup-0.9.9.exe").exists()  # stale не пережил
     assert not list(dist.glob("installer.next-*")) and not list(dist.glob("installer.backup-*"))
     ig.load_installer_manifest(final)
+
+
+def test_build_output_refuses_a_symlinked_installer_root(tmp_path: Path) -> None:
+    # H8-1: транзакция обязана отказать ДО запуска ISCC, если live-каталог подменён
+    dist = tmp_path / "dist_premium"
+    dist.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _mklink("/J", dist / "installer", outside)
+    calls = []
+    with pytest.raises(ig.InstallerGateError) as exc:
+        ig.build_output(dist, setup_name=_SETUP, iscc_cmd=["iscc", "x.iss"],
+                        runner=lambda *a, **k: calls.append(a))
+    assert "OUTPUT_REPARSE_IN_CHAIN" in str(exc.value)
+    assert calls == [], "ISCC не должен был запуститься"
 
 
 def test_build_output_verify_gates_the_promote(tmp_path: Path) -> None:
