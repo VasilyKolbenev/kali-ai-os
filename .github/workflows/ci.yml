@@ -98,10 +98,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      # tauri.conf.json bundles ../dist/kali-backend (PyInstaller output);
-      # the tauri build script requires the path to exist even for check.
-      - name: Stub backend resource dir
-        run: New-Item -ItemType Directory -Force dist/kali-backend | Out-Null
       - name: Cargo check (lib)
         run: cargo check --lib
         working-directory: src-tauri
