@@ -7,6 +7,7 @@ Non-destructive premium_assets bootstrap: copy → count/hash verify → switch 
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -593,7 +594,52 @@ def test_snapshot_refuses_a_reparse_manifest(tmp_path: Path) -> None:
                  lambda: ab.verify_sot_integrity(_sot, manifest)):
         with pytest.raises(ab.BootstrapError) as exc:
             call()
-        assert "SOT_MANIFEST_REPARSE" in str(exc.value)
+        assert "REPARSE" in str(exc.value)  # цепочка ловит это раньше листовой проверки
+
+
+def test_snapshot_refuses_a_reparse_premium_assets(tmp_path: Path) -> None:
+    # H9-R: точку подмены сдвинули на один компонент вверх — граница обязана держать
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    outside = tmp_path / "outside"
+    shutil.move(str(dist / "premium_assets"), str(outside))
+    _link("/J", dist / "premium_assets", outside)
+    sot, manifest = ab.sot_paths(dist)
+    for call in (lambda: ab.load_asset_snapshot(manifest),
+                 lambda: ab.verify_sot_integrity(sot, manifest),
+                 lambda: ab.verify_against_snapshot(
+                     sot, ab.AssetSnapshot(digest="a" * 64, entries={}), what="SoT")):
+        with pytest.raises(ab.BootstrapError) as exc:
+            call()
+        assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_recovery_proves_paths_even_without_a_journal(tmp_path: Path) -> None:
+    # H9-R: обычный путь установки журнала не имеет — гейт обязан работать и там
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    outside = tmp_path / "outside"
+    shutil.move(str(dist / "premium_assets"), str(outside))
+    _link("/J", dist / "premium_assets", outside)
+    assert not (dist / "premium_assets" / "ffmpeg.journal.json").exists()
+    with pytest.raises(ab.BootstrapError) as exc:
+        fl.recover_ffmpeg_transaction(dist)
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_install_into_sot_refuses_a_reparse_premium_assets(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    outside = tmp_path / "outside"
+    shutil.move(str(dist / "premium_assets"), str(outside))
+    _link("/J", dist / "premium_assets", outside)
+    before = {p.name for p in (outside / "models" / "ffmpeg").iterdir()}
+    with pytest.raises(ab.BootstrapError) as exc:
+        fl.install_into_sot(_fake_lgpl_build(tmp_path), dist)
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+    assert {p.name for p in (outside / "models" / "ffmpeg").iterdir()} == before
 
 
 def test_recovery_refuses_a_reparse_manifest_backup(tmp_path: Path) -> None:

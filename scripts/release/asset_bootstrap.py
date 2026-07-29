@@ -148,10 +148,11 @@ def assert_physical_chain(root: Path, target: Path) -> None:
 
 def load_asset_snapshot(manifest_path: Path) -> AssetSnapshot:
     """Read the integrity manifest ONCE and freeze it (bytes + parsed entries)."""
-    if stage_policy.is_reparse_point(manifest_path):
-        # H9-2: the seal itself must be physical — a symlinked manifest lets the pin
-        # come from a file nobody validated, exactly what the models-tree check misses.
-        raise BootstrapError(f"SOT_MANIFEST_REPARSE: {manifest_path}")
+    # H9-R: the whole CHAIN, not just the leaf. Testing only the manifest file left the
+    # boundary defeated by moving the reparse point one component up: a junctioned
+    # premium_assets served an SoT and a seal from outside dist_premium, and the stage
+    # then pinned that outside manifest as its provenance.
+    assert_physical_chain(manifest_path.parent.parent, manifest_path)
     if not manifest_path.is_file():
         raise BootstrapError(f"SOT_MISSING: {manifest_path}")
     try:
@@ -170,6 +171,7 @@ def verify_against_snapshot(tree: Path, snapshot: AssetSnapshot, *, what: str) -
 
     Used twice per compose — on the SoT before the copy and on the staged copy after
     it — so an asset that changes mid-compose cannot reach the sealed stage."""
+    assert_physical_chain(tree.parent.parent, tree)  # H9-R: chain, then the tree itself
     if not tree.is_dir():
         raise BootstrapError(f"SOT_MISSING: {tree}")
     _assert_physical(tree)

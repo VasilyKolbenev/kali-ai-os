@@ -158,6 +158,14 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     earlier phase rolls back to last-good, restoring the old subtree AND the old manifest
     (raw bytes) together. Nothing is deleted on an unreadable journal."""
     journal = _journal_path(dist_premium)
+    sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
+    # H9-R: the token-INDEPENDENT paths are proven BEFORE the no-journal early return.
+    # This function is the prove-before-touch step of the ordinary install path, where
+    # there is no journal at all — gating only the interrupted case left the normal one
+    # (replace_owned_subtree + _finish_transaction rmtree/rename/replace) unproven.
+    for candidate in (_scratch(dist_premium), journal, manifest_path, sot,
+                      install_target(dist_premium)):
+        asset_bootstrap.assert_physical_chain(dist_premium, candidate)
     if not journal.is_file():
         return "nothing"
     try:
@@ -169,14 +177,10 @@ def recover_ffmpeg_transaction(dist_premium: Path) -> str:
     if schema != 1 or phase not in _PHASES or not isinstance(token, str):
         raise SystemExit(f"FFMPEG_TXN_JOURNAL: unknown journal state {state!r}")
     work, backup, target = _derived(dist_premium, token)
-    sot, manifest_path = asset_bootstrap.sot_paths(dist_premium)
     manifest_backup = manifest_path.with_name(manifest_path.name + f".backup-{token}")
-    # H9-2: prove EVERY path this recovery may rmtree, rename or replace is physical,
-    # BEFORE it touches any of them. A symlinked manifest_backup would otherwise be
-    # os.replace'd over the real manifest, and a redirected tree would be rolled back
-    # at the substituted destination.
-    for candidate in (_scratch(dist_premium), journal, work, backup, target,
-                      manifest_path, manifest_backup):
+    # H9-2: the token-DERIVED paths this recovery may rmtree, rename or replace. A
+    # symlinked manifest_backup would otherwise be os.replace'd over the real manifest.
+    for candidate in (work, backup, manifest_backup):
         asset_bootstrap.assert_physical_chain(dist_premium, candidate)
     new_state_ok = False
     if phase == "sealed":
