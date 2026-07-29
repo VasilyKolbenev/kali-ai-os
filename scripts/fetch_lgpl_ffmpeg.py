@@ -297,8 +297,19 @@ def require_sot(dist_premium: Path) -> Path:
     """Fail closed BEFORE the download: the SoT must exist AND be sealed.
 
     Checking only the directory left the SOT_UNSEALED refusal until after ~70 MB had
-    already been fetched, verified and extracted."""
+    already been fetched, verified and extracted.
+
+    H9-P2: the chain is proven FIRST. ``is_dir()``/``is_file()`` FOLLOW a junction, so an
+    external premium_assets holding a models tree and a valid seal satisfied both and
+    passed this pre-download preflight — the contract is a PHYSICAL SoT before any
+    network call. A chain failure is converted to SystemExit here so the CLI exits
+    cleanly: this runs before the block that catches BootstrapError."""
     sot, manifest = asset_bootstrap.sot_paths(dist_premium)
+    try:
+        for candidate in (sot.parent, sot, manifest):
+            asset_bootstrap.assert_physical_chain(dist_premium, candidate)
+    except asset_bootstrap.BootstrapError as e:
+        raise SystemExit(f"{e} — refusing to download into a non-physical SoT") from e
     if not sot.is_dir():
         raise SystemExit(
             f"premium_assets SoT not found: {sot} — run "

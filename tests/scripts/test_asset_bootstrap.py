@@ -628,6 +628,51 @@ def test_recovery_proves_paths_even_without_a_journal(tmp_path: Path) -> None:
     assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
 
 
+def test_require_sot_refuses_reparse_premium_assets(tmp_path: Path) -> None:
+    # H9-P2: is_dir()/is_file() СЛЕДУЮТ по junction, поэтому внешний premium_assets
+    # с моделями и валидной печатью проходил pre-download preflight.
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    outside = tmp_path / "outside"
+    shutil.move(str(dist / "premium_assets"), str(outside))
+    _link("/J", dist / "premium_assets", outside)
+    sot, manifest = ab.sot_paths(dist)
+    assert sot.is_dir() and manifest.is_file()  # обе проверки проходят по ссылке
+    with pytest.raises(SystemExit) as exc:
+        fl.require_sot(dist)
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)
+
+
+def test_require_sot_accepts_a_physical_sot(tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    sot, _manifest = ab.sot_paths(dist)
+    assert fl.require_sot(dist) == sot  # обычный физический SoT продолжает работать
+
+
+def test_main_refuses_reparse_before_download(monkeypatch, tmp_path: Path) -> None:
+    import scripts.fetch_lgpl_ffmpeg as fl
+    dist = _legacy_layout(tmp_path)
+    ab.bootstrap_premium_assets(dist)
+    outside = tmp_path / "outside"
+    shutil.move(str(dist / "premium_assets"), str(outside))
+    _link("/J", dist / "premium_assets", outside)
+    calls = {"download": 0}
+
+    def _spy(url, dst):  # noqa: ANN001
+        calls["download"] += 1
+
+    monkeypatch.setattr(fl.urllib.request, "urlretrieve", _spy)
+    monkeypatch.setattr(sys, "argv", ["fetch_lgpl_ffmpeg.py", "--dist", str(dist)])
+    with pytest.raises(SystemExit) as exc:
+        fl.main()
+    assert exc.value.code != 0
+    assert "ASSET_REPARSE_IN_CHAIN" in str(exc.value)  # чистая причина, не traceback
+    assert calls["download"] == 0
+
+
 def test_install_into_sot_refuses_a_reparse_premium_assets(tmp_path: Path) -> None:
     import scripts.fetch_lgpl_ffmpeg as fl
     dist = _legacy_layout(tmp_path)
