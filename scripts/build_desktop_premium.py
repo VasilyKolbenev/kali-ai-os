@@ -89,9 +89,14 @@ def main(*, runner: Runner = subprocess.run, which: Which | None = None) -> int:
         return 1
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     receipt_path = EXE.with_name(EXE.name + ".BUILD_RECEIPT.json")
-    rc.finalize_build_receipt(EXE, receipt_path, repo=ROOT, version=version,
-                              build_kind="tauri-release", toolchain=toolchain,
-                              head_before=head_before, clean_before=clean_before)
+    try:
+        rc.finalize_build_receipt(EXE, receipt_path, repo=ROOT, version=version,
+                                  build_kind="tauri-release", toolchain=toolchain,
+                                  head_before=head_before, clean_before=clean_before)
+    except rc.ReceiptError as e:
+        # F3: a refused receipt is an operator-facing failure, not a traceback.
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
     print(f"BUILD_RECEIPT written: {receipt_path}")
     return 0
 

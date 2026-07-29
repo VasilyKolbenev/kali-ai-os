@@ -2,3 +2,10 @@
 # Windows checkouts (core.autocrlf=true would otherwise rewrite them to CRLF and
 # break the shebang with a "bad interpreter" error on Linux/CI).
 scripts/git-hooks/* text eol=lf
+
+# The tauri build rewrites these files with LF. With core.autocrlf=true they are
+# checked out as CRLF, so every desktop build left the worktree dirty and the
+# BUILD_RECEIPT could never be clean (live-gate Gate B, 2026-07-29). Pinning the
+# checkout to LF makes the build's own output byte-identical to the checkout.
+src-tauri/Cargo.toml text eol=lf
+src-tauri/gen/schemas/*.json text eol=lf

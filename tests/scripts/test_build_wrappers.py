@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -227,6 +229,93 @@ def test_desktop_refuses_dirty_worktree_before_running(monkeypatch, tmp_path: Pa
     assert bd.main(runner=runner, which=lambda n: "npm.cmd") == 1
     assert runner.calls == []
     assert not exe.with_name(exe.name + ".BUILD_RECEIPT.json").exists()
+
+
+# ── F3: сборка, испачкавшая дерево, обязана быть nonzero и БЕЗ receipt ──────
+def _repo_for_wrapper(tmp_path: Path) -> Path:
+    """Настоящий git-репозиторий: VERSION, один tracked-файл, игнор артефактов."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (("init",), ("config", "user.email", "t@t"), ("config", "user.name", "T"),
+                 ("config", "commit.gpgsign", "false"), ("config", "core.autocrlf", "false")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "VERSION").write_text("1.0.0-rc3", encoding="utf-8")
+    (repo / "generated.txt").write_text("committed", encoding="utf-8")
+    (repo / ".gitignore").write_text("dist_premium/\ntarget/\n", encoding="utf-8")
+    for args in (("add", "-A"), ("commit", "-m", "seed")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    return repo
+
+
+class _DirtyingRunner(_Runner):
+    """Сборка УДАЛАСЬ (артефакт есть), но попутно переписала tracked-файл.
+
+    Ровно то, что делает `tsc -b` с ui/tsconfig.tsbuildinfo и tauri со схемами."""
+
+    def __init__(self, artifact: Path, repo: Path, *, as_dir: bool = False) -> None:
+        super().__init__(returncode=0)
+        self._artifact, self._repo, self._as_dir = artifact, repo, as_dir
+
+    def __call__(self, cmd, **kwargs):  # noqa: ANN001, ANN003
+        if self._as_dir:
+            self._artifact.mkdir(parents=True, exist_ok=True)
+            (self._artifact / "kali-backend.exe").write_bytes(b"EXE")
+        else:
+            self._artifact.parent.mkdir(parents=True, exist_ok=True)
+            self._artifact.write_bytes(b"EXE")
+        (self._repo / "generated.txt").write_text("rewritten by the build", encoding="utf-8")
+        return super().__call__(cmd, **kwargs)
+
+
+def test_desktop_wrapper_nonzero_when_the_build_dirties_a_tracked_file(
+        monkeypatch, tmp_path: Path) -> None:
+    repo = _repo_for_wrapper(tmp_path)
+    exe = repo / "target" / "release" / "kali-desktop.exe"
+    monkeypatch.setattr(bd, "ROOT", repo)
+    monkeypatch.setattr(bd, "EXE", exe)
+    monkeypatch.setattr(bd.rc, "collect_toolchain", lambda cmds: "cargo=x; rustc=y; tauri=z")
+    runner = _DirtyingRunner(exe, repo)
+    assert bd.main(runner=runner, which=lambda n: "npm.cmd") == 1
+    assert runner.calls, "сборка обязана была стартовать — иначе проверяется не тот инвариант"
+    assert exe.is_file(), "EXE создан: отказ именно из-за грязного дерева, не из-за сборки"
+    assert not exe.with_name(exe.name + ".BUILD_RECEIPT.json").exists()
+
+
+def test_desktop_wrapper_writes_clean_receipt_when_nothing_is_dirtied(
+        monkeypatch, tmp_path: Path) -> None:
+    repo = _repo_for_wrapper(tmp_path)
+    exe = repo / "target" / "release" / "kali-desktop.exe"
+    monkeypatch.setattr(bd, "ROOT", repo)
+    monkeypatch.setattr(bd, "EXE", exe)
+    monkeypatch.setattr(bd.rc, "collect_toolchain", lambda cmds: "cargo=x; rustc=y; tauri=z")
+
+    class _CleanRunner(_Runner):
+        def __call__(self, cmd, **kwargs):  # noqa: ANN001, ANN003
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(b"EXE")
+            return super().__call__(cmd, **kwargs)
+
+    assert bd.main(runner=_CleanRunner(), which=lambda n: "npm.cmd") == 0
+    receipt = json.loads(exe.with_name(exe.name + ".BUILD_RECEIPT.json")
+                         .read_text(encoding="utf-8"))
+    assert receipt["dirty"] is False and receipt["version"] == "1.0.0-rc3"
+
+
+def test_backend_wrapper_nonzero_when_the_build_dirties_a_tracked_file(
+        monkeypatch, tmp_path: Path) -> None:
+    # Радиус F3.1: finalize_build_receipt теперь поднимает и в backend-обёртке —
+    # она обязана вернуть nonzero, а не выбросить traceback.
+    repo = _repo_for_wrapper(tmp_path)
+    dist = repo / "dist_premium"
+    _sot_with_lgpl_set(dist)
+    monkeypatch.setattr(_BB, "ROOT", repo)
+    monkeypatch.setattr(_BB, "DIST", dist)
+    monkeypatch.setattr(_BB.rc, "collect_toolchain", lambda cmds: "python=x; pyinstaller=y")
+    runner = _DirtyingRunner(dist / _BB.NAME, repo, as_dir=True)
+    assert _BB.main(runner=runner) == 1
+    assert runner.calls, "сборка обязана была стартовать"
+    assert (dist / _BB.NAME).is_dir(), "onedir создан: отказ из-за грязного дерева"
+    assert not (dist / f"{_BB.NAME}.BUILD_RECEIPT.json").exists()
 
 
 # ── H1.4: toolchain fail-closed (иначе receipt врёт про сборочную среду) ─────

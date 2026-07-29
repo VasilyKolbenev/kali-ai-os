@@ -266,6 +266,46 @@ def test_finalize_refuses_a_build_that_started_dirty(tmp_path: Path) -> None:
     assert not rp.exists()
 
 
+def test_finalize_refuses_a_build_that_ended_dirty(tmp_path: Path) -> None:
+    # F3.1 (live-gate Gate B 2026-07-29): сборка стартовала на чистом дереве, но
+    # сама его испачкала (tsc -b переписал tracked tsbuildinfo, tauri — схемы).
+    # Receipt с dirty:true бесполезен — его отвергнет verify_receipt. Значит
+    # writer обязан отказать ДО записи, а не оставлять мусорный файл.
+    repo = _git_repo(tmp_path)
+    head = _head(repo)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    (repo / "seed.txt").write_text("built-and-dirtied", encoding="utf-8")
+    rp = tmp_path / "r.json"
+    with pytest.raises(rc.ReceiptError) as exc:
+        rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="k",
+                                  toolchain="t", head_before=head, clean_before=True)
+    assert "DIRTY_AFTER_BUILD" in str(exc.value)
+    assert not rp.exists(), "receipt не должен существовать после отказа"
+
+
+def test_finalize_still_writes_a_receipt_for_a_fully_clean_build(tmp_path: Path) -> None:
+    # Companion к предыдущему: чистая сборка обязана остаться зелёной.
+    repo = _git_repo(tmp_path)
+    head = _head(repo)
+    art = repo / "dist_premium" / "art.bin"; art.write_bytes(b"A")
+    rp = tmp_path / "r.json"
+    receipt = rc.finalize_build_receipt(art, rp, repo=repo, version="v1", build_kind="k",
+                                        toolchain="t", head_before=head, clean_before=True)
+    assert receipt["dirty"] is False and rp.exists()
+
+
+def test_require_receipt_rejects_a_legacy_dirty_receipt_on_disk(tmp_path: Path) -> None:
+    # F3.3: уже записанные dirty:true receipts продолжают отвергаться гейтом.
+    art = _artifact_dir(tmp_path)
+    receipt = _good_receipt(art)
+    receipt["dirty"] = True
+    rp = tmp_path / "BUILD_RECEIPT.json"
+    rp.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(rc.ReceiptError) as exc:
+        rc.require_receipt(art, rp)
+    assert "DIRTY_SOURCE" in str(exc.value)
+
+
 def test_finalize_build_receipt_rejects_head_move(tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
     head_before = _head(repo)

@@ -19,6 +19,11 @@ target/
 node_modules/
 services/tts/.venv/
 
+# TypeScript incremental build state (`tsc -b`). Derived output: a tracked copy
+# makes every desktop build dirty the worktree, and a dirty worktree can never
+# earn a clean BUILD_RECEIPT (live-gate Gate B, 2026-07-29).
+*.tsbuildinfo
+
 # Caches
 .mypy_cache/
 .pytest_cache/
@@ -73,5 +78,5 @@ verify_builder.py
 # On-device TTS eval run artifacts (audio/results/logs â€” regenerable; BASELINE.md is the record)
 research/on-device-tts/runs/
 
-# TTS quality-gate run artifacts (WAVs + run.json — regenerable; docs/superpowers/data has the record)
+# TTS quality-gate run artifacts (WAVs + run.json ï¿½ regenerable; docs/superpowers/data has the record)
 artifacts/

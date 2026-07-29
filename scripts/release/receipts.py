@@ -217,12 +217,21 @@ def finalize_build_receipt(artifact: Path, receipt_path: Path, *, repo: Path, ve
 
     H6-3 — a build that STARTED dirty can never earn a receipt, even if the worktree
     happens to be clean by the time it finishes: the artifact was produced from
-    uncommitted source and ``dirty=false`` would be a lie."""
+    uncommitted source and ``dirty=false`` would be a lie.
+
+    F3 — a build that DIRTIED the worktree is refused before anything is written. Such
+    a receipt could only say ``dirty=true``, which every stage gate rejects
+    (``DIRTY_SOURCE``), so writing it would leave a useless file next to the artifact
+    and report success for a build that can never be staged."""
     if not clean_before:
         raise ReceiptError("DIRTY_AT_START: the worktree was dirty when the build began")
     head_after, clean_after = capture_head_state(repo)
     if head_after != head_before:
         raise ReceiptError(f"HEAD_MOVED: {head_before} -> {head_after} during the build")
+    if not clean_after:
+        raise ReceiptError(
+            "DIRTY_AFTER_BUILD: the build dirtied the worktree — the artifact could "
+            "only earn a dirty=true receipt, which no stage gate accepts")
     receipt = create_receipt(artifact, git_sha=head_after, version=version,
                              dirty=not clean_after, build_kind=build_kind,
                              toolchain=toolchain,
